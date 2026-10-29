@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #07090e;
+  --color-ink-900: #0b0f17;
+  --color-ink-850: #0f141e;
+  --color-ink-800: #131a26;
+  --color-ink-700: #1c2533;
+  --color-ink-600: #2a3547;
+  --color-ink-500: #3b475b;
+  --color-ink-400: #6b778c;
+  --color-ink-300: #98a3b7;
+  --color-ink-200: #c6cedb;
+  --color-ink-100: #e6ebf2;
+  --color-long: #22c58b;
+  --color-long-dim: #0f3d2e;
+  --color-short: #f0506e;
+  --color-short-dim: #46161f;
+  --color-warn: #f2b33d;
+  --color-warn-dim: #45330f;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+
+html, body, #root { background: var(--color-ink-900); color: var(--color-ink-100); }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+:focus-visible { outline: 2px solid #5b8cff; outline-offset: 2px; }

@@ -1,0 +1,54 @@
+:root {
+  --bg: #ffffff; --fg: #1d2330; --muted: #5b6475; --rule: #d5dae3; --head: #1f3a5f; --accent: #2f6fdb;
+  --th-bg: #1f3a5f; --th-fg: #ffffff; --row-alt: #f6f8fb; --code-bg: #f3f5f9;
+  --def: #eef3fb; --def-b: #2f6fdb; --why: #eaf6ef; --why-b: #1a9e5a; --mis: #fdecec; --mis-b: #d64545;
+  --rule-bg: #fff6e5; --rule-b: #e08a1e; --ts: #f2ecfb; --ts-b: #7b4fd1; --rec: #eef7f7; --rec-b: #1e8c8c;
+  --warn: #fff2b3; --warn-b: #b58900; --shot: #f3f3f3; --shot-b: #666666;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171d; --fg: #e3e7ee; --muted: #a2abbb; --rule: #2e3542; --head: #9cc0ff; --accent: #7fa8ff;
+    --th-bg: #263a5a; --th-fg: #ffffff; --row-alt: #1a1f27; --code-bg: #1c212a;
+    --def: #1b2536; --why: #17291f; --mis: #331c1c; --rule-bg: #33281a; --ts: #251e36; --rec: #172b2b;
+    --warn: #3a3214; --shot: #23262c;
+  }
+}
+html { background: var(--bg); }
+body {
+  background: var(--bg); color: var(--fg); max-width: 980px; margin: 0 auto; padding: 24px 16px 80px;
+  font: 16px/1.55 "Segoe UI", Calibri, system-ui, sans-serif;
+}
+h1, h2, h3, h4 { color: var(--head); line-height: 1.25; }
+h1 { border-bottom: 3px solid var(--accent); padding-bottom: 6px; margin-top: 2.4em; }
+h1.part { text-align: center; border: none; font-size: 2em; margin: 2.5em 0 1em; color: var(--accent); }
+header#title-block-header { text-align: center; padding: 40px 0; border-bottom: 1px solid var(--rule); }
+header .subtitle { color: var(--muted); }
+nav#TOC { border: 1px solid var(--rule); border-radius: 8px; padding: 12px 20px; }
+nav#TOC ul { list-style: none; padding-left: 1.1em; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; display: block; overflow-x: auto; }
+th { background: var(--th-bg); color: var(--th-fg); text-align: left; }
+th, td { border: 1px solid var(--rule); padding: 5px 8px; vertical-align: top; }
+tbody tr:nth-child(even) { background: var(--row-alt); }
+pre, code { background: var(--code-bg); font-family: Consolas, "Cascadia Mono", monospace; font-size: 13.5px; }
+pre { padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
+img { max-width: 100%; height: auto; background: #fff; border-radius: 4px; }
+figure { margin: 16px 0; text-align: center; }
+figcaption { color: var(--muted); font-size: 13px; }
+blockquote { border-left: 4px solid var(--accent); margin: 12px 0; padding: 4px 14px; color: var(--muted); }
+div.def, div.why, div.mistake, div.rule, div.ts, div.rec, div.warn, div.shot {
+  border-left: 6px solid; border-radius: 6px; padding: 8px 14px; margin: 14px 0;
+}
+div.def { background: var(--def); border-color: var(--def-b); }
+div.why { background: var(--why); border-color: var(--why-b); }
+div.mistake { background: var(--mis); border-color: var(--mis-b); }
+div.rule { background: var(--rule-bg); border-color: var(--rule-b); }
+div.ts { background: var(--ts); border-color: var(--ts-b); }
+div.rec { background: var(--rec); border-color: var(--rec-b); }
+div.warn { background: var(--warn); border-color: var(--warn-b); }
+div.shot { background: var(--shot); border: 2px dashed var(--shot-b); }
+@media print {
+  body { max-width: none; font-size: 11pt; padding: 0; }
+  h1 { page-break-before: always; }
+  table, pre, div.def, div.why, div.mistake, div.rule, div.ts, div.rec, div.warn, div.shot, figure { page-break-inside: avoid; }
+  table { display: table; }
+}
