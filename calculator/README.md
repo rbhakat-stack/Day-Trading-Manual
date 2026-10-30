@@ -31,6 +31,13 @@ npm run build        # type-check + production bundle in dist/
 
 Journal, settings, ranker queue and positions are stored in your browser (localStorage). Use **Journal → Backup JSON** regularly.
 
+### Automated Alert Mode (optional, default OFF)
+
+TrendSpider webhooks → Netlify Functions → read-only Alpaca market data → the same calculator and ranker → the
+**Live Alert Queue** with an exact TrendSpider order ticket (BUY/SELL · STOP · quantity · price · stop loss · take profit).
+No order is ever placed by the app. Setup, data semantics and limitations: **[AUTOMATION.md](AUTOMATION.md)**.
+The manual Calculator remains fully available.
+
 ## Folder structure
 
 ```

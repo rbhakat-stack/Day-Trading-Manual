@@ -136,6 +136,10 @@ export interface ScoreSnapshot {
 
 export interface Candidate {
   id: string;
+  /** 'AUTO' = created from a TrendSpider webhook alert (Live Alert Queue); absent/'MANUAL' = sent from the Calculator. */
+  source?: 'MANUAL' | 'AUTO';
+  /** Alert instant (epoch ms) for automated candidates — drives freshness. */
+  alertMs?: number;
   date: string; // YYYY-MM-DD (ET)
   alertTime: string; // HH:MM (ET)
   createdAt: number; // epoch ms — deterministic tie-break

@@ -20,6 +20,14 @@ import { JournalView } from './components/JournalView';
 import { Dashboard } from './components/Dashboard';
 import { RankerPage, type RankerActions } from './components/ranker/RankerPage';
 import { StrategyVersionBar, type PendingVersionChange, type VersionControls } from './components/StrategyVersionBar';
+import { LiveQueuePage, type LiveActions } from './components/live/LiveQueuePage';
+import { AutomationSettings } from './components/live/AutomationSettings';
+import { ParityView } from './components/live/ParityView';
+import { buildQueue } from './engine/automation/liveQueue';
+import { inputsFromRecord } from './engine/automation/autoCandidate';
+import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
+import { etParts } from './engine/automation/etTime';
+import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
   coreChanged,
@@ -32,7 +40,8 @@ import {
   type StrategyVersionState,
 } from './engine/strategyVersion';
 
-type Tab = 'calc' | 'ranker' | 'journal' | 'dashboard' | 'settings';
+type Tab = 'live' | 'calc' | 'ranker' | 'journal' | 'dashboard' | 'settings';
+type LiveSub = 'queue' | 'parity' | 'automation';
 
 const newId = (p: string) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -48,7 +57,8 @@ export default function App() {
   const [useMarketEntry, setUseMarketEntry] = useState(false);
   const [actualFill, setActualFill] = useState('');
   const [journal, setJournal] = useState<JournalEntry[]>(() => load<JournalEntry[]>(KEYS.journal, []));
-  const [tab, setTab] = useState<Tab>('calc');
+  const [tab, setTab] = useState<Tab>(() => (loadAutomationConfig().enabled ? 'live' : 'calc'));
+  const [liveSub, setLiveSub] = useState<LiveSub>('queue');
   const [savedFlash, setSavedFlash] = useState(false);
   const decisionRef = useRef<HTMLDivElement>(null);
 
@@ -235,6 +245,54 @@ export default function App() {
     window.scrollTo({ top: 0 });
   };
 
+  // ── Automated Alert Mode (Live Alert Queue) ──
+  const [autoCfg, setAutoCfg] = usePersistent(AUTO_KEYS.config, loadAutomationConfig);
+  const [autoToken, setAutoToken] = usePersistent<string>(AUTO_KEYS.token, () => load<string>(AUTO_KEYS.token, ''));
+  const [classes, setClasses] = usePersistent<ClassMap>(AUTO_KEYS.classifications, initialClassifications);
+  const [parityEntries, setParityEntries] = usePersistent<Record<string, ParityEntry>>(AUTO_KEYS.parity, loadParity);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!autoCfg.enabled) return;
+    const h = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, [autoCfg.enabled]);
+  const autoDate = etParts(clock).date;
+  const feed = useAlertRecords(autoCfg, autoToken, autoDate);
+  const liveSymbols = useMemo(() => {
+    const live = new Set(candidates.filter((c) => c.source === 'AUTO' && ['NEW', 'WATCHLIST', 'PENDING'].includes(c.status)).map((c) => c.ticker));
+    for (const r of feed.records) if (r.status === 'OK' && clock - r.alert.alertTimeMs < 15 * 60_000) live.add(r.alert.symbol);
+    return [...live];
+  }, [candidates, feed.records, clock]);
+  const { quotes, error: quoteError } = useLiveQuotes(autoCfg, autoToken, liveSymbols);
+  const parityRows = useMemo(() => {
+    const out: Record<string, ParityRow[]> = {};
+    for (const r of feed.records) {
+      const e = parityEntries[r.id];
+      if (e && r.snapshot?.values) out[r.id] = compareParity(r.snapshot.values, e.trendSpider, autoCfg.parity);
+    }
+    return out;
+  }, [feed.records, parityEntries, autoCfg.parity]);
+  const paritySum = useMemo(() => paritySummary(Object.values(parityEntries), parityRows, autoCfg.parityRequired), [parityEntries, parityRows, autoCfg.parityRequired]);
+  const queue = useMemo(() => {
+    if (!autoCfg.enabled) return null;
+    return buildQueue({
+      records: feed.records,
+      candidates,
+      positions,
+      quotes,
+      now: clock,
+      cfg: autoCfg,
+      rb: settings,
+      rk: rankerSettings,
+      classify: (s) => classes[s] ?? null,
+      parity: Object.fromEntries(Object.entries(parityRows).map(([id, rows]) => [id, mismatchMessages(rows)])),
+      strategyVersion: version.name,
+    });
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name]);
+  useEffect(() => {
+    if (queue?.changed) setCandidates(queue.candidates);
+  }, [queue]);
+
   /**
    * Calculator ↔ Ranker sync status. The ranker only changes when "Send to Opportunity Ranker" is pressed, so tell
    * the user when the calculator shows a ticker or numbers that the ranker does not have yet.
@@ -333,8 +391,29 @@ export default function App() {
     setSettings: (rk) => void proposeSettings(settings, rk),
   };
 
+  const liveActions: LiveActions = {
+    submit: (id) => rankerActions.setStatus(id, 'PENDING'),
+    skip: (id) => rankerActions.setStatus(id, 'SKIPPED'),
+    watch: (id) => rankerActions.setStatus(id, 'WATCHLIST'),
+    openInCalculator: (row) => {
+      const i = inputsFromRecord(row.record, row.quote?.price ?? row.record.initialQuote?.price ?? 0, Date.now(), settings);
+      if (!i) return;
+      setForm(formFromInputs(i));
+      setUseMarketEntry(false);
+      setActualFill('');
+      setCalculated(true);
+      setTab('calc');
+    },
+    classify: (symbol, c) => setClasses((m) => ({ ...m, [symbol]: c })),
+    reprocess: (id) => void feed.reprocess(id).catch((e) => alert((e as Error).message)),
+    keep: rankerActions.keep,
+    replace: rankerActions.replace,
+  };
+  const actionableCount = queue?.rows.filter((r) => r.decision.ticket).length ?? 0;
+
   const queueCount = ranking.ranked.length;
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'live', label: `Live Alert Queue${actionableCount ? ` (${actionableCount})` : ''}` },
     { id: 'calc', label: 'Calculator' },
     { id: 'ranker', label: `Opportunity Ranker${queueCount ? ` (${queueCount})` : ''}` },
     { id: 'journal', label: `Journal${journal.length ? ` (${journal.length})` : ''}` },
@@ -357,6 +436,9 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
             <span className="rounded-full border border-warn/50 bg-warn-dim/40 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-warn">Paper trading mode</span>
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${autoCfg.enabled ? 'border-long/50 text-long' : 'border-ink-600 text-ink-400'}`}>
+              Automated alerts {autoCfg.enabled ? 'on' : 'off'}
+            </span>
           </div>
           <nav className="flex w-full gap-1 overflow-x-auto sm:w-auto" aria-label="Sections">
             {tabs.map((t) => (
@@ -404,6 +486,33 @@ export default function App() {
             <div className="lg:col-span-2 xl:col-span-1">
               <RiskPanel result={result} atr={inputs.atr} investment={inputs.investmentAmount} useMarketEntry={useMarketEntry} />
             </div>
+          </div>
+        )}
+        {tab === 'live' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-1">
+              {([['queue', 'Queue'], ['parity', `Data validation (${paritySum.status.toLowerCase()})`], ['automation', 'Automation settings']] as const).map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setLiveSub(id)} className={`rounded-md px-3 py-1.5 text-sm ${liveSub === id ? 'bg-ink-700 text-ink-100' : 'text-ink-400 hover:text-ink-100'}`}>{label}</button>
+              ))}
+            </div>
+            {liveSub === 'queue' && (
+              <LiveQueuePage
+                rows={queue?.rows ?? []}
+                suggestions={queue?.suggestions ?? []}
+                now={clock}
+                enabled={autoCfg.enabled && !!autoToken}
+                feed={feed}
+                quoteError={quoteError}
+                parityStatus={paritySum.status}
+                versionLabel={versionControls.label}
+                actions={liveActions}
+                onOpenSettings={() => setLiveSub('automation')}
+              />
+            )}
+            {liveSub === 'parity' && (
+              <ParityView records={feed.records} entries={parityEntries} setEntry={(e) => setParityEntries((m) => ({ ...m, [e.recordId]: e }))} tol={autoCfg.parity} summary={paritySum} rowsById={parityRows} />
+            )}
+            {liveSub === 'automation' && <AutomationSettings cfg={autoCfg} setCfg={setAutoCfg} token={autoToken} setToken={setAutoToken} classes={classes} setClasses={setClasses} />}
           </div>
         )}
         {tab === 'ranker' && calcSync && (

@@ -1,0 +1,18 @@
+# Netlify configuration for the RB v1 calculator.
+# If your Netlify site's "Base directory" is the repository root, set it to `calculator` (Site settings → Build & deploy),
+# or move this file to the repository root and prefix the paths with `calculator/`.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Security headers for the app. Secrets are server-side only (Netlify environment variables).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"

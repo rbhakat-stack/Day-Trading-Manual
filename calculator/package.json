@@ -9,14 +9,18 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit && tsc -p tsconfig.netlify.json",
+    "typecheck:functions": "tsc -p tsconfig.netlify.json"
   },
   "dependencies": {
+    "@netlify/blobs": "^11.1.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@netlify/functions": "^6.0.3",
     "@tailwindcss/vite": "^4.1.8",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
     "@vitejs/plugin-react": "^4.5.0",

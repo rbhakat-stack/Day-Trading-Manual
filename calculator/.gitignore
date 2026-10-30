@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Local secrets for `netlify dev` — never commit
+.env
+.env.*
+.netlify/
