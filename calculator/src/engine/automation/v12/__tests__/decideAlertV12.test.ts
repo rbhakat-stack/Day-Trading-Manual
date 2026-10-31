@@ -5,12 +5,13 @@ import { decideAlert, DEFAULT_AUTOMATION, type AutoAlertRecord, type LiveQuote }
 import type { AlertTimeValues, DataIssue } from '../../alertSnapshot';
 import { buildQueue, type QueueInput } from '../../liveQueue';
 import { etToEpoch } from '../../etTime';
-import { cloneRankerDefaults } from '../../../ranker/rankerSettings';
+import { cloneRankerDefaults, RANKER_DEFAULTS } from '../../../ranker/rankerSettings';
 import { RB_V1_DEFAULTS } from '../../../settings';
 import { recordWith } from '../../__tests__/fixtures';
 import { receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../audit';
 import { ACTIVE_LOGIC_VERSION, decideActive, decideShadow, logicVersionOf } from '../dispatch';
 import type { RuleSetEntry } from '../ruleSets';
+import { thresholdsFor, V12_SHADOW_GRADES } from '../v12Thresholds';
 
 /** Test-only registry (the production registry is EMPTY until the TrendSpider audit). */
 const REG: RuleSetEntry[] = [
@@ -138,13 +139,16 @@ describe('Invariant C — SIP disagreement never rejects a qualified alert', () 
     }
   });
 
-  it('corrected MSFT 2026-10-30 13:35 (TS RVOL 1.624, SIP 1.946): RVOL diagnostic only, no warning, ticket identical to v1.1', () => {
+  it('corrected MSFT 2026-10-30 13:35 (TS RVOL 1.624, SIP 1.946): RVOL diagnostic only, no warning, same score and ticket as v1.1', () => {
     const r = rec({ symbol: 'MSFT', closeEt: '13:40', values: { rvol: 1.946 }, price: 100.95 });
     const row = rowOf([r], 'MSFT', nowAfter(r));
     expect(r.v12!.conditionDiagnostics.find((d) => d.rule === 'RVOL')).toMatchObject({ class: 'DIAGNOSTIC_ONLY', sipPass: true });
     expect(row.shadow!.warnings.filter((w) => w.startsWith('PARITY_WARNING'))).toEqual([]);
-    expect(row.shadow!.decision).toBe(row.decision.decision);
-    expect(row.shadow!.ticket).toEqual(row.decision.ticket);
+    // Same raw score as v1.1 → Option A tier = the v1.1 tier; the shadow decision follows the v1.2 shadow thresholds.
+    expect(row.shadow!.score).toMatchObject({ total: row.ranked!.total, tierOptionA: row.ranked!.tier, v11Total: row.ranked!.total, deltaVsV11: 0 });
+    // v1.1 = WATCHLIST (no ticket) at 85/90; the v1.2 shadow ticket is the shared calculator's unchanged plan.
+    const pl = row.live!.plan!;
+    expect(row.shadow!.ticket).toMatchObject({ quantity: pl.shares, price: pl.entry, stopLoss: pl.stop, takeProfit: pl.target });
   });
 });
 
@@ -228,13 +232,14 @@ describe('dedupe and tickets', () => {
     expect(row.shadow).toMatchObject({ decision: 'NOT ELIGIBLE', detail: 'DUPLICATE / EXISTING CANDIDATE' });
     expect(row.decision.decision).not.toBe('NOT ELIGIBLE');
   });
-  it('qualified, clean alert with SIP RVOL in the 1.5 band: v1.2 = v1.1 score, decision and identical ticket (Invariant E)', () => {
+  it('qualified, clean alert with SIP RVOL in the 1.5 band: v1.2 = v1.1 score, Option A tier and identical ticket (Invariant E)', () => {
     const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, values: { rvol: 1.6 } });
     const row = rowOf([r], 'NVDA', nowAfter(r));
     expect(row.shadow!.scoring).toBe('V12_RANKING');
     expect(row.shadow!.score?.total).toBe(row.ranked!.total); // floor 6 = v1.1 band ≥ 1.5 (6)
-    expect(row.shadow!.decision).toBe(row.decision.decision);
-    expect(row.shadow!.ticket).toEqual(row.decision.ticket);
+    expect(row.shadow!.score).toMatchObject({ tierOptionA: row.ranked!.tier, deltaVsV11: 0 });
+    expect(row.decision.ticket).not.toBeNull();
+    expect(row.shadow!.ticket).toEqual(row.decision.ticket); // identical geometry (Invariant E)
   });
   it('same alert with SIP RVOL 4.0: v1.1 scores RVOL 15/15, v1.2 the 6/15 floor → v1.2 total exactly 9 lower; geometry identical', () => {
     const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, values: { rvol: 4 } });
@@ -243,5 +248,55 @@ describe('dedupe and tickets', () => {
     expect(row.shadow!.score?.rvolPoints).toBe(6);
     expect(row.shadow!.score!.total! - row.ranked!.total!).toBeCloseTo(-9, 6);
     expect(row.candidate!.entry).toBe(row.live!.plan!.entry);
+  });
+});
+
+describe('Step 7: Option B shadow thresholds (82/78/73/69) with Option A retained', () => {
+  const mk = (values: Partial<AlertTimeValues>) => rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, values: { rvol: 1.6, ...values } });
+  const B = { elite: 82, high: 78, watchlist: 73, low: 69 };
+  it('the shadow thresholds are the approved B_CEIL values and frozen', () => {
+    expect(V12_SHADOW_GRADES).toEqual(B);
+    expect(V12_SHADOW_GRADES).toEqual(thresholdsFor('B_CEIL', cloneRankerDefaults()));
+    expect(Object.isFrozen(V12_SHADOW_GRADES)).toBe(true);
+  });
+  it.each([
+    ['score 83: v1.1 WATCHLIST · B ELITE · A WATCHLIST', { rsi: 62, ema9: 100.2 }, 83, 'ELITE', 'WATCHLIST', 'TRADE NOW — ELITE'],
+    ['score 81: B HIGH · A WATCHLIST', { rsi: 78 }, 81, 'HIGH_PRIORITY', 'WATCHLIST', 'HIGH PRIORITY — TRADE CONSIDERATION'],
+    ['score 77: B WATCHLIST · A LOW', { rsi: 52 }, 77, 'WATCHLIST', 'LOW_PRIORITY', 'WATCHLIST'],
+    ['score 66: B SKIP · A SKIP', { rsi: 52, vwap: 101.4, ema9: 100.0, ema20: 100.2 }, 66, 'SKIP', 'SKIP', 'SKIP'],
+  ] as const)('%s', (_n, values, total, tierB, tierA, decision) => {
+    const row = rowOf([mk(values)], 'NVDA', nowAfter(mk(values)));
+    expect(row.shadow!.score).toMatchObject({ total, tier: tierB, tierOptionB: tierB, tierOptionA: tierA, v11Total: row.ranked!.total, deltaVsV11: 0, thresholds: { option: 'B_CEIL', shadow: B, optionA: { elite: 90, high: 85, watchlist: 80, low: 75 } } });
+    expect(row.shadow!.decision).toBe(decision);
+    expect(row.ranked!.tier).toBe(tierA); // v1.1 still tiers with 90/85/80/75
+  });
+  it('labels are threshold-aware: no hard-coded 80 / 85 in the v1.2 path', () => {
+    const w = rowOf([mk({ rsi: 52 })], 'NVDA', nowAfter(mk({ rsi: 52 }))).shadow!;
+    expect(w.detail).toBe('Score 77 — below the v1.2 shadow trade threshold (78)');
+    const sk = mk({ rsi: 52, vwap: 101.4, ema9: 100.0, ema20: 100.2 });
+    expect(rowOf([sk], 'NVDA', nowAfter(sk)).shadow!.detail).toBe('Score 66 — below the v1.2 shadow watchlist threshold (73)');
+    for (const d of [w.detail, ...w.reasons]) expect(d).not.toMatch(/\b(80|85)\b/);
+  });
+  it('the delta vs v1.1 is recorded (SIP RVOL 4.0 → −9); Option A follows edited v1.1 grades', () => {
+    const r = mk({ rvol: 4 });
+    const row = rowOf([r], 'NVDA', nowAfter(r));
+    expect(row.shadow!.score!.deltaVsV11).toBe(-9);
+    const rk = cloneRankerDefaults();
+    rk.grades = { elite: 95, high: 88, watchlist: 82, low: 70 };
+    const row2 = run([r], nowAfter(r), { rk }).rows[0];
+    expect(row2.shadow!.score!.thresholds.optionA).toEqual(rk.grades);
+    expect(row2.shadow!.score!.thresholds.shadow).toEqual(B); // shadow thresholds are fixed, not a user setting
+  });
+  it('v1.1 is unaffected: ranking, decision and candidates identical with and without the v1.2 audit; defaults untouched', () => {
+    for (const values of [{ rsi: 62, ema9: 100.2 }, { rsi: 78 }, { rsi: 52 }, { rvol: 4 }]) {
+      const r = mk(values);
+      const a = run([r], nowAfter(r));
+      const b = run([{ ...r, v12: undefined } as AutoAlertRecordV12], nowAfter(r));
+      expect(a.rows[0].decision).toEqual(b.rows[0].decision);
+      expect(a.rows[0].ranked).toEqual(b.rows[0].ranked);
+      expect(a.candidates).toEqual(b.candidates);
+      expect(a.suggestions).toEqual(b.suggestions);
+    }
+    expect(RANKER_DEFAULTS.grades).toEqual({ elite: 90, high: 85, watchlist: 80, low: 75 });
   });
 });

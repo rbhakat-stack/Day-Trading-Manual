@@ -172,7 +172,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     const ranked = rankedById.get(rec.id) ?? null;
     const quote = q.quotes[rec.alert.symbol] ?? null;
     const live = lives.get(rec.id) ?? null;
-    const v12Inputs = { ...v12Base(rec), ranked: v12Rank.get(rec.id) ?? null };
+    const v12Inputs = { ...v12Base(rec), ranked: v12Rank.get(rec.id) ?? null, optionAGrades: q.rk.grades, v11Total: ranked?.total ?? null };
     const { decision } = decideActive({
       record: rec,
       released: released.has(rec.id),

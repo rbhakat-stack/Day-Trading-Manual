@@ -20,11 +20,13 @@
  */
 import { freshness, quoteAges, ticketFor, type AlertDecision, type AutomationConfig, type FinalDecision, type Freshness, type LiveQuote, type QueueSection, type TrendSpiderTicket } from '../alertDecision';
 import { etParts } from '../etTime';
-import type { RankedCandidate, StrategyRules } from '../../ranker/candidateRanker';
-import type { LifecycleStatus } from '../../ranker/opportunityTypes';
+import { classifyScore, type RankedCandidate, type StrategyRules } from '../../ranker/candidateRanker';
+import type { LifecycleStatus, QualityTier } from '../../ranker/opportunityTypes';
+import { RANKER_DEFAULTS } from '../../ranker/rankerSettings';
 import { checkTimeWindow, sortFails, type HardFail } from '../../rules';
 import type { TradeResult } from '../../tradeCalculator';
 import { integrityCodes, RB_V1_2, v12Snapshot, type AutoAlertRecordV12 } from './audit';
+import { V12_SHADOW_GRADES, V12_SHADOW_OPTION, type Grades } from './v12Thresholds';
 
 /** Shared-calculator / ranker hard rules that re-check TrendSpider conditions on SIP data — waived in v1.2. */
 export const WAIVED_SIP_RULES = ['INVALID_CANDLE_DIRECTION', 'HTF_CONFIRMATION_FAILED'] as const;
@@ -36,8 +38,17 @@ export type V12Scoring = 'V12_RANKING' | 'PENDING_V12_RANKING' | 'NOT_REACHED';
 
 /** v1.2 ranking summary for comparison with v1.1 (null until the alert is scored). */
 export interface V12ScoreSummary {
+  /** Raw v1.2 score (0 – 91 effective scale; never rescaled). */
   total: number | null;
+  /** Tier under the active v1.2 shadow thresholds (Option B) — the tier the shadow decision uses. */
   tier: string | null;
+  tierOptionB: QualityTier | null;
+  /** Tier the same raw score gets under the active RB v1.1 grades (Option A) — calibration comparison only. */
+  tierOptionA: QualityTier | null;
+  thresholds: { option: typeof V12_SHADOW_OPTION; shadow: Grades; optionA: Grades };
+  /** RB v1.1 score for the same record (null when v1.1 could not score it) and v1.2 − v1.1. */
+  v11Total: number | null;
+  deltaVsV11: number | null;
   rvolPoints: number | null;
   rvolMode: 'QUALIFIED_FLOOR';
   /** SIP re-checks of TrendSpider conditions that were waived (calculator) — diagnostic. */
@@ -78,6 +89,10 @@ export interface V12DecideArgs {
   /** Existing live candidate / position for the ticker (RB duplicate & pyramiding rule), from the v1.1 pass. */
   duplicateOf: string | null;
   window: StrategyRules;
+  /** Active RB v1.1 grades, for the Option A comparison tier (default: RB v1.1 defaults). */
+  optionAGrades?: Grades;
+  /** RB v1.1 score of this record, for the score delta. */
+  v11Total?: number | null;
 }
 
 export function decideAlertV12(a: V12DecideArgs): V12Decision {
@@ -149,16 +164,23 @@ export function decideAlertV12(a: V12DecideArgs): V12Decision {
   if (!r) {
     return out('QUALIFIED — SCORE PENDING', 'TrendSpider-qualified · ticket valid · awaiting the v1.2 ranking pass', 'WATCHLIST', ['No ticket is offered until the alert is scored.'], { scoring: 'PENDING_V12_RANKING' });
   }
+  const g = V12_SHADOW_GRADES;
+  const optionA = a.optionAGrades ?? RANKER_DEFAULTS.grades;
+  const v11Total = a.v11Total ?? null;
   const score: V12ScoreSummary = {
-    total: r.total, tier: r.tier, rvolPoints: r.components.find((k) => k.key === 'rvol')?.points ?? null, rvolMode: 'QUALIFIED_FLOOR',
+    total: r.total, tier: r.tier, tierOptionB: r.tier,
+    tierOptionA: r.total === null ? null : classifyScore(r.total, { ...RANKER_DEFAULTS, grades: optionA }),
+    thresholds: { option: V12_SHADOW_OPTION, shadow: { ...g }, optionA: { ...optionA } },
+    v11Total, deltaVsV11: r.total !== null && v11Total !== null ? Math.round((r.total - v11Total) * 10) / 10 : null,
+    rvolPoints: r.components.find((k) => k.key === 'rvol')?.points ?? null, rvolMode: 'QUALIFIED_FLOOR',
     waivedRules: r.candidate.qualification?.waivedRules ?? [],
   };
   const s = { scoring: 'V12_RANKING' as const, score };
   const strategyFails = r.strategyEligible ? [] : r.hardFails.filter((f) => !PORTFOLIO_CODES.includes(f.code) && !(WAIVED_SIP_RULES as readonly string[]).includes(f.code));
   if (strategyFails.length) return out('NOT ELIGIBLE', strategyFails[0].label, 'IGNORE', strategyFails.map((f) => `${f.label}: ${f.reason}`), s);
   if (r.missing.length) return out('DATA REVIEW REQUIRED', 'SCORING INCOMPLETE', 'DATA_REVIEW', [`Missing: ${r.missing.join(', ')}.`], s);
-  if (r.tier === 'SKIP' || r.tier === 'LOW_PRIORITY') return out('SKIP', `Score ${r.total} — below the 80 watchlist threshold`, 'IGNORE', [r.eligibilityLabel], s);
-  if (r.tier === 'WATCHLIST') return out('WATCHLIST', `Score ${r.total} — below the 85 trade threshold`, 'WATCHLIST', [r.eligibilityLabel], s);
+  if (r.tier === 'SKIP' || r.tier === 'LOW_PRIORITY') return out('SKIP', `Score ${r.total} — below the v1.2 shadow watchlist threshold (${g.watchlist})`, 'IGNORE', [r.eligibilityLabel], s);
+  if (r.tier === 'WATCHLIST') return out('WATCHLIST', `Score ${r.total} — below the v1.2 shadow trade threshold (${g.high})`, 'WATCHLIST', [r.eligibilityLabel], s);
   if (!r.recommendation?.startsWith('TRADE NOW')) return out('WATCHLIST', r.recommendation ?? 'NOT ALLOCATED', 'WATCHLIST', r.reasonsAgainst.slice(0, 3), s);
   const ages = quoteAges(a.quote, a.now);
   if (!ages || ages.dataAgeSec > a.cfg.maxDataAgeSec || ages.tradeAgeSec > a.cfg.maxTradeAgeSec) {

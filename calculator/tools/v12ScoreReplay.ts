@@ -119,7 +119,7 @@ async function main() {
     out.push({
       date: s.date, ticker: s.ticker, candle: s.candle_et, direction, source: genuine ? 'GENUINE' : 'HYPOTHETICAL', tsRvol: Number(s.ts_rvol) || null, sipRvol: snapshot.values.rvol,
       v11Total: row.ranked?.total ?? null, v11Rvol: row.ranked?.components.find((k) => k.key === 'rvol')?.points ?? null, v11Tier: row.ranked?.tier ?? null, v11Fails: (row.ranked?.hardFails ?? []).map((f) => f.code).join(' '),
-      v12Total: sh?.score?.total ?? null, v12Rvol: sh?.score?.rvolPoints ?? null, v12Tier: sh?.score?.tier ?? null, v12Decision: sh?.decision ?? '', waived: (sh?.score?.waivedRules ?? []).join(' '),
+      v12Total: sh?.score?.total ?? null, v12Rvol: sh?.score?.rvolPoints ?? null, v12Tier: sh?.score?.tierOptionA ?? null /* Option A column; the shadow decision uses Option B since Step 7 */, v12Decision: sh?.decision ?? '', waived: (sh?.score?.waivedRules ?? []).join(' '),
       parity: (sh?.warnings ?? []).filter((w) => w.startsWith('PARITY_WARNING')).map((w) => w.split(':')[1]).join(' '), note: '',
     });
   }

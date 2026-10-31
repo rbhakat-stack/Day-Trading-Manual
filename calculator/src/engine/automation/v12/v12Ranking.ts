@@ -10,6 +10,7 @@
  *     logic mirrors evaluateTrade exactly: no remaining fail + not crossed → BUY/SELL STOP (ready);
  *     no remaining fail + crossed (within the chase limit) → MARKET_LATE_ENTRY (not ready); any remaining fail →
  *     not ready, highest-priority remaining fail first. The plan (entry/stop/target/shares) is unchanged.
+ * Ranked with the EXPERIMENTAL v1.2 shadow thresholds (V12_SHADOW_GRADES, Option B) — weights and bands unchanged.
  * Only records whose v1.2 decision reached the scoring stage enter the pool (qualified, mapped, integrity-clean, not a
  * duplicate, valid current-state ticket): unqualified records never compete for capital.
  */
@@ -20,6 +21,7 @@ import { sortFails, type HardFailCode } from '../../rules';
 import type { TradeResult } from '../../tradeCalculator';
 import type { V12Audit } from './audit';
 import { WAIVED_SIP_RULES } from './decideAlertV12';
+import { V12_SHADOW_GRADES, withGrades } from './v12Thresholds';
 
 /** RVOL threshold a qualified alert proves (the RB rule RVOL(20, SMA, 1) > 1.5). */
 export const RVOL_PROVEN_MIN = 1.5;
@@ -74,6 +76,6 @@ export function shadowRanking(args: {
       if (live && audit) list.push(v12Candidate(c, live, audit));
     }
   }
-  const ranking = rankCandidates(list, args.positions, args.rk, args.today, args.window);
+  const ranking = rankCandidates(list, args.positions, withGrades(args.rk, V12_SHADOW_GRADES), args.today, args.window);
   return { ranking, byId: new Map(ranking.ranked.map((r) => [r.candidate.id, r])) };
 }

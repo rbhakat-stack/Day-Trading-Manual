@@ -1,6 +1,6 @@
 # RB v1.1 vs RB v1.2 (shadow) score replay
 
-Generated 2026-10-31T18:36:12.284Z · Phase 2 master sample, real Alpaca SIP · candles closing ≤ 15:30 · TEST/HYPOTHETICAL rule sets.
+Generated 2026-10-31T18:47:42.099Z · Phase 2 master sample, real Alpaca SIP · candles closing ≤ 15:30 · TEST/HYPOTHETICAL rule sets.
 
 ## ALL (hypothetical + genuine)
 

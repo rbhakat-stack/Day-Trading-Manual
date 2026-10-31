@@ -1,6 +1,7 @@
 /**
- * RB v1.2 — score-threshold calibration (Phase 3C.1, RB_V1_2_ARCHITECTURE.md §26). COMPARISON ONLY: nothing here is
- * wired into a v1.1 or v1.2 decision; the shadow ranking still uses the unchanged RB v1.1 grades (Option A).
+ * RB v1.2 — score thresholds (RB_V1_2_ARCHITECTURE.md §26–27). The v1.2 SHADOW ranking uses V12_SHADOW_GRADES
+ * (Option B, B_CEIL — experimental, approved for shadow mode only); every shadow score also records its Option A tier
+ * (the active RB v1.1 grades) for calibration. RB v1.1 grades and scoring are never changed here.
  *
  * With RVOL scored at the QUALIFIED_FLOOR, a qualified candidate can earn at most
  *     max = Σ weights − w.rvol + floor × w.rvol ÷ 15      (defaults: 100 − 15 + 6 = 91)
@@ -23,6 +24,13 @@ import { RVOL_PROVEN_MIN } from './v12Ranking';
 export type Grades = RankerSettings['grades'];
 export type ThresholdOption = 'A_CURRENT' | 'B_ROUND' | 'B_CEIL';
 export const THRESHOLD_OPTIONS: readonly ThresholdOption[] = ['A_CURRENT', 'B_ROUND', 'B_CEIL'];
+
+/**
+ * EXPERIMENTAL RB v1.2 SHADOW thresholds (Option B, B_CEIL at default weights: 90/85/80/75 × 91/100, rounded up).
+ * Fixed, not a user setting, never used by RB v1.1, not approved for production.
+ */
+export const V12_SHADOW_OPTION = 'B_CEIL' as const;
+export const V12_SHADOW_GRADES: Readonly<Grades> = Object.freeze({ elite: 82, high: 78, watchlist: 73, low: 69 });
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
