@@ -16,6 +16,8 @@ export const AUTO_KEYS = {
   token: 'rbv1.automation.token.v1',
   classifications: 'rbv1.automation.classifications.v1',
   parity: 'rbv1.automation.parity.v1',
+  /** RB v1.2 SHADOW comparison log (frozen first v1.2 score per alert; calibration data only). */
+  v12ShadowLog: 'rbv1.v12.shadowLog.v1',
 } as const;
 
 export function loadAutomationConfig(): AutomationConfig {

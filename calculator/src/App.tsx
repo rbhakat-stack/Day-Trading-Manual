@@ -28,6 +28,8 @@ import { buildQueue } from './engine/automation/liveQueue';
 import { inputsFromRecord } from './engine/automation/autoCandidate';
 import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
 import { etParts } from './engine/automation/etTime';
+import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
+import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
@@ -293,6 +295,19 @@ export default function App() {
   useEffect(() => {
     if (queue?.changed) setCandidates(queue.candidates);
   }, [queue]);
+  // RB v1.2 SHADOW: freeze the first v1.2 score per alert (Option A + B tiers, v1.1 score) for later calibration.
+  const [shadowLog, setShadowLog] = usePersistent<V12ShadowLog>(AUTO_KEYS.v12ShadowLog, () => load<V12ShadowLog>(AUTO_KEYS.v12ShadowLog, {}));
+  useEffect(() => {
+    if (queue) setShadowLog((prev) => freezeShadowScores(prev, queue.rows, clock).log);
+  }, [queue, clock, setShadowLog]);
+  const exportShadowLog = () => {
+    const url = URL.createObjectURL(new Blob([shadowLogCsv(shadowLog)], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rb-v1.2-shadow-log-${autoDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   /**
    * Calculator ↔ Ranker sync status. The ranker only changes when "Send to Opportunity Ranker" is pressed, so tell
@@ -508,6 +523,7 @@ export default function App() {
                 versionLabel={versionControls.label}
                 actions={liveActions}
                 onOpenSettings={() => setLiveSub('automation')}
+                shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
               />
             )}
             {liveSub === 'parity' && (
