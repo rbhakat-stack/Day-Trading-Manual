@@ -100,6 +100,7 @@ export function rvolBand(rvol: number, s: RankerSettings) {
 }
 
 export function scoreRvol(c: Candidate, s: RankerSettings): ComponentScore {
+  if (c.qualification) return scoreRvolQualifiedFloor(c, s);
   const r = c.inputs.rvol;
   if (!isNum(r)) return missing('rvol', s, 'RVOL(20)');
   const band = rvolBand(r, s);
@@ -110,6 +111,23 @@ export function scoreRvol(c: Candidate, s: RankerSettings): ComponentScore {
     calc: [`RVOL ${f2(r)} → band ${band ? `≥ ${band.min}` : `< ${s.rvolBands[0]?.min ?? 0}`} = ${base}/15`],
     positives: base >= 12 ? [`RVOL ${f2(r)} indicates ${label.toLowerCase()} participation`] : [],
     negatives: base < 9 ? [`RVOL ${f2(r)} is only ${label.toLowerCase()} participation`] : [],
+  });
+}
+
+/**
+ * RB v1.2 QUALIFIED_FLOOR (provisional, shadow only): a TrendSpider-qualified alert proved RVOL ≥ rvolProvenMin but
+ * TrendSpider does not send the number, so the component scores the band of the proven threshold (1.5 → 6/15 with
+ * the default bands). The SIP RVOL magnitude is diagnostic only and never moves these points.
+ */
+export function scoreRvolQualifiedFloor(c: Candidate, s: RankerSettings): ComponentScore {
+  const min = c.qualification!.rvolProvenMin;
+  const band = rvolBand(min, s);
+  const base = band?.points ?? 0;
+  return make('rvol', base, s, {
+    summary: `TrendSpider-qualified RVOL ≥ ${min} — magnitude unknown (QUALIFIED_FLOOR)`,
+    calc: [`TrendSpider RVOL gate proved ≥ ${min} → band ${band ? `≥ ${band.min}` : `< ${s.rvolBands[0]?.min ?? 0}`} = ${base}/15 (SIP RVOL is diagnostic only and not used)`],
+    positives: [],
+    negatives: [],
   });
 }
 

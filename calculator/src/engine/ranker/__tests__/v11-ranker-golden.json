@@ -1,0 +1,480 @@
+{
+ "generatedFrom": "dd74339 (pre-step-6 ranker)",
+ "scenarios": {
+  "ranker sample day (manual candidates + positions)": {
+   "sha256": "ece414e125126ddce28e59c4b9f26dd351721c7aa47faadfbf757c420ef078c0",
+   "rows": [
+    {
+     "id": "sample-2026-10-30-NVDA",
+     "total": 94,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 15,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-AVGO",
+     "total": 88,
+     "tier": "HIGH_PRIORITY",
+     "rank": 2,
+     "recommendation": "BLOCKED — CORRELATED EXPOSURE",
+     "rvol": 12,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-HCA",
+     "total": 87,
+     "tier": "HIGH_PRIORITY",
+     "rank": 3,
+     "recommendation": "TRADE NOW — HIGH PRIORITY",
+     "rvol": 9,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-IBM",
+     "total": 84,
+     "tier": "WATCHLIST",
+     "rank": 4,
+     "recommendation": "WATCHLIST / RESERVE",
+     "rvol": 12,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-AEP",
+     "total": 74,
+     "tier": "SKIP",
+     "rank": 5,
+     "recommendation": null,
+     "rvol": 6,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-DLTR",
+     "total": 61,
+     "tier": "SKIP",
+     "rank": 6,
+     "recommendation": "SKIP — QUALITY BELOW THRESHOLD",
+     "rvol": 6,
+     "fails": []
+    },
+    {
+     "id": "sample-2026-10-30-NEE",
+     "total": 76,
+     "tier": "LOW_PRIORITY",
+     "rank": 7,
+     "recommendation": "BLOCKED — CORRELATED EXPOSURE",
+     "rvol": 12,
+     "fails": [
+      "CORRELATION_LIMIT"
+     ]
+    },
+    {
+     "id": "sample-2026-10-30-TRMB",
+     "total": 81,
+     "tier": "WATCHLIST",
+     "rank": null,
+     "recommendation": null,
+     "rvol": 9,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol NaN": {
+   "sha256": "b883450dbf2395e22eba3fcb1e10b250701f34332635f36edeba44065d32d71e",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "SCORING INCOMPLETE",
+     "rvol": 0,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 0.8": {
+   "sha256": "119c5f01c106e92f2f9c72200a504334181d423337cfc10a6a1489d466142ba6",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 81,
+     "tier": "WATCHLIST",
+     "rank": 1,
+     "recommendation": "WATCHLIST / RESERVE",
+     "rvol": 0,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 1.49": {
+   "sha256": "9fb822fa3d0a0f67fa898d70f4351d61ce53edd02af6266e2fe7251eace948c3",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 81,
+     "tier": "WATCHLIST",
+     "rank": 1,
+     "recommendation": "WATCHLIST / RESERVE",
+     "rvol": 0,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 1.5": {
+   "sha256": "b1ab6a5aa6698d0ced3244852bc8c8298e0c2bdd92ed36349579728e3ef2f897",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 87,
+     "tier": "HIGH_PRIORITY",
+     "rank": 1,
+     "recommendation": "TRADE NOW — HIGH PRIORITY",
+     "rvol": 6,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 1.6": {
+   "sha256": "3709bbf97cb74e739bc41f562af7f1d7a036546a2ed8cec205cf176ccd1bea7d",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 87,
+     "tier": "HIGH_PRIORITY",
+     "rank": 1,
+     "recommendation": "TRADE NOW — HIGH PRIORITY",
+     "rvol": 6,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 2": {
+   "sha256": "f70681236cf2430f64e6b2eba3b3718df2b7e68892eda56217c246fa0d52c225",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 90,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 9,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 2.2": {
+   "sha256": "f6f4a589d4ae7656219e632edbae2b36e561c5c4bd4c564cbcc2b453401eb653",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 90,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 9,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 2.5": {
+   "sha256": "2469b5f1acc869c32febc907668189e7a7ee9f10f5caecf939067b7efdb62448",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 93,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 12,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 3": {
+   "sha256": "6007fd1e4f75dc4191ac52cb9cad31b6e983c139d602934a1b4a029dc997fc46",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 93,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 12,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 3.5": {
+   "sha256": "cd2c7cd748bc73282524f81238accb320af9a097e5a269a4576ffa40c2df03a9",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 96,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 15,
+     "fails": []
+    }
+   ]
+  },
+  "LONG rvol 5": {
+   "sha256": "1ffc2c178ead7c9178908bc9d25b201f28e37ef588f07ba6639d03458db99da6",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 96,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 15,
+     "fails": []
+    }
+   ]
+  },
+  "LONG SIP candle red (INVALID_CANDLE_DIRECTION)": {
+   "sha256": "9483115c54b233eef22c144923f80b76845024c28bcd7ece351ad4b1a37bfb62",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "INVALID_CANDLE_DIRECTION",
+      "INVALID_CANDLE_DIRECTION"
+     ]
+    }
+   ]
+  },
+  "LONG SIP 15m below EMA20 (HTF_CONFIRMATION_FAILED)": {
+   "sha256": "9b2e24db7c224518c6f4572aa406236648858486935cdb258a9f3f30c4e154a9",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "HTF_CONFIRMATION_FAILED",
+      "HTF_CONFIRMATION_FAILED"
+     ]
+    }
+   ]
+  },
+  "LONG candle + 15m both fail": {
+   "sha256": "f5c19b7c7b09f576841d8d2f7d70e3f1383aeb95b4d5001363011e65a005da86",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "INVALID_CANDLE_DIRECTION",
+      "INVALID_CANDLE_DIRECTION",
+      "HTF_CONFIRMATION_FAILED"
+     ]
+    }
+   ]
+  },
+  "LONG weak RSI / VWAP / EMA": {
+   "sha256": "e5676fe389bd371e707ecbdd12ef403a030ebb87078a4b34f645f778eeeeea3b",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 75,
+     "tier": "LOW_PRIORITY",
+     "rank": 1,
+     "recommendation": "LOW PRIORITY",
+     "rvol": 15,
+     "fails": []
+    }
+   ]
+  },
+  "LONG trigger crossed (late entry)": {
+   "sha256": "89077bd283d92c4041b34f365a460a8cdd2cc1d41b93a270f379ef9138c0e492",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "SETUP_FAILED"
+     ]
+    }
+   ]
+  },
+  "LONG chased": {
+   "sha256": "05f28b6f20f67410a1c4815fb5336d0d488cf7029a4146a3170d32d64a10e1d3",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "CHASED_SETUP",
+      "CHASED_SETUP"
+     ]
+    }
+   ]
+  },
+  "LONG stale (12 min)": {
+   "sha256": "2634ed29f2be8beb9dd02c7d06f832dbe31f363733580b52110a37e4ec8e2fd3",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "STALE_SETUP"
+     ]
+    }
+   ]
+  },
+  "LONG after entry window (15:40)": {
+   "sha256": "72f980483b2e86c9c088da9c1b79d6c356ee9032de2f35a3a4914149b563e7ea",
+   "rows": [
+    {
+     "id": "AAA-L-1793389204000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 15,
+     "fails": [
+      "OUTSIDE_ENTRY_WINDOW",
+      "OUTSIDE_ENTRY_WINDOW"
+     ]
+    }
+   ]
+  },
+  "LONG missing classification": {
+   "sha256": "3c13df3f6759e1325019d34c6bd13999548c6b1482e45d1055f1dd0dc5c0e520",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "SCORING INCOMPLETE",
+     "rvol": 15,
+     "fails": []
+    }
+   ]
+  },
+  "SHORT ok": {
+   "sha256": "eec1b173468fc7be4ceec4e9d9d0d005b098ada572e72bf868f76bee9537c45a",
+   "rows": [
+    {
+     "id": "EEE-S-1793369704000",
+     "total": 89,
+     "tier": "HIGH_PRIORITY",
+     "rank": 1,
+     "recommendation": "TRADE NOW — HIGH PRIORITY",
+     "rvol": 9,
+     "fails": []
+    }
+   ]
+  },
+  "SHORT SIP candle green": {
+   "sha256": "afa45368d5c9839a6457f8acda27271ea918217d9deeec0118792a41e8b237b8",
+   "rows": [
+    {
+     "id": "EEE-S-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 9,
+     "fails": [
+      "INVALID_CANDLE_DIRECTION",
+      "INVALID_CANDLE_DIRECTION"
+     ]
+    }
+   ]
+  },
+  "mixed pool (allocation, correlation, ties)": {
+   "sha256": "b540d116744758a3078800b120a08c889c745e53fa8c7f7ca3c4081114249a30",
+   "rows": [
+    {
+     "id": "AAA-L-1793369704000",
+     "total": 95,
+     "tier": "ELITE",
+     "rank": 1,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 15,
+     "fails": []
+    },
+    {
+     "id": "EEE-S-1793369704000",
+     "total": 93,
+     "tier": "ELITE",
+     "rank": 2,
+     "recommendation": "TRADE NOW — ELITE",
+     "rvol": 9,
+     "fails": []
+    },
+    {
+     "id": "DDD-L-1793369704000",
+     "total": 89,
+     "tier": "HIGH_PRIORITY",
+     "rank": 3,
+     "recommendation": "BLOCKED — CORRELATED EXPOSURE",
+     "rvol": 9,
+     "fails": []
+    },
+    {
+     "id": "BBB-L-1793369704000",
+     "total": 86,
+     "tier": "HIGH_PRIORITY",
+     "rank": 4,
+     "recommendation": "TRADE NOW — HIGH PRIORITY",
+     "rvol": 6,
+     "fails": []
+    },
+    {
+     "id": "CCC-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 12,
+     "fails": [
+      "INVALID_CANDLE_DIRECTION",
+      "INVALID_CANDLE_DIRECTION"
+     ]
+    },
+    {
+     "id": "FFF-L-1793369704000",
+     "total": null,
+     "tier": null,
+     "rank": null,
+     "recommendation": "NOT ELIGIBLE — CANNOT BE RANKED",
+     "rvol": 6,
+     "fails": [
+      "HTF_CONFIRMATION_FAILED",
+      "HTF_CONFIRMATION_FAILED"
+     ]
+    }
+   ]
+  }
+ }
+}

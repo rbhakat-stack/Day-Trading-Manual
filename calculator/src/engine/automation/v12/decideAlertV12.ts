@@ -14,9 +14,9 @@
  *   D  DATA REVIEW only for integrity problems (integrityCodes)
  *   E  ticket = the shared calculator's unchanged plan (same formulas; nothing recomputed here)
  *
- * Scoring: the v1.1 ranker gives no score to a candidate with a SIP candle/15m hard fail, and excludes records with
- * any snapshot issue from allocation. Until the v1.2 ranking pass exists (Phase 3B step 6), a v1.2 decision uses the
- * v1.1 ranking only when it is not affected by either; otherwise it reports QUALIFIED — SCORE PENDING (no ticket).
+ * Scoring comes from the v1.2 shadow ranking pass (v12Ranking.ts: QUALIFIED_FLOOR RVOL, TrendSpider-owned candle /
+ * 15m rules). Without a v1.2 ranking row the decision stops at QUALIFIED — SCORE PENDING (no ticket); the queue uses
+ * that pre-pass to decide which records enter the v1.2 pool.
  */
 import { freshness, quoteAges, ticketFor, type AlertDecision, type AutomationConfig, type FinalDecision, type Freshness, type LiveQuote, type QueueSection, type TrendSpiderTicket } from '../alertDecision';
 import { etParts } from '../etTime';
@@ -32,7 +32,17 @@ const PORTFOLIO_CODES = ['NO_POSITION_SLOT', 'CAPITAL_LIMIT', 'PORTFOLIO_HEAT_LI
 const CLOSED: LifecycleStatus[] = ['TARGET_HIT', 'STOPPED_OUT', 'MANUAL_EXIT', 'SKIPPED', 'CANCELED', 'EXPIRED', 'STALE'];
 
 export type V12FinalDecision = FinalDecision | 'NOT QUALIFIED' | 'QUALIFIED — SCORE PENDING';
-export type V12Scoring = 'V11_RANKING' | 'PENDING_V12_RANKING' | 'NOT_REACHED';
+export type V12Scoring = 'V12_RANKING' | 'PENDING_V12_RANKING' | 'NOT_REACHED';
+
+/** v1.2 ranking summary for comparison with v1.1 (null until the alert is scored). */
+export interface V12ScoreSummary {
+  total: number | null;
+  tier: string | null;
+  rvolPoints: number | null;
+  rvolMode: 'QUALIFIED_FLOOR';
+  /** SIP re-checks of TrendSpider conditions that were waived (calculator) — diagnostic. */
+  waivedRules: string[];
+}
 
 export interface V12Decision {
   logicVersion: typeof RB_V1_2;
@@ -48,6 +58,7 @@ export interface V12Decision {
   qualified: boolean;
   ticket: TrendSpiderTicket | null;
   scoring: V12Scoring;
+  score: V12ScoreSummary | null;
   freshness: Freshness;
 }
 
@@ -59,9 +70,8 @@ export interface V12DecideArgs {
   candidateStatus: LifecycleStatus | null;
   /** Shared calculator at the current price (plan, chase, hard fails). */
   live: TradeResult | null;
-  /** v1.1 ranking row for this record, and whether v1.1 kept it out of allocation for data-trust reasons. */
+  /** v1.2 shadow ranking row for this record (null in the pre-pass, or when it could not be ranked). */
   ranked: RankedCandidate | null;
-  v11DataBlocked: boolean;
   quote: LiveQuote | null;
   now: number;
   cfg: AutomationConfig;
@@ -75,8 +85,8 @@ export function decideAlertV12(a: V12DecideArgs): V12Decision {
   const audit = rec.v12;
   const fr = freshness(rec.alert.alertTimeMs, a.now);
   const warnings = [...(audit?.warnings ?? [])];
-  const out = (decision: V12FinalDecision, detail: string, section: QueueSection, reasons: string[], o: Partial<Pick<V12Decision, 'ticket' | 'scoring' | 'dataReview' | 'qualified'>> = {}): V12Decision => ({
-    logicVersion: RB_V1_2, mode: a.mode, decision, detail, section, reasons, warnings, dataReview: o.dataReview ?? [], qualified: o.qualified ?? audit?.qualification.status === 'QUALIFIED', ticket: o.ticket ?? null, scoring: o.scoring ?? 'NOT_REACHED', freshness: fr,
+  const out = (decision: V12FinalDecision, detail: string, section: QueueSection, reasons: string[], o: Partial<Pick<V12Decision, 'ticket' | 'scoring' | 'dataReview' | 'qualified' | 'score'>> = {}): V12Decision => ({
+    logicVersion: RB_V1_2, mode: a.mode, decision, detail, section, reasons, warnings, dataReview: o.dataReview ?? [], qualified: o.qualified ?? audit?.qualification.status === 'QUALIFIED', ticket: o.ticket ?? null, scoring: o.scoring ?? 'NOT_REACHED', score: o.score ?? null, freshness: fr,
   });
 
   // 0 still in the micro-batch / being enriched
@@ -134,26 +144,29 @@ export function decideAlertV12(a: V12DecideArgs): V12Decision {
   const p = live.plan;
   const ticket = ticketFor(rec.alert.direction, { shares: p.shares, entry: p.entry, stop: p.stop, target: p.target });
 
-  // 7 scoring / portfolio
+  // 7 scoring / portfolio — v1.2 shadow ranking pass
   const r = a.ranked;
-  const rankerVetoes = r ? r.hardFails.filter((f) => (WAIVED_SIP_RULES as readonly string[]).includes(f.code)) : [];
-  if (!r || a.v11DataBlocked || rankerVetoes.length) {
-    const why = !r ? 'no v1.1 ranking row' : a.v11DataBlocked ? 'v1.1 kept it out of allocation for a data-trust reason' : 'the v1.1 ranker gives no score after a SIP candle/15m hard fail';
-    return out('QUALIFIED — SCORE PENDING', `TrendSpider-qualified · ticket valid · score pending (${why})`, 'WATCHLIST', ['The RB v1.2 ranking pass is not implemented yet (Phase 3B step 6). No ticket is offered until the alert is scored.'], { scoring: 'PENDING_V12_RANKING' });
+  if (!r) {
+    return out('QUALIFIED — SCORE PENDING', 'TrendSpider-qualified · ticket valid · awaiting the v1.2 ranking pass', 'WATCHLIST', ['No ticket is offered until the alert is scored.'], { scoring: 'PENDING_V12_RANKING' });
   }
-  const strategyFails = r.strategyEligible ? [] : r.hardFails.filter((f) => !PORTFOLIO_CODES.includes(f.code));
-  if (strategyFails.length) return out('NOT ELIGIBLE', strategyFails[0].label, 'IGNORE', strategyFails.map((f) => `${f.label}: ${f.reason}`), { scoring: 'V11_RANKING' });
-  if (r.missing.length) return out('DATA REVIEW REQUIRED', 'SCORING INCOMPLETE', 'DATA_REVIEW', [`Missing: ${r.missing.join(', ')}.`], { scoring: 'V11_RANKING' });
-  if (r.tier === 'SKIP' || r.tier === 'LOW_PRIORITY') return out('SKIP', `Score ${r.total} — below the 80 watchlist threshold`, 'IGNORE', [r.eligibilityLabel], { scoring: 'V11_RANKING' });
-  if (r.tier === 'WATCHLIST') return out('WATCHLIST', `Score ${r.total} — below the 85 trade threshold`, 'WATCHLIST', [r.eligibilityLabel], { scoring: 'V11_RANKING' });
-  if (!r.recommendation?.startsWith('TRADE NOW')) return out('WATCHLIST', r.recommendation ?? 'NOT ALLOCATED', 'WATCHLIST', r.reasonsAgainst.slice(0, 3), { scoring: 'V11_RANKING' });
+  const score: V12ScoreSummary = {
+    total: r.total, tier: r.tier, rvolPoints: r.components.find((k) => k.key === 'rvol')?.points ?? null, rvolMode: 'QUALIFIED_FLOOR',
+    waivedRules: r.candidate.qualification?.waivedRules ?? [],
+  };
+  const s = { scoring: 'V12_RANKING' as const, score };
+  const strategyFails = r.strategyEligible ? [] : r.hardFails.filter((f) => !PORTFOLIO_CODES.includes(f.code) && !(WAIVED_SIP_RULES as readonly string[]).includes(f.code));
+  if (strategyFails.length) return out('NOT ELIGIBLE', strategyFails[0].label, 'IGNORE', strategyFails.map((f) => `${f.label}: ${f.reason}`), s);
+  if (r.missing.length) return out('DATA REVIEW REQUIRED', 'SCORING INCOMPLETE', 'DATA_REVIEW', [`Missing: ${r.missing.join(', ')}.`], s);
+  if (r.tier === 'SKIP' || r.tier === 'LOW_PRIORITY') return out('SKIP', `Score ${r.total} — below the 80 watchlist threshold`, 'IGNORE', [r.eligibilityLabel], s);
+  if (r.tier === 'WATCHLIST') return out('WATCHLIST', `Score ${r.total} — below the 85 trade threshold`, 'WATCHLIST', [r.eligibilityLabel], s);
+  if (!r.recommendation?.startsWith('TRADE NOW')) return out('WATCHLIST', r.recommendation ?? 'NOT ALLOCATED', 'WATCHLIST', r.reasonsAgainst.slice(0, 3), s);
   const ages = quoteAges(a.quote, a.now);
   if (!ages || ages.dataAgeSec > a.cfg.maxDataAgeSec || ages.tradeAgeSec > a.cfg.maxTradeAgeSec) {
-    return out('DATA REVIEW REQUIRED', 'STALE DATA — REFRESHING', 'DATA_REVIEW', ['TRADE NOW is never shown from stale current-price data.'], { scoring: 'V11_RANKING', dataReview: ['STALE_CURRENT_DATA'] });
+    return out('DATA REVIEW REQUIRED', 'STALE DATA — REFRESHING', 'DATA_REVIEW', ['TRADE NOW is never shown from stale current-price data.'], { ...s, dataReview: ['STALE_CURRENT_DATA'] });
   }
   return r.tier === 'ELITE'
-    ? out('TRADE NOW — ELITE', `Score ${r.total} · rank #${r.rank}`, 'ACTION_NOW', [], { ticket, scoring: 'V11_RANKING' })
-    : out('HIGH PRIORITY — TRADE CONSIDERATION', `Score ${r.total} · rank #${r.rank}`, 'HIGH_PRIORITY', [], { ticket, scoring: 'V11_RANKING' });
+    ? out('TRADE NOW — ELITE', `Score ${r.total} · rank #${r.rank}`, 'ACTION_NOW', [], { ...s, ticket })
+    : out('HIGH PRIORITY — TRADE CONSIDERATION', `Score ${r.total} · rank #${r.rank}`, 'HIGH_PRIORITY', [], { ...s, ticket });
 }
 
 /** Shape a v1.2 decision for code that renders AlertDecision (used only if a record's logic version is RB v1.2). */

@@ -189,13 +189,22 @@ export function strategyRules(c: Candidate, pf: PortfolioSnapshot, w: StrategyRu
   const has15m = isNum(c.inputs.close15m) && isNum(c.inputs.ema20_15m);
   const sameTicker = pf.exposures.filter((e) => e.ticker.toUpperCase() === c.ticker.toUpperCase());
   const chaseAtr = c.chaseDistanceAtr ?? 0;
+  const candleFail = checkCandleDirection(c.direction, c.open, c.close);
+  const htfFail = has15m ? check15mConfirmation(c.direction, c.inputs.close15m as number, c.inputs.ema20_15m as number) : null;
+  // RB v1.2 (shadow): a TrendSpider-qualified candidate's candle-direction and 15m conditions were proved by the
+  // alert; the SIP re-check is diagnostic only and never fails the rule. RB v1.1 candidates have no qualification.
+  const tsOwned = !!c.qualification;
+  const owned = (f: HardFail | null) => `TrendSpider-qualified (rule set ${c.qualification?.ruleSet}) — SIP check ${f ? `differs, diagnostic only: ${f.reason}` : 'agrees'}`;
   return [
     rule('calc', 'Trade Calculator: eligible setup', 'SETUP_FAILED', false, calcFail, c.calcAction.replace(/_/g, ' ')),
-    rule('candle', 'Signal candle direction', 'INVALID_CANDLE_DIRECTION', false, checkCandleDirection(c.direction, c.open, c.close), c.direction === 'LONG' ? 'Close > Open' : 'Close < Open'),
+    tsOwned
+      ? rule('candle', 'Signal candle direction', 'INVALID_CANDLE_DIRECTION', false, null, owned(candleFail))
+      : rule('candle', 'Signal candle direction', 'INVALID_CANDLE_DIRECTION', false, candleFail, c.direction === 'LONG' ? 'Close > Open' : 'Close < Open'),
     rule('time', `Entry window ${w.entryWindowStart}–${w.entryWindowEnd} ET`, 'OUTSIDE_ENTRY_WINDOW', false, checkTimeWindow(c.alertTime, w), `Alert ${c.alertTime} ET`),
-    rule('htf', 'Last completed 15m trend confirmation', 'HTF_CONFIRMATION_FAILED', false,
-      has15m ? check15mConfirmation(c.direction, c.inputs.close15m as number, c.inputs.ema20_15m as number) : null,
-      has15m ? 'Confirmed' : 'Not evaluated — 15m inputs missing (scoring incomplete)'),
+    tsOwned
+      ? rule('htf', 'Last completed 15m trend confirmation', 'HTF_CONFIRMATION_FAILED', false, null, owned(htfFail))
+      : rule('htf', 'Last completed 15m trend confirmation', 'HTF_CONFIRMATION_FAILED', false, htfFail,
+        has15m ? 'Confirmed' : 'Not evaluated — 15m inputs missing (scoring incomplete)'),
     rule('chase', 'Not chased', 'CHASED_SETUP', false, checkChase(chaseAtr > 0, chaseAtr, w.chaseThresholdAtr)),
     rule('structure', 'Valid entry structure', 'INVALID_TRADE_STRUCTURE', false, checkStructure(c.direction, c.stop, c.entry, c.target, c.shares), c.direction === 'LONG' ? 'Stop < Entry < Target' : 'Target < Entry < Stop'),
     rule('ticker', 'No existing position or order in this ticker', 'EXISTING_SAME_TICKER_POSITION', false,
@@ -232,7 +241,11 @@ export function missingInputs(c: Candidate): string[] {
     [c.inputs.rvol, 'RVOL(20)'], [c.inputs.rsi, 'RSI(14)'], [c.inputs.vwap, 'VWAP'], [c.inputs.ema9, 'EMA9'], [c.inputs.ema20, 'EMA20'],
     [c.inputs.close15m, 'Last completed 15m Close'], [c.inputs.ema20_15m, 'Last completed 15m EMA20'],
   ];
-  for (const [v, name] of need) if (!isNum(v) || (v as number) <= 0) m.push(name);
+  for (const [v, name] of need) {
+    // RB v1.2: a TrendSpider-qualified candidate scores the proven RVOL floor, so SIP RVOL is not a required input.
+    if (name === 'RVOL(20)' && c.qualification) continue;
+    if (!isNum(v) || (v as number) <= 0) m.push(name);
+  }
   if (!c.inputs.sector.trim()) m.push('Sector');
   if (!(c.atr > 0)) m.push('ATR');
   if (!(c.positionValue > 0)) m.push('Position value');

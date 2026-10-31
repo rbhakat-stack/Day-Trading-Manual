@@ -17,9 +17,10 @@ import type { TradeResult } from '../tradeCalculator';
 import { existingCandidateFor, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type LiveQuote } from './alertDecision';
 import { candidateFromRecord, livePatch, liveState, type Classification } from './autoCandidate';
 import { etParts } from './etTime';
-import type { AutoAlertRecordV12 } from './v12/audit';
-import type { V12Decision } from './v12/decideAlertV12';
+import type { AutoAlertRecordV12, V12Audit } from './v12/audit';
+import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
+import { shadowRanking } from './v12/v12Ranking';
 
 export interface QueueInput {
   records: AutoAlertRecord[];
@@ -137,15 +138,27 @@ export function buildQueue(q: QueueInput): QueueOutput {
     return c;
   });
 
+  // RB v1.2 SHADOW (comparison only): pre-pass → which qualified records reach scoring → v1.2 ranking pass over
+  // copies of their candidates → final shadow decisions. Nothing here touches the v1.1 ranking, decisions or candidates.
+  const v12Base = (rec: AutoAlertRecord) => ({
+    released: released.has(rec.id), candidateStatus: byId.get(rec.id)?.status ?? null, live: lives.get(rec.id) ?? null,
+    quote: q.quotes[rec.alert.symbol] ?? null, now: q.now, cfg: q.cfg, duplicateOf: dup.get(rec.id) ?? null, window,
+  });
+  const audits = new Map<string, V12Audit>();
+  const v12Pool = new Set<string>();
+  for (const rec of q.records as AutoAlertRecordV12[]) {
+    if (!rec.v12) continue;
+    audits.set(rec.id, rec.v12);
+    if (decideAlertV12({ ...v12Base(rec), record: rec, mode: 'SHADOW', ranked: null }).scoring === 'PENDING_V12_RANKING') v12Pool.add(rec.id);
+  }
+  const v12Rank = v12Pool.size ? shadowRanking({ candidates, poolIds: v12Pool, lives, audits, positions: q.positions, rk: q.rk, today, window }).byId : new Map();
+
   const rows: QueueRow[] = q.records.map((rec) => {
     const candidate = byId.get(rec.id) ?? null;
     const ranked = rankedById.get(rec.id) ?? null;
     const quote = q.quotes[rec.alert.symbol] ?? null;
     const live = lives.get(rec.id) ?? null;
-    const v12Inputs = {
-      released: released.has(rec.id), candidateStatus: candidate?.status ?? null, live, ranked, v11DataBlocked: dataBlocked.has(rec.id),
-      quote, now: q.now, cfg: q.cfg, duplicateOf: dup.get(rec.id) ?? null, window,
-    };
+    const v12Inputs = { ...v12Base(rec), ranked: v12Rank.get(rec.id) ?? null };
     const { decision } = decideActive({
       record: rec,
       released: released.has(rec.id),

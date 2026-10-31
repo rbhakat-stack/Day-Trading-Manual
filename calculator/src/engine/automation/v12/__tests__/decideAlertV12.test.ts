@@ -88,9 +88,9 @@ describe('version dispatch', () => {
     expect(row.decision.flags).toContain('LOGIC RB v1.2');
     expect(row.decision.decision).not.toBe('DATA REVIEW REQUIRED'); // v1.1 would say DATA MISMATCH here
     const act = decideActive({ record: v12rec, released: true, candidate: row.candidate, ranked: row.ranked, live: row.live, quote: row.quote, now, cfg: DEFAULT_AUTOMATION, parityMismatches: [], duplicateOf: null, window: W11 },
-      { released: true, candidateStatus: null, live: row.live, ranked: row.ranked, v11DataBlocked: true, quote: row.quote, now, cfg: DEFAULT_AUTOMATION, duplicateOf: null, window: W12 });
+      { released: true, candidateStatus: null, live: row.live, ranked: row.ranked, quote: row.quote, now, cfg: DEFAULT_AUTOMATION, duplicateOf: null, window: W12 });
     expect(act.logicVersion).toBe('RB v1.2');
-    expect(decideShadow(v12rec, { released: true, candidateStatus: null, live: null, ranked: null, v11DataBlocked: false, quote: null, now, cfg: DEFAULT_AUTOMATION, duplicateOf: null, window: W12 })).toBeNull();
+    expect(decideShadow(v12rec, { released: true, candidateStatus: null, live: null, ranked: null, quote: null, now, cfg: DEFAULT_AUTOMATION, duplicateOf: null, window: W12 })).toBeNull();
   });
 });
 
@@ -130,7 +130,9 @@ describe('Invariant C — SIP disagreement never rejects a qualified alert', () 
     const s = row.shadow!;
     expect(s.qualified).toBe(true);
     expect(['NOT QUALIFIED', 'NOT ELIGIBLE', 'DATA REVIEW REQUIRED']).not.toContain(s.decision);
-    expect(s.decision).toBe('QUALIFIED — SCORE PENDING'); // v1.1 ranker cannot score it yet (step 6)
+    expect(s.scoring).toBe('V12_RANKING'); // scored by the v1.2 pass (v1.1 could not score it at all)
+    expect(s.score?.waivedRules.sort()).toEqual(['HTF_CONFIRMATION_FAILED', 'INVALID_CANDLE_DIRECTION']);
+    expect(s.score?.rvolPoints).toBe(6);
     for (const w of ['PARITY_WARNING:CLOSE_VS_VWAP', 'PARITY_WARNING:EMA9_VS_EMA20', 'PARITY_WARNING:RSI', 'PARITY_WARNING:CANDLE_DIRECTION', 'PARITY_WARNING:CONFIRM_15M', 'SIP_VETO_WAIVED:INVALID_CANDLE_DIRECTION', 'SIP_VETO_WAIVED:HTF_CONFIRMATION_FAILED']) {
       expect(s.warnings, w).toContain(w);
     }
@@ -226,12 +228,20 @@ describe('dedupe and tickets', () => {
     expect(row.shadow).toMatchObject({ decision: 'NOT ELIGIBLE', detail: 'DUPLICATE / EXISTING CANDIDATE' });
     expect(row.decision.decision).not.toBe('NOT ELIGIBLE');
   });
-  it('qualified, clean alert: v1.2 shadow reaches the same TRADE NOW decision with the identical ticket (Invariant E)', () => {
-    const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95 });
+  it('qualified, clean alert with SIP RVOL in the 1.5 band: v1.2 = v1.1 score, decision and identical ticket (Invariant E)', () => {
+    const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, values: { rvol: 1.6 } });
     const row = rowOf([r], 'NVDA', nowAfter(r));
-    expect(row.decision.decision).toMatch(/TRADE NOW|HIGH PRIORITY/);
+    expect(row.shadow!.scoring).toBe('V12_RANKING');
+    expect(row.shadow!.score?.total).toBe(row.ranked!.total); // floor 6 = v1.1 band ≥ 1.5 (6)
     expect(row.shadow!.decision).toBe(row.decision.decision);
     expect(row.shadow!.ticket).toEqual(row.decision.ticket);
-    expect(row.shadow!.scoring).toBe('V11_RANKING');
+  });
+  it('same alert with SIP RVOL 4.0: v1.1 scores RVOL 15/15, v1.2 the 6/15 floor → v1.2 total exactly 9 lower; geometry identical', () => {
+    const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, values: { rvol: 4 } });
+    const row = rowOf([r], 'NVDA', nowAfter(r));
+    expect(row.ranked!.components.find((k) => k.key === 'rvol')?.points).toBe(15);
+    expect(row.shadow!.score?.rvolPoints).toBe(6);
+    expect(row.shadow!.score!.total! - row.ranked!.total!).toBeCloseTo(-9, 6);
+    expect(row.candidate!.entry).toBe(row.live!.plan!.entry);
   });
 });

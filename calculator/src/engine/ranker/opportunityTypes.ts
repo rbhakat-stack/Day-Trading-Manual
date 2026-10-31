@@ -8,6 +8,19 @@
 import type { Action, Direction } from '../tradeCalculator';
 import type { HardFail, HardFailCode } from '../rules';
 
+/**
+ * RB v1.2 TrendSpider qualification carried by a candidate (RB_V1_2_ARCHITECTURE.md §12). The alert proved its
+ * configured conditions passed, including RVOL ≥ `rvolProvenMin`; TrendSpider does not send the numeric values.
+ */
+export interface CandidateQualification {
+  source: 'TRENDSPIDER';
+  ruleSet: string;
+  /** RVOL threshold the alert proved (1.5). The RVOL component scores this proven floor, never a SIP magnitude. */
+  rvolProvenMin: number;
+  /** Shared-calculator hard rules that re-checked TrendSpider conditions on SIP and were waived (diagnostic). */
+  waivedRules: HardFailCode[];
+}
+
 /** Lifecycle of a candidate in the daily opportunity queue (user-controlled). */
 export type LifecycleStatus =
   | 'NEW' // sent from the calculator, not yet acted on
@@ -170,6 +183,11 @@ export interface Candidate {
   minutesSinceAlert: number | null;
   // ── ranker inputs ──
   inputs: RankingInputs;
+  /**
+   * RB v1.2 (shadow) only: present when the candidate comes from an authenticated TrendSpider webhook with a
+   * recognised rule set. Never set by the RB v1.1 path, which therefore scores exactly as before.
+   */
+  qualification?: CandidateQualification;
   scored: boolean; // user pressed SCORE OPPORTUNITY with complete inputs
   // ── lifecycle ──
   status: LifecycleStatus;
