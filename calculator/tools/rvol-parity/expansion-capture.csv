@@ -1,0 +1,33 @@
+# BLIND capture sheet: read every value from the COMPLETED 5m candle in TrendSpider (5m chart, Extended Hours OFF).
+# alert_linked: YES only if a genuine RB TrendSpider alert fired on this candle (then fill direction LONG/SHORT); NO otherwise.
+# ts_sma20_prev: hover the PREVIOUS candle and read its Volume SMA20 if you can (provenance OBSERVED); leave blank otherwise.
+# Genuine RB alert candles from 2026-10-28/29/30 that are not listed: append them as extra rows (alert_linked YES).
+date,ticker,candle_et,alert_linked,direction,ts_volume,ts_sma20,ts_sma20_prev,ts_rvol
+2026-10-28,AMD,09:50,,,,,,
+2026-10-28,TRMB,10:40,,,,,,
+2026-10-28,MSCI,11:25,,,,,,
+2026-10-28,VRSK,13:05,,,,,,
+2026-10-28,Q,13:35,,,,,,
+2026-10-28,DLTR,13:55,,,,,,
+2026-10-28,FDS,14:05,,,,,,
+2026-10-28,ROP,14:35,,,,,,
+2026-10-28,HCA,15:45,,,,,,
+2026-10-28,MSFT,15:50,,,,,,
+2026-10-29,AAPL,09:50,,,,,,
+2026-10-29,AMD,09:50,,,,,,
+2026-10-29,F,11:00,,,,,,
+2026-10-29,TRMB,12:00,,,,,,
+2026-10-29,AEP,12:15,,,,,,
+2026-10-29,MSFT,13:30,,,,,,
+2026-10-29,DLTR,13:35,,,,,,
+2026-10-29,VRSK,14:00,,,,,,
+2026-10-29,ROP,15:15,,,,,,
+2026-10-29,AEP,15:30,,,,,,
+2026-10-30,AMD,09:40,,,,,,
+2026-10-30,ROP,10:35,,,,,,
+2026-10-30,FDS,11:20,,,,,,
+2026-10-30,AAPL,12:10,,,,,,
+2026-10-30,MSFT,13:35,,,,,,
+2026-10-30,AVGO,15:00,,,,,,
+2026-10-30,DLTR,15:30,,,,,,
+2026-10-30,IQV,15:40,,,,,,

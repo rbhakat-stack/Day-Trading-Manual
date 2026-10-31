@@ -1,0 +1,49 @@
+date,ticker,candle_et,direction,alert_linked,context,ts_volume,ts_sma20,ts_sma20_prev,ts_sma20_prev_source,ts_rvol
+2026-10-30,AAPL,10:00,,NO,morning ordinary,228220,367404,363407.6433121019,DERIVED,0.628
+2026-10-30,AAPL,14:30,,NO,afternoon ordinary,241949,258048,255760.0422832981,DERIVED,0.946
+2026-10-30,MSFT,11:15,,NO,morning ordinary,85921,164028,195275.0,DERIVED,0.44
+2026-10-30,NVDA,14:55,SHORT,TEST,afternoon (local test alert),896691,633061,610824.931880109,DERIVED,1.468
+2026-10-30,AMZN,09:45,,NO,morning open-hour,1750000,895728,819672.1311475411,DERIVED,2.135
+2026-10-30,AMZN,15:00,,NO,afternoon ordinary,225358,282769,285624.8415716096,DERIVED,0.789
+2026-10-30,AVGO,15:55,LONG,YES,RB alert (webhook record),909790,190287,153447.4616292798,DERIVED,5.929
+2026-10-30,IBM,15:50,LONG,YES,RB alert (webhook record),28745,15217,14741.02564102564,DERIVED,1.95
+2026-10-30,IBM,10:30,,NO,morning ordinary,16763,29273,28802.40549828179,DERIVED,0.582
+2026-10-30,VRSK,12:00,,NO,midday low volume,100,2864,2922,OBSERVED,0.034
+2026-10-30,VRSK,12:05,,NO,midday low volume,692,2808,2864,OBSERVED,0.242
+2026-10-30,VRSK,12:20,,NO,midday high RVOL,12177,3310,2797,OBSERVED,4.354
+2026-10-30,VRSK,12:25,LONG,YES,midday high RVOL (alert case),6649,3558,3310,OBSERVED,2.009
+2026-10-30,VRSK,12:30,,NO,midday ordinary,4432,3579,3558,OBSERVED,1.246
+2026-10-30,IQV,15:55,LONG,YES,RB alert (webhook record),17514,3666,2884.387351778656,DERIVED,6.072
+2026-10-30,GM,11:00,,NO,morning ordinary,41051,43947,46176.60292463442,DERIVED,0.889
+2026-10-30,GM,13:45,,NO,midday ordinary,32168,31492,31050.19305019305,DERIVED,1.036
+2026-10-30,Q,15:55,LONG,YES,RB alert (webhook record),69241,13098,9860.581031045285,DERIVED,7.022
+2026-10-30,NEE,15:40,SHORT,YES,afternoon (alert case),224089,100945,91390.29363784665,DERIVED,2.452
+2026-10-30,F,12:45,,NO,midday lower price,227212,211761,251062.98342541436,DERIVED,0.905
+2026-10-28,AMD,09:50,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,TRMB,10:40,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,MSCI,11:25,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,VRSK,13:05,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,Q,13:35,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,DLTR,13:55,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,FDS,14:05,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,ROP,14:35,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,HCA,15:45,,,expansion (SIP-proxy selected),,,,,
+2026-10-28,MSFT,15:50,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,AAPL,09:50,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,AMD,09:50,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,F,11:00,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,TRMB,12:00,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,AEP,12:15,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,MSFT,13:30,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,DLTR,13:35,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,VRSK,14:00,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,ROP,15:15,,,expansion (SIP-proxy selected),,,,,
+2026-10-29,AEP,15:30,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,AMD,09:40,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,ROP,10:35,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,FDS,11:20,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,AAPL,12:10,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,MSFT,13:35,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,AVGO,15:00,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,DLTR,15:30,,,expansion (SIP-proxy selected),,,,,
+2026-10-30,IQV,15:40,,,expansion (SIP-proxy selected),,,,,
