@@ -529,3 +529,29 @@ Implements the §24.4 proposal, with two small refinements that do not change th
   * The genuine VRSK alert scores 78. That is LOW under A and HIGH under both B variants, but its TS-informed reference is 81 / WATCHLIST.
   * Across the 15 hypothetical candles with TS RVOL > 1.5, A and B match the reference tier equally often (12 of 15).
 * **Recommendation:** use B_CEIL for **shadow testing only**, with A recorded alongside it, and decide after genuine shadow alerts. Before promotion, capture TrendSpider RVOL for genuine alerts so the TS-informed reference can be measured. See the CR-010 report.
+
+## 27. Step 7 — Option B shadow thresholds and the shadow-only UI (implemented, local preview only)
+
+1. **Thresholds.** `V12_SHADOW_GRADES = 82 / 78 / 73 / 69` (B_CEIL), fixed and frozen.
+   * It is not a user setting and is not used by RB v1.1. `shadowRanking` ranks v1.2 copies with these grades, so v1.2 allocation also uses them. Weights, bands and raw scores are unchanged.
+2. **Option A retained.** Every v1.2 score summary records:
+   * the raw total;
+   * `tierOptionB` (= `tier`, which drives the shadow decision);
+   * `tierOptionA` (the active v1.1 grades);
+   * both threshold sets;
+   * `v11Total` and `deltaVsV11`.
+3. **Comparison log.** `freezeShadowScores` keeps the first complete v1.2 score per alert. It is frozen and stored locally under `rbv1.v12.shadowLog.v1`, with CSV export from the queue header. It is calibration data only and is never read back into a decision.
+4. **Labels.** The v1.2 decision texts read the shadow thresholds, e.g. "below the v1.2 shadow trade threshold (78)". The v1.1 texts and section titles are unchanged.
+5. **UI.**
+   * **Version legend:** RB v1.1 is the active decision; RB v1.2 SHADOW is comparison only.
+   * **Queue column:** "RB v1.2 shadow" shows the raw score and Option B tier, or NOT QUALIFIED with the rule-set state, plus WARNING / DATA REVIEW flags only.
+   * **Details panel:**
+     * Option A tier and the RB v1.1 score with Δ;
+     * both threshold lines;
+     * `TrendSpider RVOL Gate: PASS (>1.5)`, shown only when qualified;
+     * `SIP RVOL: X.XX — diagnostic only` or `unavailable — non-blocking`;
+     * qualification and rule set, and signal mapping;
+     * SIP parity diagnostics and integrity codes;
+     * provenance badges: TS QUALIFIED, SIP, RB, SHADOW, WARNING, DATA REVIEW.
+   * No v1.2 ticket values, copy button or action are offered.
+6. **Local preview.** `tools/preview/v12-shadow.html` (vite dev only) renders the real queue page with synthetic records and the TEST rule sets `RBTS-L-TEST` / `RBTS-S-TEST`. The production build contains no TEST data, and `TRUSTED_RULE_SETS` stays empty.

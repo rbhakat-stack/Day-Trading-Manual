@@ -627,6 +627,29 @@ Excluded from CP0:
 
 ---
 
+## CR-011 — Phase 3B step 7: Option B shadow thresholds and shadow-only UI (local preview only)
+
+**Scope.** Wires Option B (82/78/73/69, experimental, shadow only) into the v1.2 shadow ranking and records Option A next to it. Adds the shadow-only queue UI. Unchanged: RB v1.1 grades (90/85/80/75), scoring, labels and decisions. Not done: deployment, version-flag change, TrendSpider change and rule-set activation; the registry is still empty.
+
+**Proof v1.1 is unchanged:**
+* Since CR-010 there is no diff in the calculator, rules, ranker, `alertDecision`, `autoCandidate`, `alertSnapshot`, `strategyVersion`, `ruleSets` or `netlify/`.
+* The 24-scenario v1.1 ranker golden passes.
+* New tests show identical v1.1 decision, ranking, candidates and suggestions with and without the v1.2 audit.
+* Replay re-run: only the `v12Decision` column changed (6 candles, as expected from B). Every score and v1.1 column is identical.
+
+**Tests:** 702 of 702 pass (11 new). Typecheck and build pass; the production bundle contains no TEST rule sets.
+
+| Commit | Content |
+|---|---|
+| `c21be7d` | 7a: B shadow thresholds, Option A retained, threshold-aware v1.2 labels, replay A column |
+| `10c82b9` | 7b: frozen shadow comparison log and CSV export |
+| `7a4847f` | 7c: shadow UI and local preview |
+| *(this commit)* | Docs |
+
+**Rollback:** `git revert <docs> 7a4847f 10c82b9 c21be7d`. Revert 7b and 7c together: 7b's App wiring passes the 7c UI props.
+
+---
+
 ## CP0 — Rollback baseline before Phase 3B (2026-10-31)
 
 * **Branch:** `rb-v1.2-phase3b`, created from `main` at `3696669`. **Not pushed.**
