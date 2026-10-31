@@ -14,7 +14,7 @@ import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
 import type { QualityTier } from '../../engine/ranker/opportunityTypes';
 import type { HardFailCode } from '../../engine/rules';
 
-export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'shadow' | 'muted';
+export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'shadow' | 'elite' | 'muted';
 export interface Status { label: string; tone: Tone; detail: string }
 
 /* ───────────────────────── strategy columns (metadata-driven) ───────────────────────── */
@@ -108,7 +108,9 @@ export const ROLE_NOTE: Record<StrategyRole, string> = {
 /* ───────────────────────── tiers & labels ───────────────────────── */
 
 export const TIER_SHORT: Record<QualityTier, string> = { ELITE: 'ELITE', HIGH_PRIORITY: 'HIGH', WATCHLIST: 'WATCHLIST', LOW_PRIORITY: 'LOW', SKIP: 'SKIP' };
-export const TIER_TONE: Record<QualityTier, Tone> = { ELITE: 'ok', HIGH_PRIORITY: 'info', WATCHLIST: 'shadow', LOW_PRIORITY: 'muted', SKIP: 'muted' };
+export const TIER_TONE: Record<QualityTier, Tone> = { ELITE: 'elite', HIGH_PRIORITY: 'ok', WATCHLIST: 'info', LOW_PRIORITY: 'muted', SKIP: 'muted' };
+/** Colour of a score number, by the tier the ranker already assigned. */
+export const scoreTone = (t: QualityTier): Tone => (t === 'ELITE' ? 'elite' : t === 'HIGH_PRIORITY' ? 'ok' : t === 'WATCHLIST' ? 'warn' : 'bad');
 
 /* ───────────────────────── row statuses (existing states only) ───────────────────────── */
 
@@ -171,6 +173,38 @@ export function finalState(r: QueueRow): Status & { ticket: boolean } {
   const ticket = !!d.ticket;
   const tone: Tone = ticket ? 'ok' : d.decision === 'DATA REVIEW REQUIRED' ? 'warn' : d.decision === 'NOT ELIGIBLE' ? 'bad' : ['ORDER SUBMITTED', 'IN POSITION'].includes(d.decision) ? 'info' : 'muted';
   return { label: d.decision, tone, detail: d.detail, ticket };
+}
+
+/** Data Review filter: any non-PASS data state (the same states the Data badge names). */
+export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataStatus(r).label);
+
+/**
+ * Compact label for the active decision (the full FinalDecision text stays in the tooltip and the expanded row).
+ * TRADE READY = the active decision carries a ticket; CHASED = NOT ELIGIBLE because the calculator reported a chase.
+ */
+export function decisionBadge(r: QueueRow): Status {
+  const d = r.decision;
+  if (d.ticket) return { label: 'TRADE READY', tone: 'ok', detail: d.decision };
+  switch (d.decision) {
+    case 'DATA REVIEW REQUIRED': return { label: 'DATA REVIEW', tone: 'warn', detail: d.detail };
+    case 'NOT ELIGIBLE': return chaseStatus(r).label === 'CHASED' ? { label: 'CHASED', tone: 'bad', detail: d.detail } : { label: 'NOT ELIGIBLE', tone: 'bad', detail: d.detail };
+    case 'TRADE NOW — ELITE': return { label: 'TRADE NOW', tone: 'ok', detail: d.detail };
+    case 'HIGH PRIORITY — TRADE CONSIDERATION': return { label: 'HIGH PRIORITY', tone: 'info', detail: d.detail };
+    case 'WATCHLIST': return { label: 'WATCHLIST', tone: 'info', detail: d.detail };
+    case 'ORDER SUBMITTED': return { label: 'SUBMITTED', tone: 'info', detail: d.detail };
+    case 'IN POSITION': return { label: 'IN POSITION', tone: 'info', detail: d.detail };
+    default: return { label: d.decision, tone: 'muted', detail: d.detail };
+  }
+}
+
+/** Final State column: READY (ticket), NO TRADE (hard-rule NOT ELIGIBLE), the lifecycle state once submitted, else NO TICKET. */
+export function finalBadge(r: QueueRow): Status {
+  const d = r.decision;
+  if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
+  if (d.decision === 'NOT ELIGIBLE') return { label: 'NO TRADE', tone: 'bad', detail: d.detail };
+  if (d.decision === 'ORDER SUBMITTED' || d.decision === 'IN POSITION') return { label: d.decision === 'IN POSITION' ? 'IN POSITION' : 'SUBMITTED', tone: 'info', detail: d.detail };
+  if (d.decision === 'CLOSED') return { label: 'CLOSED', tone: 'muted', detail: d.detail };
+  return { label: 'NO TICKET', tone: 'muted', detail: d.detail };
 }
 
 /** Portfolio header from the allocator's snapshot. One ranking shares one snapshot; returns null when none exists yet. */

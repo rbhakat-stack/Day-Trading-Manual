@@ -524,6 +524,7 @@ export default function App() {
                 actions={liveActions}
                 onOpenSettings={() => setLiveSub('automation')}
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
+                pollMs={autoCfg.pollMs}
               />
             )}
             {liveSub === 'parity' && (

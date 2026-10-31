@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ticketString, type FreshnessBand, type QueueSection, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
+import { ticketString, type FreshnessBand, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { Classification } from '../../engine/automation/autoCandidate';
 import { mmss } from '../../engine/automation/etTime';
@@ -9,8 +9,8 @@ import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
-import { PortfolioStrip, QueueTable, StatusLegend, StrategyLegend } from './QueueParts';
-import { presentationFor, queueLayout, type PresentationConfig } from './queueView';
+import { QueueHeader, QueueLegend, QueueTable, QueueToolbar, type ColumnGroups, type QueueFilter } from './QueueParts';
+import { isDataReview, presentationFor, queueLayout, type PresentationConfig } from './queueView';
 
 export interface LiveActions {
   submit: (id: string) => void;
@@ -38,24 +38,18 @@ interface Props {
   shadow: { maxScore: number; optionAGrades: Grades; logCount: number; onExportLog: () => void };
   /** Strategy columns (presentation only). Defaults to the layout for ACTIVE_LOGIC_VERSION. */
   presentation?: PresentationConfig;
+  /** Alert poll interval (Automation settings) — shown in the Auto Refresh indicator. */
+  pollMs?: number;
 }
-
-const SECTIONS: { id: QueueSection; title: string; hint: string }[] = [
-  { id: 'ACTION_NOW', title: 'Action now — score ≥ 90', hint: 'Eligible, allocated, fresh data. Enter the TrendSpider order manually.' },
-  { id: 'HIGH_PRIORITY', title: 'High priority — score 85–89', hint: 'Eligible and allocated after higher-ranked candidates.' },
-  { id: 'DATA_REVIEW', title: 'Data review required', hint: 'Data incomplete, mismatched or stale — no ticket until resolved.' },
-  { id: 'SCORING', title: 'Scoring', hint: 'Received; waiting for market data and simultaneous alerts (micro-batch).' },
-  { id: 'ACTIVE', title: 'Submitted orders and positions', hint: 'You marked these submitted / filled. Never displaced.' },
-  { id: 'WATCHLIST', title: 'Watchlist', hint: 'Score 80–84, or ≥ 85 without capital / slot / correlation room, or a crossed trigger needing review.' },
-  { id: 'IGNORE', title: 'Ignore / skip', hint: 'Below 80, hard-rule failures, stale, chased, duplicates.' },
-  { id: 'CLOSED', title: 'Closed', hint: '' },
-];
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation }: Props) {
+export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs }: Props) {
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
+  const [filter, setFilter] = useState<QueueFilter>('ALL');
+  const [cols, setCols] = useState<ColumnGroups>({ shadow: true, trade: true, safety: true });
+  const [open, setOpen] = useState<Set<string>>(new Set());
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
   const actionable = rows.filter((r) => r.decision.ticket);
   if (!enabled) {
@@ -68,55 +62,44 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
       </Panel>
     );
   }
+  const shown = rows.filter((r) => filter === 'ALL' || (filter === 'DATA_REVIEW' ? isDataReview(r) : r.record.alert.direction === filter));
+  const feedText = feed.error ? feed.error : feed.lastOkMs ? `updated ${Math.max(0, Math.round((now - feed.lastOkMs) / 1000))} s ago` : 'connecting…';
+  const allOpen = shown.length > 0 && shown.every((r) => open.has(r.record.id));
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold tracking-tight text-ink-100">Live Alert Queue</h2>
-          <p className="text-xs text-ink-400">
-            Automated analysis only — <b className="text-ink-200">manual execution</b>. Nothing is sent to TrendSpider, SignalStack, Alpaca or any broker. Values are <i>Automated Market Data Values</i>, not TrendSpider values.
-          </p>
-          <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-[#a9c1ff]">{versionLabel}</p>
-        </div>
-        <div className="text-right text-xs text-ink-400">
-          <div>Feed: {feed.error ? <span className="text-short">{feed.error}</span> : feed.lastOkMs ? `updated ${Math.max(0, Math.round((now - feed.lastOkMs) / 1000))} s ago` : 'connecting…'}</div>
-          {quoteError && <div className="text-short">Prices: {quoteError}</div>}
-          <div>Data parity: <span className={parityStatus === 'VALIDATED' ? 'text-long' : 'text-warn'}>{parityStatus}</span></div>
-        </div>
-      </div>
+      <QueueHeader layout={layout} rows={rows} versionLabel={versionLabel} />
+      <QueueToolbar
+        rows={rows} filter={filter} setFilter={setFilter} feedText={feedText} feedOk={!feed.error && !!feed.lastOkMs} pollSec={pollMs ? Math.round(pollMs / 1000) : null}
+        cols={cols} setCols={setCols} allOpen={allOpen} toggleAll={() => setOpen(allOpen ? new Set() : new Set(shown.map((r) => r.record.id)))}
+        hasShadow={layout.some((c) => c.role === 'SHADOW')} logCount={shadow.logCount} onExport={shadow.onExportLog}
+      />
+      {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
 
-      <StrategyLegend layout={layout} logCount={shadow.logCount} onExport={shadow.onExportLog} />
-      <PortfolioStrip rows={rows} />
-      <StatusLegend optionAGrades={shadow.optionAGrades} layout={layout} />
+      {rows.length > 0 ? (
+        <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} />
+      ) : (
+        <Panel title="No alerts yet today">
+          <p className="text-sm text-ink-400">Waiting for TrendSpider webhooks. A test alert can be sent as described in AUTOMATION.md.</p>
+        </Panel>
+      )}
+
+      <QueueLegend grades={shadow.optionAGrades} rows={rows} layout={layout} />
 
       {parityStatus !== 'VALIDATED' && (
-        <p className="rounded-lg border border-warn/50 bg-warn-dim/30 px-4 py-2 text-sm text-[#ffe2a8]">
-          <b>Data parity not yet validated.</b> Until 20+ alerts have been compared with TrendSpider (Data validation tab) with no mismatch, check every value against your chart before submitting.
+        <p className="rounded-lg border border-warn/40 bg-warn-dim/20 px-4 py-2 text-[13px] text-[#ffe2a8]">
+          <b>Data parity: {parityStatus}.</b> Until 20+ alerts have been compared with TrendSpider (Data validation tab) with no mismatch, check every value against your chart before submitting.
         </p>
       )}
 
       {stronger.length > 0 && <div className="grid gap-3 lg:grid-cols-2">{stronger.map((sg) => <SuggestionCard key={`${sg.pendingId}-${sg.candidateId}`} sg={sg} onKeep={actions.keep} onReplace={actions.replace} />)}</div>}
 
       {actionable.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-          {actionable.map((r) => <ActionCard key={r.record.id} r={r} actions={actions} />)}
+        <div className="space-y-2">
+          <h3 className="text-[13px] font-semibold uppercase tracking-[0.14em] text-ink-300">Trade tickets — {layout.find((c) => c.role === 'ACTIVE')?.version ?? 'active'} (manual execution)</h3>
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            {actionable.map((r) => <ActionCard key={r.record.id} r={r} actions={actions} />)}
+          </div>
         </div>
-      )}
-
-      {rows.length > 0 && (
-        <QueueTable
-          groups={SECTIONS.map((s) => ({ key: s.id, title: s.title, hint: s.hint, rows: rows.filter((r) => r.decision.section === s.id) })).filter((g) => g.rows.length)}
-          now={now}
-          actions={actions}
-          layout={layout}
-          maxScore={shadow.maxScore}
-          optionAGrades={shadow.optionAGrades}
-        />
-      )}
-      {rows.length === 0 && (
-        <Panel title="No alerts yet today">
-          <p className="text-sm text-ink-400">Waiting for TrendSpider webhooks. A test alert can be sent as described in AUTOMATION.md.</p>
-        </Panel>
       )}
     </div>
   );

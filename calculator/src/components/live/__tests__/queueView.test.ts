@@ -17,7 +17,7 @@ import { cloneRankerDefaults } from '../../../engine/ranker/rankerSettings';
 import { RB_V1_DEFAULTS } from '../../../engine/settings';
 import { LiveQueuePage, type LiveActions } from '../LiveQueuePage';
 import { QueueDetails } from '../QueueParts';
-import { chaseStatus, dataStatus, finalState, portfolioStatus, portfolioSummary, presentationFor, qualificationStatus, queueLayout, ruleSetText } from '../queueView';
+import { chaseStatus, dataStatus, decisionBadge, finalBadge, finalState, isDataReview, portfolioStatus, portfolioSummary, presentationFor, qualificationStatus, queueLayout, ruleSetText, scoreTone } from '../queueView';
 
 const ALERT = '2026-10-30T10:15:04-04:00';
 const T0 = Date.parse(ALERT);
@@ -131,24 +131,58 @@ const page = (rows: QueueRow[], presentation?: Parameters<typeof LiveQueuePage>[
     shadow: { maxScore: CTX.v12MaxScore, optionAGrades: RK.grades, logCount: 0, onExportLog: noop }, presentation,
   }));
 
+describe('compact badges map existing states only', () => {
+  it('Decision: TRADE READY only with an active ticket; CHASED only when the calculator chased; DATA REVIEW from the decision', () => {
+    for (const r of [...main.rows, ...blocked.rows]) {
+      const b = decisionBadge(r);
+      if (r.decision.ticket) expect(b.label).toBe('TRADE READY');
+      else expect(b.label).not.toBe('TRADE READY');
+    }
+    expect(decisionBadge(row(main.rows, 'CCC'))).toMatchObject({ label: 'CHASED', tone: 'bad' });
+    expect(decisionBadge(row(main.rows, 'DDD'))).toMatchObject({ label: 'DATA REVIEW', tone: 'warn' });
+  });
+  it('Final State: READY with a ticket, NO TRADE for NOT ELIGIBLE, otherwise NO TICKET', () => {
+    expect(finalBadge(row(main.rows, 'AAA')).label).toBe('READY');
+    expect(finalBadge(row(main.rows, 'CCC')).label).toBe('NO TRADE');
+    expect(finalBadge(row(main.rows, 'DDD')).label).toBe('NO TICKET');
+    expect(finalBadge(blocked.rows[0]).label).toBe(blocked.rows[0].decision.ticket ? 'READY' : blocked.rows[0].decision.decision === 'NOT ELIGIBLE' ? 'NO TRADE' : 'NO TICKET');
+  });
+  it('Data Review filter = any non-PASS data state', () => {
+    expect(main.rows.filter(isDataReview).map((r) => r.record.alert.symbol).sort()).toEqual(['DDD', 'EEE']);
+  });
+  it('score colour follows the tier the ranker assigned', () => {
+    expect([scoreTone('ELITE'), scoreTone('HIGH_PRIORITY'), scoreTone('WATCHLIST'), scoreTone('LOW_PRIORITY'), scoreTone('SKIP')]).toEqual(['elite', 'ok', 'warn', 'bad', 'bad']);
+  });
+});
+
 describe('rendered queue', () => {
   const html = page(main.rows);
-  it('grouped headers with the active/shadow distinction and the shadow disclaimer', () => {
-    for (const s of ['General', 'RB v1.1 (ACTIVE)', 'RB v1.2 (SHADOW)', 'Trade', 'Safety / execution', 'TS Qualified', `Score (${CTX.v12MaxScore})`, 'Option B', 'Option A', 'Final state']) expect(html).toContain(s);
-    expect(html).toContain('RB v1.2 SHADOW — comparison only, not used for execution');
+  it('header, grouped strategy columns and the active/shadow roles', () => {
+    for (const s of ['Live Alert Queue', 'Automated alerts on', 'RB v1.1 (ACTIVE) &amp; RB v1.2 (SHADOW)', 'RB v1.1 (ACTIVE)', 'RB v1.2 (SHADOW)', 'TS Qualified', `Score (${CTX.v12MaxScore})`, 'Option B', 'Option A', 'Decision', 'Final State', 'Cur Price', '$ Risk']) expect(html).toContain(s);
     expect(html.indexOf('RB v1.1 (ACTIVE)')).toBeLessThan(html.indexOf('RB v1.2 (SHADOW)'));
+    expect(html).toContain('comparison only, not used for execution');
   });
-  it('status badges and legend render as text (not colour alone)', () => {
-    for (const s of ['QUALIFIED', 'CHASED', 'REVIEW', 'DATA ERROR', 'TICKET', 'NO TICKET', 'ELITE', 'WATCHLIST', 'DATA REVIEW']) expect(html).toContain(`>${s}<`);
+  it('filter chips with counts', () => {
+    for (const s of ['All (5)', 'LONG (5)', 'SHORT (0)', 'Data Review (2)']) expect(html).toContain(s);
+  });
+  it('status badges render as text (not colour alone)', () => {
+    for (const s of ['YES', 'NO', 'CHASED', 'REVIEW', 'DATA ERROR', 'TRADE READY', 'READY', 'NO TICKET', 'NO TRADE', 'PASS', 'OK', 'ELITE', 'WATCHLIST']) expect(html).toContain(`>${s}<`);
   });
   it('execution controls exist only for active tickets', () => {
     const tickets = main.rows.filter((r) => r.decision.ticket).length;
     expect(tickets).toBeGreaterThan(0);
     expect(html.split('Mark order submitted').length - 1).toBe(tickets);
   });
-  it('portfolio strip renders the allocator values', () => {
+  it('portfolio card renders the allocator values', () => {
     const b = page(blocked.rows);
-    expect(b).toContain('Slots <b class="num text-ink-100">4 / 4</b>');
+    expect(b).toContain('Paper ($100,000)');
+    expect(b).toMatch(/>4 \/ 4</);
+    expect(b).toMatch(/>\$1,000\.00 \/ \$1,000</);
+  });
+  it('legend shows the configured grades and the calculator chase limit', () => {
+    expect(html).toContain(`≥ ${RK.grades.elite}`);
+    expect(html).toContain(`${RK.grades.high}–${RK.grades.elite - 1}`);
+    expect(html).toContain(`(${RB_V1_DEFAULTS.chaseThresholdAtr} × ATR)`);
   });
   it('future layout preview: v1.2 first as ACTIVE, v1.1 COMPARISON; v1.1 can be hidden entirely', () => {
     const a = page(main.rows, { activeVersion: 'RB v1.2', versions: ['RB v1.1'] });
@@ -161,12 +195,13 @@ describe('rendered queue', () => {
 
 describe('expanded details', () => {
   const props = { now: NOW, actions, layout: queueLayout(presentationFor('RB v1.1'), CTX), maxScore: CTX.v12MaxScore, optionAGrades: RK.grades };
-  it('four panels with mapping, construction, diagnostics and portfolio values', () => {
+  it('summary bar plus four panels with mapping, construction, diagnostics and portfolio values', () => {
     const r = row(main.rows, 'CCC');
     const html = renderToStaticMarkup(createElement(QueueDetails, { r, ...props }));
-    for (const s of ['Alert &amp; mapping', 'Trade construction', 'Data &amp; diagnostics', 'Portfolio &amp; execution', 'Mapped candle', 'Receipt lag', 'Allowed chase', 'SIP RVOL', 'v1.1 hard fails', 'Parity warnings', 'Slots', 'Final execution state']) expect(html).toContain(s);
+    for (const s of ['Alert &amp; Mapping', 'Trade Construction', 'Data &amp; Diagnostics', 'Portfolio &amp; Execution', 'Mapped candle (v1.2)', 'Receipt lag', 'Allowed chase distance', 'SIP RVOL (diagnostic)', 'RB v1.1 hard fails', 'Parity warnings', 'Portfolio slots', 'Portfolio heat', 'Final execution state']) expect(html).toContain(s);
     expect(html).toContain(`${r.live!.chase!.thresholdAtr} ATR`);
     expect(html).toContain('CHASED_SETUP');
+    expect(html).toContain('Why CHASED?');
     expect(html).not.toContain('Mark order submitted');
   });
 });
