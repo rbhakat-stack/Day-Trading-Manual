@@ -8,6 +8,7 @@ import { DEFAULT_AUTOMATION, type AutoAlertRecord, type AutomationConfig, type L
 import type { Classification } from '../engine/automation/autoCandidate';
 import { KNOWN_CLASSIFICATIONS } from '../engine/ranker/correlationRules';
 import type { ParityEntry } from '../engine/automation/parity';
+import type { HistoricalResult } from '../engine/automation/historicalParity';
 import { load, save } from './storage';
 
 export const AUTO_KEYS = {
@@ -147,3 +148,41 @@ export async function checkHealth(token: string) {
 }
 
 export const loadParity = () => load<Record<string, ParityEntry>>(AUTO_KEYS.parity, {});
+
+/* ───────────────────────── Historical SIP Parity Test (diagnostic only) ───────────────────────── */
+
+export type HistoricalResponse = { ok: true; result: HistoricalResult } | { ok: false; kind: string; error: string };
+
+/**
+ * One request to rb-historical-parity. Unlike `call`, the server's sanitised reason is kept (SIP authorization /
+ * entitlement / window / missing bars) so it can be shown verbatim. Nothing is stored and no live state is touched.
+ */
+export interface HistoricalRequestBody {
+  symbol: string;
+  direction: string;
+  alertEt: string;
+  label: string;
+  /** EXACT = seconds known · MINUTE = only the minute is known (approximate intrabar reconstruction). */
+  precision: 'EXACT' | 'MINUTE';
+}
+
+/** The exact JSON the server expects (rb-historical-parity contract). Trims; upper-cases ticker and direction only. */
+export function historicalRequestBody(raw: Partial<Record<keyof HistoricalRequestBody, unknown>>): HistoricalRequestBody {
+  const s = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  return { symbol: s(raw.symbol).toUpperCase(), direction: s(raw.direction).toUpperCase(), alertEt: s(raw.alertEt), label: s(raw.label), precision: s(raw.precision).toUpperCase() === 'MINUTE' ? 'MINUTE' : 'EXACT' };
+}
+
+export async function runHistoricalSip(token: string, body: HistoricalRequestBody): Promise<HistoricalResponse> {
+  let res: Response;
+  try {
+    res = await fetch('/.netlify/functions/rb-historical-parity', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(historicalRequestBody(body)), cache: 'no-store' });
+  } catch (e) {
+    return { ok: false, kind: 'NETWORK', error: (e as Error).message };
+  }
+  if (!(res.headers.get('content-type') ?? '').includes('application/json')) {
+    return { ok: false, kind: 'NOT_REACHABLE', error: 'Netlify Functions not reachable — use the deployed site or run `npx netlify dev` locally (plain `npm run dev` has no functions).' };
+  }
+  const j = (await res.json()) as { ok?: boolean; result?: HistoricalResult; kind?: string; error?: string };
+  if (res.ok && j.ok && j.result) return { ok: true, result: j.result };
+  return { ok: false, kind: j.kind ?? `HTTP_${res.status}`, error: res.status === 401 ? 'HTTP 401 — check the app access token (Automation settings).' : (j.error ?? `HTTP ${res.status}`) };
+}

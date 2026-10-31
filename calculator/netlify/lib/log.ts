@@ -17,7 +17,10 @@ export type LogEvent =
   | 'data_mismatch'
   | 'record_stored'
   | 'read_rejected'
-  | 'quotes_served';
+  | 'quotes_served'
+  | 'historical_test_started'
+  | 'historical_test_completed'
+  | 'historical_test_failed';
 
 const SECRET_KEY = /token|secret|key|password|authorization|auth/i;
 

@@ -62,3 +62,36 @@ export function recordWith(o: { symbol: string; direction: 'LONG' | 'SHORT'; ale
     processedIso: null,
   };
 }
+
+/** Deterministic regular-session 1-minute bars (390 per session). Price wiggles inside each 5m bucket. */
+export function minuteBars(dates: string[], opts: { price?: (i: number) => number; vol?: (i: number) => number } = {}): Bar[] {
+  const price = opts.price ?? ((i: number) => 100 + 0.004 * i + [0, 0.03, -0.02, 0.05, 0.01][i % 5]);
+  const vol = opts.vol ?? ((i: number) => 2_000 + (i % 11) * 150);
+  const out: Bar[] = [];
+  let i = 0;
+  for (const d of dates) {
+    for (let t = etToEpoch(d, '09:30'); t < etToEpoch(d, '16:00'); t += 60_000) {
+      const o = price(Math.max(0, i - 1));
+      const c = price(i);
+      out.push({ t, o, h: Math.max(o, c) + 0.01, l: Math.min(o, c) - 0.01, c, v: vol(i) });
+      i++;
+    }
+  }
+  return out;
+}
+
+/** Aggregate clock-aligned 1m bars into 5m bars (what Alpaca's 5Min bars contain for the same trades). */
+export function toFive(min1: Bar[]): Bar[] {
+  const out: Bar[] = [];
+  for (const b of min1) {
+    const t = Math.floor(b.t / FIVE) * FIVE;
+    const last = out[out.length - 1];
+    if (last && last.t === t) {
+      last.h = Math.max(last.h, b.h);
+      last.l = Math.min(last.l, b.l);
+      last.c = b.c;
+      last.v += b.v;
+    } else out.push({ ...b, t });
+  }
+  return out;
+}

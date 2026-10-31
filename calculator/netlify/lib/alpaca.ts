@@ -24,6 +24,8 @@ export interface MarketDataClient {
   readonly feed: string;
   readonly host: string;
   getBars5(symbol: string, startIso: string, endIso: string): Promise<Bar[]>;
+  /** 1-minute bars (used only by the Historical SIP Parity Test for intrabar reconstruction). */
+  getBars1?(symbol: string, startIso: string, endIso: string): Promise<Bar[]>;
   getLatestTrades(symbols: string[]): Promise<Record<string, QuoteSnapshot>>;
 }
 
@@ -88,6 +90,19 @@ export function createAlpacaData(o: AlpacaOptions): MarketDataClient {
       let page: string | undefined;
       for (let n = 0; n < 10; n++) {
         const params: Record<string, string> = { timeframe: '5Min', start: startIso, end: endIso, adjustment: 'raw', feed, limit: '10000', sort: 'asc' };
+        if (page) params.page_token = page;
+        const j = (await get(`/v2/stocks/${encodeURIComponent(symbol)}/bars`, params)) as { bars?: { t: string; o: number; h: number; l: number; c: number; v: number }[] | null; next_page_token?: string | null };
+        for (const b of j.bars ?? []) out.push({ t: Date.parse(b.t), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });
+        page = j.next_page_token ?? undefined;
+        if (!page) break;
+      }
+      return out;
+    },
+    async getBars1(symbol, startIso, endIso) {
+      const out: Bar[] = [];
+      let page: string | undefined;
+      for (let n = 0; n < 10; n++) {
+        const params: Record<string, string> = { timeframe: '1Min', start: startIso, end: endIso, adjustment: 'raw', feed, limit: '10000', sort: 'asc' };
         if (page) params.page_token = page;
         const j = (await get(`/v2/stocks/${encodeURIComponent(symbol)}/bars`, params)) as { bars?: { t: string; o: number; h: number; l: number; c: number; v: number }[] | null; next_page_token?: string | null };
         for (const b of j.bars ?? []) out.push({ t: Date.parse(b.t), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v });

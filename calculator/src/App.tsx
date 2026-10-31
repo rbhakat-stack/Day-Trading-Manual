@@ -23,6 +23,7 @@ import { StrategyVersionBar, type PendingVersionChange, type VersionControls } f
 import { LiveQueuePage, type LiveActions } from './components/live/LiveQueuePage';
 import { AutomationSettings } from './components/live/AutomationSettings';
 import { ParityView } from './components/live/ParityView';
+import { HistoricalSipTest } from './components/live/HistoricalSipTest';
 import { buildQueue } from './engine/automation/liveQueue';
 import { inputsFromRecord } from './engine/automation/autoCandidate';
 import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
@@ -41,7 +42,7 @@ import {
 } from './engine/strategyVersion';
 
 type Tab = 'live' | 'calc' | 'ranker' | 'journal' | 'dashboard' | 'settings';
-type LiveSub = 'queue' | 'parity' | 'automation';
+type LiveSub = 'queue' | 'parity' | 'historical' | 'automation';
 
 const newId = (p: string) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -491,7 +492,7 @@ export default function App() {
         {tab === 'live' && (
           <div className="space-y-4">
             <div className="flex flex-wrap gap-1">
-              {([['queue', 'Queue'], ['parity', `Data validation (${paritySum.status.toLowerCase()})`], ['automation', 'Automation settings']] as const).map(([id, label]) => (
+              {([['queue', 'Queue'], ['parity', `Data validation (${paritySum.status.toLowerCase()})`], ['historical', 'Historical SIP Test'], ['automation', 'Automation settings']] as const).map(([id, label]) => (
                 <button key={id} type="button" onClick={() => setLiveSub(id)} className={`rounded-md px-3 py-1.5 text-sm ${liveSub === id ? 'bg-ink-700 text-ink-100' : 'text-ink-400 hover:text-ink-100'}`}>{label}</button>
               ))}
             </div>
@@ -512,6 +513,7 @@ export default function App() {
             {liveSub === 'parity' && (
               <ParityView records={feed.records} entries={parityEntries} setEntry={(e) => setParityEntries((m) => ({ ...m, [e.recordId]: e }))} tol={autoCfg.parity} summary={paritySum} rowsById={parityRows} />
             )}
+            {liveSub === 'historical' && <HistoricalSipTest token={autoToken} tol={autoCfg.parity} />}
             {liveSub === 'automation' && <AutomationSettings cfg={autoCfg} setCfg={setAutoCfg} token={autoToken} setToken={setAutoToken} classes={classes} setClasses={setClasses} />}
           </div>
         )}

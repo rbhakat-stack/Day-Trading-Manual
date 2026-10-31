@@ -125,7 +125,7 @@ curl -X POST https://<your-site>.netlify.app/.netlify/functions/trendspider-aler
 | Indicators | Bars up to and including the signal candle only; ≥ 100 bars of history required (6 trading days fetched) |
 | EMA9 / EMA20 | α = 2/(n+1), seeded with an SMA |
 | RSI14 / ATR14 | Wilder (RMA) smoothing, SMA-seeded |
-| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1) |
+| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1). |
 | VWAP | HLC3. **SESSION** (default, resets 09:30) or **ROLLING_14** — TrendSpider's `VWAP(14, 0, HLC3)` meaning is an open VERIFY item; both values are shown and the parity screen decides |
 | 15m confirmation | Last **fully completed** regular-session 15m candle at the alert time (`lastCompleted15mCandle`, same function as the manual calculator): 10:07 → 09:45–10:00 · 10:18 → 10:00–10:15 · 14:40 → 14:15–14:30 · 15:40 → 15:15–15:30 (15:40 also hard-fails the entry window). 15m bars are aggregated from the 5m bars |
 | Consistency check | The six TrendSpider alert conditions are re-checked on the automated values; if TrendSpider fired but the automated data disagrees → *DATA MISMATCH — MANUAL REVIEW* |
@@ -185,3 +185,190 @@ trigger/chase state, ranking and capital change afterwards.
 | `src/engine/automation/` | shared pure modules: time/calendar, indicators, snapshot, decision gate, queue, parity |
 | `src/components/live/` | Live Alert Queue, Data validation, Automation settings |
 | `src/engine/automation/__tests__/`, `netlify/__tests__/` | automated tests |
+| `netlify/functions/rb-historical-parity.mts` · `netlify/lib/historicalSip.ts` · `src/engine/automation/historicalParity.ts` · `src/components/live/HistoricalSipTest.tsx` | Historical SIP Parity Test (diagnostic only, section 9) |
+
+---
+
+## 9. Historical SIP Parity Test
+
+> **DIAGNOSTIC ONLY — NO TRADE TICKET / NO LIVE DECISION.** This tool is separate from the live pipeline. It does not
+> create, rank, allocate capital to, store or execute anything.
+
+### Purpose
+
+Answer one question before you pay for real-time SIP: *for this exact historical TrendSpider alert, would Alpaca SIP
+have produced materially the same candle and indicator values?* The live path cannot answer it on a free plan: it also
+fetches the current price (latest trade), which needs a real-time SIP subscription, so `ALPACA_DATA_FEED=sip` currently
+ends in *DATA ERROR*.
+
+### Intrabar alerts — why the signal candle is the ACTIVE candle here
+
+TrendSpider RB v1 multi-factor alerts can fire **before** the 5m candle closes. Two observed cases:
+
+* **IBM.** The alert came at ≈ 15:54. The signal candle was the still-forming 15:50–15:55.
+* **NEE.** The alert came at ≈ 15:44. The signal candle was the still-forming 15:40–15:45. The earlier diagnostic
+  wrongly picked the completed 15:35–15:40.
+
+So this diagnostic reconstructs the **active** 5m candle as it looked at the alert instant. The live webhook path is
+**unchanged**: it still uses the last completed 5m candle (section 4). Whether the live path should change is a
+separate decision, to be made only after enough parity evidence.
+
+### How to use it
+
+1. **Live Alert Queue → Historical SIP Test** (the app access token must be set in Automation settings).
+2. Enter the **ticker** and **direction**, then choose the **timestamp precision**:
+   * **Exact second:** `YYYY-MM-DD HH:MM:SS`, e.g. `2026-10-30 15:44:00`.
+   * **Approximate minute:** `YYYY-MM-DD HH:MM`, e.g. `2026-10-30 15:44`. Use this when TrendSpider shows only the
+     minute.
+3. Click **RUN HISTORICAL SIP TEST**. **Alert timing** shows:
+   * the requested timestamp
+   * the active 5m candle
+   * the reconstruction cutoff(s)
+   * the completed 15m candle
+   * the precision
+   * the 1-minute bars used
+4. Type the 12 TrendSpider values: O/H/L/C, ATR14, EMA9, EMA20, RSI14, RVOL20, VWAP, 15m Close, 15m EMA20. The table
+   compares them with the existing Automation-settings tolerances, which are unchanged and not loosened.
+5. **Derived RB v1 Ticket — Diagnostic Only** is labelled *DERIVED FROM INTRABAR HISTORICAL RECONSTRUCTION — NOT AN
+   ACTIVE TRADE*. After 15:30 it shows NOT ELIGIBLE, exactly as the calculator does.
+
+### Reconstruction algorithm and timestamp rules
+
+**Data.** Two historical SIP requests are made:
+
+* 5-minute bars for the completed history, from 09:30 ET five trading days back (the same start as live) up to the
+  active bucket.
+* 1-minute bars inside the active bucket, up to the latest cutoff.
+
+**Definitions.** An Alpaca 1-minute bar stamped `t` covers trades in `[t, t + 60 s)`.
+
+| Item | Rule |
+|---|---|
+| Active bucket | `[floor5(T), floor5(T) + 5 min)` on the 09:30 grid. 15:44:00 → 15:40–15:45; 15:54:00 → 15:50–15:55; 15:45:00 → 15:45–15:50 |
+| 1m bar included | iff `bucketStart ≤ t` **and** `t + 60 s ≤ cutoff`. Every trade in it happened strictly before the cutoff |
+| Exact second, `:00` | One reconstruction, cutoff = T. 15:44:00 uses the 15:40, :41, :42 and :43 bars. The 15:44 bar starts at 15:44:00 and is excluded |
+| Exact second, other `:SS` | 1-minute bars cannot cut inside a minute. Shown as **INTRABAR_TIME_PRECISION_LIMITATION**, with a bracket: earliest = state at `HH:MM:00`, latest = state at `HH:MM+1:00` (may include trades after the alert) |
+| Approximate minute `HH:MM` | Labelled **APPROXIMATE INTRABAR RECONSTRUCTION**. The alert happened somewhere in `[HH:MM:00, HH:MM:59]`, so it is bracketed the same way. Never treated as an exact second |
+| Completed history | 5m bars with `t + 5 min ≤ bucketStart` |
+| Alert exactly at a bucket start | The active candle has no trades yet: **NO_INTRABAR_DATA**, fail closed. Enter a time inside the candle you mean |
+
+**Future-data leakage prevention.**
+
+* The requests already end before the cutoff (1m `end` = cutoff − 1 s; 5m `end` = bucket start − 1 s).
+* The engine also filters by the rules above, so nothing stamped at or after the cutoff can enter, even if a provider
+  returned it.
+* Tests modify every bar after the cutoff and assert the result is identical.
+
+**Indicators.**
+
+* The partial candle is built from the included 1m bars only:
+  * open = first open
+  * high = max high
+  * low = min low
+  * close = last close
+  * volume = summed volume up to the cutoff
+* It is appended to the completed 5m history.
+* The **unchanged** `buildAlertSnapshot`, and therefore the unchanged EMA / Wilder RSI / ATR / RVOL / VWAP functions,
+  computes O/H/L/C, ATR14, EMA9, EMA20, RSI14, RVOL20 and VWAP with that partial bar as the newest bar.
+* No formula is duplicated.
+* VWAP uses the configured mode (SESSION by default) over the same bars, so only volume up to the cutoff counts.
+
+**RVOL** = partial-candle volume ÷ the unchanged SMA(20) baseline, with the current bar included as before. Whether
+TrendSpider's alert evaluates RVOL on the partial or the completed candle is **not established**, so every result
+carries **RVOL SEMANTICS UNDER VALIDATION**. Compare the earliest and latest bounds against TrendSpider to decide.
+
+**15m confirmation is unchanged.** It is the last fully completed 15m candle at the alert time (the same rule and code
+as live), computed only from completed history. At 15:44 it is 15:15–15:30, because 15:30–15:45 is still forming.
+
+**Comparison with a bracket.**
+
+* **PASS** = within tolerance of at least one bound; the table says which.
+* **BETWEEN BOUNDS — UNRESOLVED** = the TrendSpider value lies between the earliest and latest values but is within
+  tolerance of neither. 1-minute data cannot resolve it.
+* **MISMATCH** otherwise.
+
+### IBM and NEE
+
+* **IBM ≈ 15:54 LONG.**
+  * Active candle 15:50–15:55, 15m candle 15:30–15:45.
+  * The **latest** bound includes all five minutes, so it equals the completed 15:50–15:55 candle that previously
+    matched all 12 TrendSpider values (a regression test asserts the identity on synthetic data).
+  * The **earliest** bound (through 15:54:00) omits the 15:54 minute. High, low, close, volume, RVOL and VWAP can
+    differ by whatever traded in that last minute. If TrendSpider matches the latest bound and not the earliest, the
+    alert fired late in the 15:54 minute, or TrendSpider values the candle as of its close.
+* **NEE ≈ 15:44 SHORT.**
+  * Active candle 15:40–15:45 (no longer 15:35–15:40), 15m candle 15:15–15:30.
+
+### Why it needs no real-time SIP subscription
+
+* It requests **only** `GET /v2/stocks/{symbol}/bars` with `feed=sip` and `timeframe` `1Min` or `5Min`. A
+  server-side guard rejects every other request before any network call: latest trade, latest quote, snapshots,
+  quotes, trades, a non-SIP feed, another timeframe, or an end time newer than 16 minutes. The age check is applied to
+  the **latest** cutoff.
+* Alpaca serves SIP **historical** bars on the free plan when the requested end is at least 15 minutes old. The test
+  refuses anything newer and tells you when to retry. There is no current-price fetch at all.
+* The SIP feed is forced for this request only. `ALPACA_DATA_FEED` is neither read nor changed, so live alerts keep
+  their configured feed.
+
+### What it never does
+
+* **No live records.** It never creates or changes a live alert record and never touches the Netlify Blobs store,
+  so it cannot affect de-duplication. A later real webhook for the same alert is stored normally.
+* **No trading state.** It never creates an Opportunity Ranker candidate, reserves capital, changes portfolio heat,
+  writes to the Journal, or changes Data-validation (IEX) parity entries.
+* **No IEX fallback.** If SIP fails, the reason is shown and the test stops. The possible reasons are:
+  * authorization failure (401/403)
+  * entitlement failure (403 *subscription does not permit…*)
+  * historical window unavailable (400/422)
+  * rate limit
+  * network
+  * missing bars, or insufficient lookback (from the snapshot)
+* **No secrets in responses.** Provider messages are sanitised, and keys never appear in responses or logs.
+* **No persistence.** Results are kept only in your browser (`rbv1.diagnostics.historicalSip.v2`), apart from all
+  live keys.
+
+### Interpreting the results
+
+* **PASS on all 12 fields** for several historical alerts: SIP reproduces TrendSpider closely enough for the live
+  tolerances. That is evidence (not proof) that paying for real-time SIP would remove the IEX mismatches.
+* **Persistent MISMATCH** on the same field: the gap is not a feed issue but a definition difference, so fix the setting
+  rather than the feed. Examples:
+  * VWAP mode (`SESSION` vs `ROLLING_14`; the alternative VWAP is in the snapshot)
+  * ATR smoothing
+  * TrendSpider's Extended Hours setting
+* **ALERT_NOT_REPRODUCED** (review notice): the SIP values do not satisfy all six alert conditions. Investigate before
+  trusting either source.
+* The tool never decides that SIP is "better". It only reports differences against your TrendSpider values.
+* The derived ticket is evaluated *as of the alert* (reconstructed close as price, 0 min elapsed), so time rules still
+  apply. For example, 15:44 and 15:54 are after the 15:30 entry window, so the status shows NOT ELIGIBLE while the
+  entry/stop/target/size math is still displayed.
+
+### Limitations of minute-level reconstruction
+
+* **Seconds.** Only `:00` cutoffs are exact; other seconds are bracketed. Exact-second cuts would need historical
+  trades, which are not used: matching Alpaca's bar construction (trade-condition filtering) from raw trades would add
+  its own error.
+* **Gaps.** A minute with no trades has no 1m bar. This is flagged as INTRABAR_MINUTES_MISSING (or
+  INTRABAR_OPEN_UNCERTAIN if the first minute is missing). OHLCV is still correct for the trades that exist.
+* **Consistency between bar sizes.** The 5m history (Alpaca 5Min bars) and the 1m intrabar bars come from the same SIP
+  trades. Alpaca's 5m bar is assumed to equal the aggregate of its 1m bars.
+* **Early session.** Alerts before 09:45 have no completed 15m candle, so the result is incomplete. That is consistent
+  with the live rule, and RB v1 does not trade before 09:45 anyway.
+* **RVOL semantics** remain under validation (see above).
+
+### Rollback
+
+The feature is additive. To remove it:
+
+1. Delete `netlify/functions/rb-historical-parity.mts`. The endpoint disappears and nothing else calls it.
+2. Optionally also remove:
+   * the `historical` sub-tab line in `src/App.tsx`
+   * `src/components/live/HistoricalSipTest.tsx`
+   * `runHistoricalSip` in `src/lib/automationClient.ts`
+   * `netlify/lib/historicalSip.ts`
+   * `src/engine/automation/historicalParity.ts`
+   * the optional `getBars1` method in `netlify/lib/alpaca.ts`, which only this feature uses
+   * the `minuteBars` / `toFive` test fixtures
+   * the new test files
+   * the three `historical_test_*` log event names
+3. No data migration is needed.
