@@ -555,3 +555,11 @@ Implements the §24.4 proposal, with two small refinements that do not change th
      * provenance badges: TS QUALIFIED, SIP, RB, SHADOW, WARNING, DATA REVIEW.
    * No v1.2 ticket values, copy button or action are offered.
 6. **Local preview.** `tools/preview/v12-shadow.html` (vite dev only) renders the real queue page with synthetic records and the TEST rule sets `RBTS-L-TEST` / `RBTS-S-TEST`. The production build contains no TEST data, and `TRUSTED_RULE_SETS` stays empty.
+
+
+## 28. Audited rule sets registered (CR-012) — shadow activation prepared
+
+* **Registry.** `RBTS-L-001 → LONG` and `RBTS-S-001 → SHORT` are registered from the user-confirmed audit of the live TrendSpider alerts (§3.1). The §3.1 items that were not reported (watchlist, webhook URL, extra filters) are taken as none beyond those listed.
+* **Effect.** Registration changes only the v1.2 SHADOW qualification. Swapped direction is CONFLICT; missing, unknown and retired ids, test webhooks and unauthenticated requests are NOT QUALIFIED.
+* **VWAP difference.** The audited TrendSpider VWAP is `VWAP(14, 0, hlc3)`, while the SIP reconstruction uses SESSION VWAP by default. That affects only the diagnostic `CLOSE_VS_VWAP` parity class in v1.2; any change is approval-gated.
+* **Activation.** Activation and secret rotation follow `RB_V1_2_SHADOW_ACTIVATION.md`. Promotion of v1.2 (§16, §18) remains a separate decision under the §18 rollout gates; the §17 note on rotating the token at promotion is covered by the rotation plan.

@@ -650,6 +650,47 @@ Excluded from CP0:
 
 ---
 
+## CR-012 — Audited TrendSpider rule sets registered; production shadow activation prepared (not deployed)
+
+**Audit (user-confirmed, 2026-10-31):** both alerts are TrendSpider Multi-Factor Alerts with these shared settings: smallest timeframe 5m, all conditions AND, Extended Hours OFF, repeat with no limit, expiration 30 days.
+
+| Rule set | Direction | Conditions |
+|---|---|---|
+| `RBTS-L-001` | LONG | 5m Close > VWAP(14, 0, hlc3) · EMA9 > EMA20 · RSI14 > 55 · RVOL(20, SMA, 1) > 1.5 · Close > Open · 15m Close > 15m EMA20 |
+| `RBTS-S-001` | SHORT | 5m Close < VWAP(14, 0, hlc3) · EMA9 < EMA20 · RSI14 < 45 · RVOL(20, SMA, 1) > 1.5 · Close < Open · 15m Close < 15m EMA20 |
+
+**Audit finding to note (not acted on):** TrendSpider's VWAP is `VWAP(14, 0, hlc3)`. The SIP reconstruction defaults to SESSION VWAP (`vwapMode: 'SESSION'`; `ROLLING_14` exists).
+* **Effect on v1.2:** the SIP `CLOSE_VS_VWAP` check is diagnostic only, so it can never block or de-qualify.
+* **Effect on v1.1:** it uses the same snapshot VWAP for scoring and for ALERT_NOT_REPRODUCED.
+* Any change is a separate, approval-gated item.
+
+**Changes:**
+* **Registry:** `TRUSTED_RULE_SETS` now holds both entries, frozen and bound to their directions.
+* **Shadow log:** now records the signal candle, mapping lag, alert-time ticket geometry and capture priority, plus an empty `tsRvolManual` CSV column.
+* **Runbook:** `RB_V1_2_SHADOW_ACTIVATION.md` covers rotation Plan R (recommended, no code change), Plan D (needs approval, not implemented), the A–H sequence, the canaries and data collection.
+
+**v1.1 proof:**
+* No diff in the calculator, rules, ranker, `alertDecision`, `autoCandidate`, `alertSnapshot`, `alertPayload`, `liveQueue`, `strategyVersion`, `netlify/lib` or `netlify/functions`.
+* Through the real processing path, the record, calculator result, decision, ranking, live state, candidates and suggestions are identical with and without `rule_set`, for both LONG and SHORT.
+
+**Secret hygiene:**
+* All fixtures use synthetic tokens.
+* A new test checks tracked files for non-synthetic token literals, the frontend and bundle for server-only secret names, and (when a local `.env` exists) that no secret value appears in a tracked file or the bundle.
+* A one-off scan of the full git history found none of the four local `.env` secret values, and neither did a scan of the untracked production export.
+* These scans cover the **local** `.env` values only; production values in Netlify could not be checked.
+
+**Tests:** 726 of 726 pass. Typecheck and build pass.
+
+| Commit | Content |
+|---|---|
+| `2953744` | Registry, tests (matrix, payloads, rotation behaviour, secret hygiene) |
+| `6cd5813` | Shadow-log collection fields |
+| *(this commit)* | Docs and runbook |
+
+**Rollback:** `git revert <docs> 6cd5813 2953744`. Reverting `2953744` alone empties the registry again, so every webhook is NOT QUALIFIED in shadow; v1.1 is unaffected.
+
+---
+
 ## CP0 — Rollback baseline before Phase 3B (2026-10-31)
 
 * **Branch:** `rb-v1.2-phase3b`, created from `main` at `3696669`. **Not pushed.**
