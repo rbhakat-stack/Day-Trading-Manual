@@ -1,0 +1,21 @@
+date,ticker,candle_et,direction,context,ts_volume,ts_sma20,ts_sma20_prev,ts_rvol
+2026-10-30,AAPL,10:00,,morning ordinary,,,,
+2026-10-30,AAPL,14:30,,afternoon ordinary,,,,
+2026-10-30,MSFT,11:15,,morning ordinary,,,,
+2026-10-30,NVDA,14:55,SHORT,afternoon (local test alert),,,,
+2026-10-30,AMZN,09:45,,morning open-hour,,,,
+2026-10-30,AMZN,15:00,,afternoon ordinary,,,,
+2026-10-30,AVGO,15:55,LONG,RB alert (webhook record),,,,
+2026-10-30,IBM,15:50,LONG,RB alert (webhook record; TS RVOL from user's earlier IBM parity readings),,,,2.043
+2026-10-30,IBM,10:30,,morning ordinary,,,,
+2026-10-30,VRSK,12:00,,midday low volume,100,2864,2922,0.034
+2026-10-30,VRSK,12:05,,midday low volume,692,2808,2864,0.242
+2026-10-30,VRSK,12:20,,midday high RVOL,12177,3310,2797,4.354
+2026-10-30,VRSK,12:25,LONG,midday high RVOL (alert case),6649,3558,3310,2.009
+2026-10-30,VRSK,12:30,,midday ordinary,4432,3579,3558,1.246
+2026-10-30,IQV,15:55,LONG,RB alert (webhook record),,,,
+2026-10-30,GM,11:00,,morning ordinary,,,,
+2026-10-30,GM,13:45,,midday ordinary,,,,
+2026-10-30,Q,15:55,LONG,RB alert (webhook record),,,,
+2026-10-30,NEE,15:40,SHORT,afternoon (alert case),,,,
+2026-10-30,F,12:45,,midday lower price,,,,
