@@ -37,6 +37,12 @@ describe('v1.2 shadow comparison log (A/B retained for calibration)', () => {
     expect(log[a.id]).toMatchObject({ v12Total: 81, tierOptionB: 'HIGH_PRIORITY', tierOptionA: 'WATCHLIST', thresholdsB: '82/78/73/69', thresholdsA: '90/85/80/75', v11Total: 81, v11Tier: 'WATCHLIST', deltaVsV11: 0, ruleSet: 'RBTS-L-901', qualification: 'QUALIFIED', mapping: 'ON_TIME' });
     expect(log[b.id]).toMatchObject({ v12Total: 77, tierOptionB: 'WATCHLIST', tierOptionA: 'LOW_PRIORITY' });
   });
+  it('records the signal candle, mapping lag, alert-time ticket geometry and RVOL-capture priorities', () => {
+    const { log } = freezeShadowScores({}, rows([a, b], now), now);
+    expect(log[a.id]).toMatchObject({ signalCandle: '10:10–10:15', lagSec: 12, capturePriority: ['HIGH_OR_ELITE_SHADOW', 'A_B_DISAGREE'] });
+    expect(log[b.id].capturePriority).toEqual(['A_B_DISAGREE', 'NEAR_TRADE_THRESHOLD']);
+    expect(Object.keys(log[a.id])).toEqual(expect.arrayContaining(['entry', 'stop', 'target', 'shares']));
+  });
   it('is frozen: a later pass never rewrites an entry; unchanged log keeps identity', () => {
     const first = freezeShadowScores({}, rows([a], now), now).log;
     const later = freezeShadowScores(first, rows([a], now + 60_000), now + 60_000);
@@ -47,6 +53,7 @@ describe('v1.2 shadow comparison log (A/B retained for calibration)', () => {
   it('CSV export has one row per entry with the comparison columns', () => {
     const csv = shadowLogCsv(freezeShadowScores({}, rows([a, b], now), now).log).trim().split('\n');
     expect(csv[0]).toContain('v12Total,tierOptionB,tierOptionA,thresholdsB,thresholdsA,v11Total,v11Tier,deltaVsV11');
+    expect(csv[0].endsWith('entry,stop,target,shares,capturePriority,tsRvolManual')).toBe(true);
     expect(csv).toHaveLength(3);
   });
 });

@@ -15,6 +15,9 @@ export interface V12ShadowLogEntry {
   ruleSet: string | null;
   qualification: string;
   mapping: string;
+  /** Mapped signal candle (HH:MM–HH:MM ET) and webhook lag after its close. */
+  signalCandle: string | null;
+  lagSec: number | null;
   scoredAtMs: number;
   v12Total: number;
   tierOptionB: string | null;
@@ -28,6 +31,23 @@ export interface V12ShadowLogEntry {
   v11Decision: string;
   warnings: string[];
   dataReview: string[];
+  /** Alert-time ticket geometry from the shared RB calculator. */
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  shares: number | null;
+  /** Why a manual TrendSpider RVOL capture is worth doing for this alert (empty = optional). */
+  capturePriority: string[];
+}
+
+/** Capture priorities for the manual TrendSpider RVOL reading (A vs B calibration). */
+export function capturePriority(e: Pick<V12ShadowLogEntry, 'direction' | 'tierOptionA' | 'tierOptionB' | 'v12Total'>, shadowHigh: number): string[] {
+  const out: string[] = [];
+  if (e.tierOptionB === 'HIGH_PRIORITY' || e.tierOptionB === 'ELITE') out.push('HIGH_OR_ELITE_SHADOW');
+  if (e.tierOptionA !== e.tierOptionB) out.push('A_B_DISAGREE');
+  if (e.direction === 'SHORT') out.push('SHORT');
+  if (Math.abs(e.v12Total - shadowHigh) <= 2) out.push('NEAR_TRADE_THRESHOLD');
+  return out;
 }
 
 export type V12ShadowLog = Record<string, V12ShadowLogEntry>;
@@ -50,6 +70,8 @@ export function freezeShadowScores(prev: V12ShadowLog, rows: QueueRow[], now: nu
       ruleSet: a?.qualification.ruleSet.ruleSet ?? null,
       qualification: a?.qualification.status ?? '',
       mapping: a?.signalMapping.status ?? '',
+      signalCandle: a?.signalMapping.label ?? null,
+      lagSec: a?.signalMapping.lagSec ?? null,
       scoredAtMs: now,
       v12Total: s.total,
       tierOptionB: s.tierOptionB,
@@ -63,19 +85,25 @@ export function freezeShadowScores(prev: V12ShadowLog, rows: QueueRow[], now: nu
       v11Decision: r.decision.decision,
       warnings: [...r.shadow!.warnings],
       dataReview: [...r.shadow!.dataReview],
+      entry: a?.ticketAtAlert?.entry ?? null,
+      stop: a?.ticketAtAlert?.stop ?? null,
+      target: a?.ticketAtAlert?.target ?? null,
+      shares: a?.ticketAtAlert?.shares ?? null,
+      capturePriority: [],
     };
+    log[r.record.id].capturePriority = capturePriority(log[r.record.id], s.thresholds.shadow.high);
   }
   return { log, changed: log !== prev };
 }
 
-const COLS: (keyof V12ShadowLogEntry)[] = ['recordId', 'symbol', 'direction', 'alertTimeMs', 'ruleSet', 'qualification', 'mapping', 'scoredAtMs', 'v12Total', 'tierOptionB', 'tierOptionA', 'thresholdsB', 'thresholdsA', 'v11Total', 'v11Tier', 'deltaVsV11', 'v12Decision', 'v11Decision', 'warnings', 'dataReview'];
+const COLS: (keyof V12ShadowLogEntry)[] = ['recordId', 'symbol', 'direction', 'alertTimeMs', 'ruleSet', 'qualification', 'mapping', 'signalCandle', 'lagSec', 'scoredAtMs', 'v12Total', 'tierOptionB', 'tierOptionA', 'thresholdsB', 'thresholdsA', 'v11Total', 'v11Tier', 'deltaVsV11', 'v12Decision', 'v11Decision', 'warnings', 'dataReview', 'entry', 'stop', 'target', 'shares', 'capturePriority'];
 
-/** CSV export of the log (oldest alert first). */
+/** CSV export of the log (oldest alert first). The last column is left empty for a manual TrendSpider RVOL reading. */
 export function shadowLogCsv(log: V12ShadowLog): string {
   const cell = (v: unknown) => {
     const t = Array.isArray(v) ? v.join(' ') : v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
   };
   const rows = Object.values(log).sort((a, b) => a.alertTimeMs - b.alertTimeMs || a.recordId.localeCompare(b.recordId));
-  return [COLS.join(','), ...rows.map((e) => COLS.map((k) => cell(e[k])).join(','))].join('\n') + '\n';
+  return [[...COLS, 'tsRvolManual'].join(','), ...rows.map((e) => [...COLS.map((k) => cell(e[k])), ''].join(','))].join('\n') + '\n';
 }
