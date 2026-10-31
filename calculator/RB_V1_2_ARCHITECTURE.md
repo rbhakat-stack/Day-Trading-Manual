@@ -478,3 +478,54 @@ Because the webhook gains authority, **rotate the webhook token at promotion**. 
      * Store those values as `v12.reconstruction`.
      * Build v1.2 candidates from `v12.reconstruction` when the v1.1 candidate is absent.
    * This is one optional config field in a shared file, so it needs approval.
+
+## 25. Phase 3C.1 — RVOL-optional reconstruction (implemented, shadow only)
+
+Implements the §24.4 proposal, with two small refinements that do not change the architecture:
+
+1. **Snapshot builder.**
+   * `SnapshotConfig.optionalIndicators?: readonly OptionalIndicator[]`. The type allows only `'RVOL20'`, so VWAP, EMA, RSI, ATR and 15m cannot be made optional.
+   * Absent or empty means RB v1.1 behaviour. The default config has no such key, so stored v1.1 snapshots are byte-identical: 108 builder outputs matched the pre-change builder exactly.
+   * When RVOL20 is optional and unavailable, `values.rvol` is NaN (null after JSON storage), never a defaulted number. The RVOL alert-condition re-check is omitted, not reported as failed. No issue is added; the v1.2 parity diagnostics already report `SIP_UNAVAILABLE:RVOL`.
+2. **Audit.**
+   * The server rebuilds the snapshot RVOL-optional **only** when the v1.1 snapshot lost its values and `RVOL20_UNAVAILABLE` is among the reasons (`needsRvolOptionalSnapshot`).
+   * **Refinement 1:** the whole rebuilt snapshot is stored as `v12.rvolOptionalSnapshot`, not just values copied into `reconstruction`. Integrity checks (signal-candle match, history, gaps) therefore run on the same structure as for v1.1.
+   * `reconstruction` and `dataReview` are derived from it. Any other missing input still leaves the rebuild incomplete, so DATA REVIEW applies as before.
+3. **Decision and queue.**
+   * `decideAlertV12` checks integrity on `v12Snapshot(rec)`: the rebuild when present, else the v1.1 snapshot.
+   * **Refinement 2:** `buildQueue` creates a shadow-only v1.2 candidate with the unchanged `candidateFromRecord` / `liveState` on a record copy that carries the rebuilt snapshot. This applies only to records that have no v1.1 candidate, are released and OK, and are not duplicates. The candidate is never added to the returned `candidates` and is never persisted.
+   * The v1.1 record, candidate, ranking and decision are unchanged (tested).
+4. **Known shadow-only nuance.** A v1.2-only candidate does not block a later v1.1 candidate for the same ticker. v1.1 cannot see it, by design.
+
+## 26. Phase 3C.1 — score-threshold calibration (analysis; nothing adopted)
+
+**Code:** `v12/v12Thresholds.ts` (pure, tested). It is not wired into any decision; the shadow ranking still uses the RB v1.1 grades (Option A).
+
+* **Qualified maximum:** Σw − w.rvol + floor × w.rvol / 15. At default weights that is 100 − 15 + 6 = **91**.
+
+| Grade | v1.1 | share | exact × 0.91 | A (share of 91) | B_ROUND | B_CEIL |
+|---|---|---|---|---|---|---|
+| Elite | 90 | 90 % | 81.9 | 90 (98.9 %) | 82 (90.1 %) | 82 (90.1 %) |
+| High (trade minimum) | 85 | 85 % | 77.35 | 85 (93.4 %) | 77 (84.6 %) | 78 (85.7 %) |
+| Watchlist | 80 | 80 % | 72.8 | 80 (87.9 %) | 73 (80.2 %) | 73 (80.2 %) |
+| Low | 75 | 75 % | 68.25 | 75 (82.4 %) | 68 (74.7 %) | 69 (75.8 %) |
+
+* **Rounding.** Default-weight scores are integers. B_CEIL therefore classifies every score exactly like the unrounded proportional thresholds (tested 0–91) and never asks for a smaller share than v1.1. B_ROUND is one point looser at High (77) and Low (68).
+* **Lower tiers must move with the upper tiers.** Rebasing only High and Elite (77/82) leaves Watchlist at 80, above High. `validateRankerSettings` rejects that, and WATCHLIST becomes unreachable.
+* **What proportional rebasing assumes.** A v1.1 threshold T is "neutral" for a qualified alert whose true TrendSpider-RVOL band is b when the v1.2 threshold is T − (b − 6):
+
+  | True RVOL band | Neutral High / Elite |
+  |---|---|
+  | NORMAL (6) | 85 / 90 (= Option A) |
+  | ELEVATED (9) | 82 / 87 |
+  | STRONG (12) | 79 / 84 |
+  | EXCEPTIONAL (15) | 76 / 81 |
+
+  * B_CEIL (78/82) corresponds to b ≈ 13 to 14.
+  * The six genuine alerts' captured TS RVOL averages b ≈ 11.5, giving a neutral of ≈ 79.5 / 84.5.
+  * The 23 qualified-RVOL candles of the threshold-weighted sample average b ≈ 9.1, giving ≈ 81.9 / 86.9. This is biased low by design.
+  * So B is the **permissive** end of the evidence, and A is the strict end.
+* **Replay** (`tools/rvol-parity/v12-score-replay-summary.md`):
+  * The genuine VRSK alert scores 78. That is LOW under A and HIGH under both B variants, but its TS-informed reference is 81 / WATCHLIST.
+  * Across the 15 hypothetical candles with TS RVOL > 1.5, A and B match the reference tier equally often (12 of 15).
+* **Recommendation:** use B_CEIL for **shadow testing only**, with A recorded alongside it, and decide after genuine shadow alerts. Before promotion, capture TrendSpider RVOL for genuine alerts so the TS-informed reference can be measured. See the CR-010 report.

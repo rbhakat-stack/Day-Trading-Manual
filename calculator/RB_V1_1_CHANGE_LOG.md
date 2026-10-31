@@ -596,6 +596,37 @@ Excluded from CP0:
 
 ---
 
+## CR-010 — Phase 3C.1: RVOL-optional reconstruction and threshold comparison (shadow only)
+
+**Scope.** Resolves the §24 reconstruction dependency and compares scoring Options A and B. Unchanged: v1.1 active, v1.2 shadow, 6/15 floor, empty registry. No push, no deploy, no TrendSpider change.
+
+**Reconstruction fix** (`RB_V1_2_ARCHITECTURE.md` §25):
+* `SnapshotConfig.optionalIndicators` accepts only `'RVOL20'`. The default is absent, which gives v1.1 behaviour.
+* The v1.2 audit stores an RVOL-optional rebuild only when a missing SIP RVOL emptied the v1.1 snapshot.
+* v1.2 integrity checks and a shadow-only candidate use that rebuild. The v1.1 record, candidate, ranking and decision are unchanged.
+* **Proof:** 108 default-config builder outputs are byte-identical to the pre-change builder; the 24-scenario v1.1 ranker golden still passes; new v1.1-identity tests were added.
+
+**Threshold comparison** (§26):
+* `v12Thresholds.ts` is comparison only and is not wired in.
+* Thresholds (elite / high / watch / low):
+  * A: 90/85/80/75 on a 91 maximum.
+  * B_ROUND: 82/77/73/68.
+  * B_CEIL: 82/78/73/69.
+* The replay now tiers every raw v1.2 score under A, B_ROUND and B_CEIL, plus a TrendSpider-informed reference.
+
+**Tests:** 691 of 691 pass (45 new: 16 reconstruction, 2 server, 27 thresholds). Typecheck and build pass.
+
+| Commit | Content |
+|---|---|
+| `2e7b774` | RVOL-optional reconstruction (7 files) |
+| `3e93c0c` | Threshold helpers and boundary tests |
+| `d85eccf` | Replay: A/B tiers and reference |
+| *(this commit)* | Docs |
+
+**Rollback:** `git revert <docs> d85eccf 3e93c0c 2e7b774`. The reconstruction fix can be reverted on its own with `git revert 2e7b774`.
+
+---
+
 ## CP0 — Rollback baseline before Phase 3B (2026-10-31)
 
 * **Branch:** `rb-v1.2-phase3b`, created from `main` at `3696669`. **Not pushed.**
