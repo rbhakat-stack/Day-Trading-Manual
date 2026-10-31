@@ -10,7 +10,8 @@
  */
 import { dedupeKey, parseAlertPayload, withoutSecrets, type ParsedAlert } from '../../src/engine/automation/alertPayload';
 import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type SnapshotConfig } from '../../src/engine/automation/alertSnapshot';
-import type { AutoAlertRecord } from '../../src/engine/automation/alertDecision';
+import { DEFAULT_AUTOMATION, type AutoAlertRecord } from '../../src/engine/automation/alertDecision';
+import { receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
 import { inputsFromRecord } from '../../src/engine/automation/autoCandidate';
 import { etParts, etToEpoch } from '../../src/engine/automation/etTime';
 import { previousTradingDates } from '../../src/engine/automation/marketCalendar';
@@ -89,6 +90,7 @@ export async function processAlert(body: unknown, deps: ProcessDeps): Promise<Pr
     versions: { rules: RULES_VERSION, scoring: SCORING_VERSION, strategy: FROZEN_VERSION },
     processedIso: null,
   };
+  await v12Receipt(rec, body, now, key, deps);
   await deps.store.put(date, rec);
   deps.log('webhook_received', { id, symbol: a.symbol, direction: a.direction, alertTime: a.alertTimeIso, lastPrice: a.lastPrice });
   const done = await enrichRecord(rec, deps);
@@ -141,6 +143,7 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
     }
     const review = snapshot.issues.filter((i) => i.kind === 'REVIEW');
     if (review.length) deps.log('data_mismatch', { id: r.id, codes: review.map((i) => i.code) });
+    v12Enrich(r, bars, deps);
     deps.log('candidate_enriched', { id: r.id, bars: bars.length, signal: snapshot.signal?.label, confirm15m: snapshot.confirm15m?.label, issues: snapshot.issues.map((i) => i.code), ms: deps.now() - started });
   } catch (e) {
     r.status = 'DATA_ERROR';
@@ -154,4 +157,37 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
   await deps.store.put(date, r);
   deps.log('record_stored', { id: r.id, status: r.status });
   return r;
+}
+
+/* ── RB v1.2 SHADOW audit (additive; RB_V1_2_ARCHITECTURE.md §15). v1.1 stays the active path: nothing below can
+   change, reject or delay the v1.1 record, and any failure only marks the audit. ── */
+
+/**
+ * Receipt-time audit plus the v1.2 dedupe key. While v1.1 is active the v1.2 key is RECORDED, not enforced: a record
+ * whose v1.2 key already exists (a redelivery of the same candle) is still stored exactly as v1.1 would, and only its
+ * audit is linked to the earlier record (`duplicateOf`), so the v1.2 shadow decision treats it as a duplicate. Both
+ * keys are enforced at promotion.
+ */
+async function v12Receipt(rec: AutoAlertRecordV12, body: unknown, receivedMs: number, v11Key: string, deps: ProcessDeps): Promise<void> {
+  try {
+    const audit = receiptAudit({ body, symbol: rec.alert.symbol, direction: rec.alert.direction, receivedMs, v11Key });
+    const owner = await deps.store.getDedupe(audit.dedupeKeys.v12);
+    if (owner) audit.duplicateOf = owner;
+    else await deps.store.setDedupe(audit.dedupeKeys.v12, rec.id);
+    rec.v12 = audit;
+    deps.log('v12_shadow_audit', { id: rec.id, qualification: audit.qualification.status, ruleSet: audit.qualification.ruleSet.status, mapping: audit.signalMapping.status, lagSec: audit.signalMapping.lagSec, duplicateOf: audit.duplicateOf });
+  } catch (e) {
+    rec.v12 = undefined;
+    deps.log('v12_audit_failed', { id: rec.id, stage: 'receipt', error: (e as Error).message });
+  }
+}
+
+function v12Enrich(r: AutoAlertRecordV12, bars: Parameters<typeof withReconstruction>[2], deps: ProcessDeps): void {
+  if (!r.v12) return;
+  try {
+    r.v12 = withReconstruction(r.v12, r, bars, r.alert.direction, DEFAULT_AUTOMATION.parity);
+  } catch (e) {
+    r.v12 = { ...r.v12, error: (e as Error).message };
+    deps.log('v12_audit_failed', { id: r.id, stage: 'enrichment', error: (e as Error).message });
+  }
 }

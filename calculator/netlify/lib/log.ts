@@ -20,7 +20,9 @@ export type LogEvent =
   | 'quotes_served'
   | 'historical_test_started'
   | 'historical_test_completed'
-  | 'historical_test_failed';
+  | 'historical_test_failed'
+  | 'v12_shadow_audit'
+  | 'v12_audit_failed';
 
 const SECRET_KEY = /token|secret|key|password|authorization|auth/i;
 
