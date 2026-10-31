@@ -83,7 +83,7 @@ describe('partial signal candle — no future data', () => {
     expect(s.values).toMatchObject({ open: mins[0].o, high: Math.max(...mins.map((b) => b.h)), low: Math.min(...mins.map((b) => b.l)), close: mins[3].c, volume: mins.reduce((a, b) => a + b.v, 0) });
     expect(s.signal?.label).toBe('15:40–15:45');
   });
-  it('(6) indicators are the shared functions on [completed 5m history + the synthetic partial bar]', () => {
+  it('(6) indicators are the shared functions on [completed 5m history + the synthetic partial bar]; RVOL uses the parity formula', () => {
     const hist = BARS5.filter((b) => b.t + 300_000 <= at('15:40'));
     const p = s.values!;
     const series: Bar[] = [...hist, { t: at('15:40'), o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume }];
@@ -93,7 +93,9 @@ describe('partial signal candle — no future data', () => {
     expect(p.ema20).toBe(ema(closes, 20)[n]);
     expect(p.rsi).toBe(rsi(closes, 14)[n]);
     expect(p.atr).toBe(atr(series, 14)[n]);
-    expect(p.rvol).toBe(rvol(series.map((b) => b.v), 20)[n]);
+    const prior20 = hist.slice(-20).reduce((a, b) => a + b.v, 0) / 20;
+    expect(p.rvol).toBe(p.volume / prior20);
+    expect(s.rvolParity?.legacy).toBe(rvol(series.map((b) => b.v), 20)[n]); // legacy same-bar value, reference only
     expect(p.vwap).toBe(vwapSession(series, (b) => etParts(b.t).date)[n]);
     // and differs from the completed 15:40–15:45 bar (the old, leaky behaviour)
     const full = buildAlertSnapshot(BARS5, at('15:45:05'), 'LONG').values!;
@@ -146,12 +148,15 @@ describe('comparison across bounds (existing tolerances, unchanged)', () => {
 
 describe('(10) IBM regression — alert ≈ 15:54 LONG', () => {
   const res = run(req('2026-10-30 15:54'));
-  it('active 15:50–15:55, 15m 15:30–15:45; the LATEST bound equals the completed 15:50–15:55 candle (the old 12/12 result)', () => {
+  it('active 15:50–15:55, 15m 15:30–15:45; the LATEST bound equals the completed 15:50–15:55 candle (the old 12/12 result) except RVOL, which uses the parity formula', () => {
     expect(res.timing.activeLabel).toBe('15:50–15:55');
     expect(res.timing.confirm15mLabel).toBe('15:30–15:45');
     const old = buildAlertSnapshot(BARS5, at('15:55:10'), 'LONG');
     expect(old.signal?.label).toBe('15:50–15:55');
-    expect(res.bounds[1].snapshot.values).toEqual(old.values);
+    const latest = res.bounds[1].snapshot;
+    expect({ ...latest.values, rvol: 0 }).toEqual({ ...old.values, rvol: 0 });
+    expect(latest.rvolParity?.legacy).toBe(old.values!.rvol);
+    expect(latest.values!.rvol).toBe(old.values!.volume / latest.rvolParity!.baseline!);
     expect(res.bounds[0].snapshot.minutesUsed).toEqual(['15:50', '15:51', '15:52', '15:53']);
   });
   it('previous IEX values still mismatch TrendSpider on Open, Low, ATR, VWAP, 15m Close (default tolerances)', () => {

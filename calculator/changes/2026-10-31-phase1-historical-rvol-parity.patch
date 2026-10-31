@@ -1,0 +1,1008 @@
+diff --git a/AUTOMATION.md b/AUTOMATION.md
+index ee25d28..c80487e 100644
+--- a/AUTOMATION.md
++++ b/AUTOMATION.md
+@@ -125,7 +125,7 @@ curl -X POST https://<your-site>.netlify.app/.netlify/functions/trendspider-aler
+ | Indicators | Bars up to and including the signal candle only; ≥ 100 bars of history required (6 trading days fetched) |
+ | EMA9 / EMA20 | α = 2/(n+1), seeded with an SMA |
+ | RSI14 / ATR14 | Wilder (RMA) smoothing, SMA-seeded |
+-| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1). |
++| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1). **Known difference:** TrendSpider's denominator is the SMA20 ending at the *previous* bar (current bar excluded). Live RB v1.1 is frozen and unchanged; only the Historical SIP diagnostic uses the TrendSpider formula (section 9). |
+ | VWAP | HLC3. **SESSION** (default, resets 09:30) or **ROLLING_14** — TrendSpider's `VWAP(14, 0, HLC3)` meaning is an open VERIFY item; both values are shown and the parity screen decides |
+ | 15m confirmation | Last **fully completed** regular-session 15m candle at the alert time (`lastCompleted15mCandle`, same function as the manual calculator): 10:07 → 09:45–10:00 · 10:18 → 10:00–10:15 · 14:40 → 14:15–14:30 · 15:40 → 15:15–15:30 (15:40 also hard-fails the entry window). 15m bars are aggregated from the 5m bars |
+ | Consistency check | The six TrendSpider alert conditions are re-checked on the automated values; if TrendSpider fired but the automated data disagrees → *DATA MISMATCH — MANUAL REVIEW* |
+@@ -268,14 +268,32 @@ separate decision, to be made only after enough parity evidence.
+   * close = last close
+   * volume = summed volume up to the cutoff
+ * It is appended to the completed 5m history.
+-* The **unchanged** `buildAlertSnapshot`, and therefore the unchanged EMA / Wilder RSI / ATR / RVOL / VWAP functions,
+-  computes O/H/L/C, ATR14, EMA9, EMA20, RSI14, RVOL20 and VWAP with that partial bar as the newest bar.
+-* No formula is duplicated.
++* The **unchanged** `buildAlertSnapshot`, and therefore the unchanged EMA / Wilder RSI / ATR / VWAP functions,
++  computes O/H/L/C, ATR14, EMA9, EMA20, RSI14 and VWAP with that partial bar as the newest bar.
++* RVOL20 is the one exception: it uses the diagnostic-only `historicalParityRvol` (below), not the shared same-bar
++  `rvol()`.
+ * VWAP uses the configured mode (SESSION by default) over the same bars, so only volume up to the cutoff counts.
+ 
+-**RVOL** = partial-candle volume ÷ the unchanged SMA(20) baseline, with the current bar included as before. Whether
+-TrendSpider's alert evaluates RVOL on the partial or the completed candle is **not established**, so every result
+-carries **RVOL SEMANTICS UNDER VALIDATION**. Compare the earliest and latest bounds against TrendSpider to decide.
++**RVOL: TrendSpider-parity formula (diagnostic only).** TrendSpider's displayed Volume, Volume SMA20 and Relative
++Volume values (VRSK, 6 consecutive completed candles) show:
++
++`RVOL(t) = Volume(t) ÷ SMA20(Volume) ending at t−1`
++
++That is, the current candle is **not** in its own baseline. The diagnostic uses exactly that:
++
++* **Numerator:** active-candle volume up to the cutoff (the whole candle when the cutoff is its end).
++* **Denominator:** SMA of the 20 completed regular-session 5m candles **before** the active candle. It depends only
++  on candles that finished before the active one started, so it is **frozen** for the whole candle. The earliest and
++  latest bounds share it; only the numerator grows.
++* **Fewer than 20 completed candles:** `RVOL_PARITY_BASELINE_UNAVAILABLE`, fail closed.
++* **Alert condition:** `RVOL20 > 1.5` in the diagnostic is evaluated on this value.
++
++The parity table compares TrendSpider's RVOL with this **TrendSpider-parity SIP RVOL** and nothing else. The old
++same-bar value is shown beside it as *LEGACY RB FORMULA — DIAGNOSTIC ONLY*, for reference.
++
++**Formula parity is not data parity.** TrendSpider's volume series can differ materially from Alpaca SIP. On VRSK
++12:25, TrendSpider shows 6,649 shares and SIP has 11,336. No scaling or vendor correction is applied. Every result
++still carries **RVOL SEMANTICS UNDER VALIDATION** until the cross-ticker volume study is done.
+ 
+ **15m confirmation is unchanged.** It is the last fully completed 15m candle at the alert time (the same rule and code
+ as live), computed only from completed history. At 15:44 it is 15:15–15:30, because 15:30–15:45 is still forming.
+@@ -292,7 +310,8 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
+ * **IBM ≈ 15:54 LONG.**
+   * Active candle 15:50–15:55, 15m candle 15:30–15:45.
+   * The **latest** bound includes all five minutes, so it equals the completed 15:50–15:55 candle that previously
+-    matched all 12 TrendSpider values (a regression test asserts the identity on synthetic data).
++    matched all 12 TrendSpider values (a regression test asserts the identity on synthetic data). RVOL is the
++    exception: it now uses the TrendSpider-parity formula, so it differs slightly from that earlier value.
+   * The **earliest** bound (through 15:54:00) omits the 15:54 minute. High, low, close, volume, RVOL and VWAP can
+     differ by whatever traded in that last minute. If TrendSpider matches the latest bound and not the earliest, the
+     alert fired late in the 15:54 minute, or TrendSpider values the candle as of its close.
+@@ -324,7 +343,7 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
+   * network
+   * missing bars, or insufficient lookback (from the snapshot)
+ * **No secrets in responses.** Provider messages are sanitised, and keys never appear in responses or logs.
+-* **No persistence.** Results are kept only in your browser (`rbv1.diagnostics.historicalSip.v2`), apart from all
++* **No persistence.** Results are kept only in your browser (`rbv1.diagnostics.historicalSip.v3`), apart from all
+   live keys.
+ 
+ ### Interpreting the results
+@@ -354,7 +373,10 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
+   trades. Alpaca's 5m bar is assumed to equal the aggregate of its 1m bars.
+ * **Early session.** Alerts before 09:45 have no completed 15m candle, so the result is incomplete. That is consistent
+   with the live rule, and RB v1 does not trade before 09:45 anyway.
+-* **RVOL semantics** remain under validation (see above).
++* **Odd-lot-only minutes.** Alpaca emits no 1m bar for a minute that contains only odd-lot trades, so that volume is
++  missing from both the 1m and the 5m bars. On VRSK 2026-10-30, 10:50–12:35, this lost 6,609 of 177,010 shares. Such a
++  minute can also raise INTRABAR_MINUTES_MISSING even though trades did occur.
++* **RVOL:** the formula matches TrendSpider; the volume data may not (see above).
+ 
+ ### Rollback
+ 
+diff --git a/netlify/__tests__/historicalSip.test.ts b/netlify/__tests__/historicalSip.test.ts
+index ff2074f..98e0898 100644
+--- a/netlify/__tests__/historicalSip.test.ts
++++ b/netlify/__tests__/historicalSip.test.ts
+@@ -1,248 +1,250 @@
+-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+-import { readFileSync } from 'node:fs';
+-import { join } from 'node:path';
+-import { assertHistoricalBarsRequest, classifyFailure, runHistoricalSipTest, type HistoricalDeps } from '../lib/historicalSip';
+-import { DataFetchError, type MarketDataClient } from '../lib/alpaca';
+-import { enrichRecord, processAlert, type ProcessDeps } from '../lib/processAlert';
+-import { MemoryStore } from '../lib/store';
+-import { daysUpTo, minuteBars, sessionBars, toFive } from '../../src/engine/automation/__tests__/fixtures';
+-import { etToEpoch } from '../../src/engine/automation/etTime';
+-import { buildAlertSnapshot } from '../../src/engine/automation/alertSnapshot';
+-import { historicalWindow, requestWindows } from '../../src/engine/automation/historicalParity';
+-import type { Bar } from '../../src/engine/automation/indicators';
+-
+-const D = '2026-10-30';
+-const ALERT = etToEpoch(D, '15:54');
+-const NOW = ALERT + 3600_000;
+-const MIN1 = minuteBars(daysUpTo(D));
+-const BARS = toFive(MIN1);
+-const REQ = { symbol: 'IBM', direction: 'LONG', alertEt: '2026-10-30 15:54', label: 'IBM parity' };
+-
+-/** Fake Alpaca HTTP: serves bars, records every URL; `status` simulates provider errors. */
+-function fakeFetch(o: { bars?: Bar[]; min1?: Bar[]; status?: number; text?: string } = {}) {
+-  const urls: string[] = [];
+-  const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+-    const url = String(input);
+-    urls.push(url);
+-    expect(init?.method).toBe('GET');
+-    if (o.status) return new Response(o.text ?? '{"message":"error"}', { status: o.status });
+-    const u = new URL(url);
+-    const s = Date.parse(u.searchParams.get('start')!);
+-    const e = Date.parse(u.searchParams.get('end')!);
+-    const src = u.searchParams.get('timeframe') === '1Min' ? (o.min1 ?? MIN1) : (o.bars ?? BARS);
+-    const bars = src.filter((b) => b.t >= s && b.t <= e).map((b) => ({ ...b, t: new Date(b.t).toISOString() })); // Alpaca: end inclusive
+-    return new Response(JSON.stringify({ bars, next_page_token: null }), { status: 200, headers: { 'content-type': 'application/json' } });
+-  });
+-  return { f: f as unknown as typeof fetch, urls };
+-}
+-
+-const deps = (f: typeof fetch, o: Partial<HistoricalDeps> = {}): HistoricalDeps & { logs: [string, Record<string, unknown>][] } => {
+-  const logs: [string, Record<string, unknown>][] = [];
+-  return { keyId: 'AKHISTKEY', secretKey: 'SKHISTSECRET', fetchImpl: f, now: () => NOW, log: (e, x = {}) => void logs.push([e, x]), logs, ...o };
+-};
+-
+-describe('historical SIP guard — bars only, SIP only, historical only', () => {
+-  const ok = `https://data.alpaca.markets/v2/stocks/IBM/bars?timeframe=5Min&feed=sip&end=${encodeURIComponent(new Date(ALERT).toISOString())}`;
+-  it('allows 1Min, blocks other timeframes', () => {
+-    expect(() => assertHistoricalBarsRequest(ok.replace('5Min', '1Min'), 'GET', NOW)).not.toThrow();
+-    expect(() => assertHistoricalBarsRequest(ok.replace('5Min', '1Day'), 'GET', NOW)).toThrow(/Blocked/);
+-    expect(() => assertHistoricalBarsRequest(ok.replace('timeframe=5Min&', ''), 'GET', NOW)).toThrow(/Blocked/);
+-  });
+-  it('allows a historical SIP bars request', () => expect(() => assertHistoricalBarsRequest(ok, 'GET', NOW)).not.toThrow());
+-  it.each([
+-    ['latest trades', 'https://data.alpaca.markets/v2/stocks/trades/latest?symbols=IBM&feed=sip'],
+-    ['latest quotes', 'https://data.alpaca.markets/v2/stocks/quotes/latest?symbols=IBM&feed=sip'],
+-    ['per-symbol latest trade', 'https://data.alpaca.markets/v2/stocks/IBM/trades/latest?feed=sip'],
+-    ['snapshot', 'https://data.alpaca.markets/v2/stocks/IBM/snapshot?feed=sip'],
+-    ['snapshots', 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=IBM&feed=sip'],
+-    ['IEX feed', ok.replace('feed=sip', 'feed=iex')],
+-    ['no feed', ok.replace('&feed=sip', '')],
+-    ['no end', 'https://data.alpaca.markets/v2/stocks/IBM/bars?timeframe=5Min&feed=sip'],
+-    ['trading host', ok.replace('data.alpaca.markets', 'paper-api.alpaca.markets')],
+-  ])('blocks %s', (_n, url) => expect(() => assertHistoricalBarsRequest(url, 'GET', NOW)).toThrow(/Blocked/));
+-  it('blocks non-GET and an end newer than 16 minutes', () => {
+-    expect(() => assertHistoricalBarsRequest(ok, 'POST', NOW)).toThrow(/Blocked/);
+-    expect(() => assertHistoricalBarsRequest(ok, 'GET', ALERT + 10 * 60_000)).toThrow(/too recent/);
+-  });
+-});
+-
+-describe('runHistoricalSipTest', () => {
+-  beforeEach(() => vi.stubEnv('ALPACA_DATA_FEED', 'iex'));
+-  afterEach(() => vi.unstubAllEnvs());
+-
+-  it('never calls latest-trade / latest-quote / snapshot endpoints — bars only', async () => {
+-    const { f, urls } = fakeFetch();
+-    const out = await runHistoricalSipTest(REQ, deps(f));
+-    expect(out.ok).toBe(true);
+-    expect(urls.length).toBeGreaterThan(0);
+-    for (const u of urls) {
+-      expect(new URL(u).pathname).toBe('/v2/stocks/IBM/bars');
+-      expect(u).not.toMatch(/latest|snapshot|quotes|trades/i);
+-    }
+-    expect(urls.map((u) => new URL(u).searchParams.get('timeframe')).sort()).toEqual(['1Min', '5Min']);
+-  });
+-
+-  it('forces feed=sip even when ALPACA_DATA_FEED=iex, and leaves the env variable unchanged', async () => {
+-    const { f, urls } = fakeFetch();
+-    await runHistoricalSipTest(REQ, deps(f));
+-    for (const u of urls) expect(new URL(u).searchParams.get('feed')).toBe('sip');
+-    expect(process.env.ALPACA_DATA_FEED).toBe('iex');
+-    vi.stubEnv('ALPACA_API_KEY', 'AK');
+-    vi.stubEnv('ALPACA_SECRET_KEY', 'SK');
+-    const { dataClient } = await import('../lib/env');
+-    expect(dataClient()?.feed).toBe('iex'); // the live client is unaffected
+-  });
+-
+-  it('5m history starts where the live path starts and ends before the active bucket; 1m covers the bucket to the cutoff', async () => {
+-    const { f, urls } = fakeFetch();
+-    await runHistoricalSipTest(REQ, deps(f));
+-    const by = (tf: string) => new URL(urls.find((u) => u.includes(`timeframe=${tf}`))!);
+-    const w = historicalWindow(ALERT);
+-    expect([by('5Min').searchParams.get('start'), by('5Min').searchParams.get('end')]).toEqual([w.startIso, new Date(etToEpoch(D, '15:49:59')).toISOString()]);
+-    expect([by('1Min').searchParams.get('start'), by('1Min').searchParams.get('end')]).toEqual([new Date(etToEpoch(D, '15:50')).toISOString(), new Date(etToEpoch(D, '15:54:59')).toISOString()]);
+-    // live enrichRecord for the same alert requests the identical bars window
+-    const seen: string[][] = [];
+-    const data: MarketDataClient = { name: 'Alpaca', feed: 'iex', host: 'h', getBars5: async (_s, a, b) => (seen.push([a, b]), BARS), getLatestTrades: async () => ({}) };
+-    const live = await processAlert({ strategy: 'RB_V1', symbol: 'IBM', direction: 'LONG', alert_name: 'RB v1 LONG Setup', alert_time: new Date(ALERT).toISOString() }, { store: new MemoryStore(), data, log: () => {}, now: () => ALERT + 2000, sleep: async () => {} });
+-    expect(live.kind).toBe('STORED');
+-    expect(seen[0][0]).toBe(w.startIso); // same warm-up start as live
+-    expect(requestWindows({ alertMs: ALERT, cutoffs: [{ key: 'EXACT', ms: ALERT }] }).history5m.startIso).toBe(w.startIso);
+-  });
+-
+-  it('IBM ≈15:54: active 15:50–15:55, 15m 15:30–15:45; LATEST bound = the completed-candle (old) snapshot values', async () => {
+-    const { f } = fakeFetch();
+-    const out = await runHistoricalSipTest(REQ, deps(f));
+-    if (!out.ok) throw new Error(out.errors.join());
+-    expect(out.result.timing).toMatchObject({ activeLabel: '15:50–15:55', confirm15mLabel: '15:30–15:45' });
+-    expect(out.result.precision).toBe('APPROXIMATE_MINUTE');
+-    expect(out.result.bounds[1].snapshot.values).toEqual(buildAlertSnapshot(BARS, etToEpoch(D, '15:55:10'), 'LONG').values);
+-    expect(out.result.bounds[0].snapshot.minutesUsed).toEqual(['15:50', '15:51', '15:52', '15:53']);
+-    expect(out.result).toMatchObject({ mode: 'HISTORICAL_DIAGNOSTIC', provider: { name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets' }, request: { currentPriceFetched: false }, testLabel: 'IBM parity' });
+-    expect(out.result.bounds.every((b) => b.derived)).toBe(true);
+-  });
+-  it('NEE ≈15:44 SHORT: active 15:40–15:45 (not 15:35–15:40), completed 15m 15:15–15:30', async () => {
+-    const { f } = fakeFetch();
+-    const out = await runHistoricalSipTest({ symbol: 'NEE', direction: 'SHORT', alertEt: '2026-10-30 15:44', label: '' }, deps(f));
+-    if (!out.ok) throw new Error(out.errors.join());
+-    expect(out.result.timing).toMatchObject({ activeLabel: '15:40–15:45', confirm15mLabel: '15:15–15:30' });
+-  });
+-  it('requests never reach past the cutoff (no future data requested)', async () => {
+-    const { f, urls } = fakeFetch();
+-    await runHistoricalSipTest({ ...REQ, alertEt: '2026-10-30 15:52:00' }, deps(f));
+-    const cutoff = etToEpoch(D, '15:52:00');
+-    for (const u of urls) expect(Date.parse(new URL(u).searchParams.get('end')!)).toBeLessThan(cutoff);
+-  });
+-
+-  it('an alert too recent for historical SIP is refused before any request', async () => {
+-    const { f, urls } = fakeFetch();
+-    const out = await runHistoricalSipTest(REQ, deps(f, { now: () => ALERT + 5 * 60_000 }));
+-    expect(out).toMatchObject({ ok: false, status: 400, kind: 'INVALID_REQUEST' });
+-    expect(urls).toHaveLength(0);
+-  });
+-
+-  it('insufficient historical bars fail closed (no values, no ticket)', async () => {
+-    const { f } = fakeFetch({ bars: sessionBars([D]).slice(-30) });
+-    const out = await runHistoricalSipTest(REQ, deps(f));
+-    if (!out.ok) throw new Error('expected a result');
+-    for (const b of out.result.bounds) {
+-      expect(b.snapshot.values).toBeNull();
+-      expect(b.derived).toBeNull();
+-      expect(b.snapshot.issues.map((i) => i.code)).toContain('INSUFFICIENT_HISTORY');
+-    }
+-  });
+-
+-  it('SIP entitlement / authorization errors are surfaced cleanly; never retried on IEX; secrets never echoed', async () => {
+-    const ent = fakeFetch({ status: 403, text: '{"message":"subscription does not permit querying recent SIP data"}' });
+-    const a = await runHistoricalSipTest(REQ, deps(ent.f));
+-    expect(a).toMatchObject({ ok: false, kind: 'ENTITLEMENT' });
+-    if (!a.ok) expect(a.errors[0]).toMatch(/SIP entitlement failure \(HTTP 403\).*subscription does not permit/);
+-    expect(ent.urls.every((u) => u.includes('feed=sip'))).toBe(true);
+-
+-    const auth = fakeFetch({ status: 401, text: '{"message":"unauthorized. key AKHISTKEY"}' });
+-    const b = await runHistoricalSipTest(REQ, deps(auth.f));
+-    expect(b).toMatchObject({ ok: false, kind: 'AUTHORIZATION' });
+-    expect(JSON.stringify(b)).not.toContain('AKHISTKEY');
+-    expect(JSON.stringify(b)).not.toContain('SKHISTSECRET');
+-
+-    const win = await runHistoricalSipTest(REQ, deps(fakeFetch({ status: 422, text: '{"message":"invalid start"}' }).f));
+-    expect(win).toMatchObject({ ok: false, kind: 'HISTORICAL_WINDOW' });
+-  });
+-
+-  it('classifies network failures and missing configuration', async () => {
+-    expect(classifyFailure(new DataFetchError('Alpaca request failed: timeout after 4000 ms', null)).kind).toBe('NETWORK');
+-    expect(classifyFailure(new DataFetchError('Alpaca 503: down', 503)).kind).toBe('PROVIDER');
+-    expect(await runHistoricalSipTest(REQ, deps(fakeFetch().f, { keyId: undefined }))).toMatchObject({ ok: false, status: 503, kind: 'NOT_CONFIGURED' });
+-  });
+-});
+-
+-/* ───────────────────────── isolation from the live pipeline ───────────────────────── */
+-
+-describe('isolation: no live alert, no candidate, no capital, no heat, no journal, no dedupe collision', () => {
+-  const ROOT = join(__dirname, '..', '..');
+-  const src = (p: string) => readFileSync(join(ROOT, p), 'utf8');
+-  const FILES = ['netlify/lib/historicalSip.ts', 'netlify/functions/rb-historical-parity.mts', 'src/engine/automation/historicalParity.ts', 'src/components/live/HistoricalSipTest.tsx'];
+-
+-  it('historical modules import nothing that stores alerts or touches ranker / portfolio / journal / queue state', () => {
+-    for (const f of FILES) {
+-      // value imports only (`import type` is erased at build time and carries no behaviour)
+-      const imports = [...src(f).matchAll(/^import\s+(?!type\s)[^;]*?from\s+'([^']+)'/gms)].map((m) => m[1]);
+-      expect(imports.length, f).toBeGreaterThan(0);
+-      for (const i of imports) expect(i, `${f} imports ${i}`).not.toMatch(/store|blobs|ranker|portfolio|journal|liveQueue|alertDecision'?$|processAlert|storage|opportunity|candidate/i);
+-    }
+-  });
+-
+-  it('the historical function never opens Netlify Blobs or the alert store', async () => {
+-    vi.resetModules();
+-    const getStore = vi.fn();
+-    const blobStore = vi.fn();
+-    vi.doMock('@netlify/blobs', () => ({ getStore }));
+-    vi.doMock('../lib/store', async (orig) => ({ ...(await orig<typeof import('../lib/store')>()), blobStore }));
+-    vi.stubEnv('RB_APP_ACCESS_TOKEN', 'apptok');
+-    vi.stubEnv('ALPACA_API_KEY', 'AKHISTKEY');
+-    vi.stubEnv('ALPACA_SECRET_KEY', 'SKHISTSECRET');
+-    vi.stubEnv('ALPACA_DATA_FEED', 'iex');
+-    const { f, urls } = fakeFetch();
+-    vi.stubGlobal('fetch', f);
+-    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+-    try {
+-      const h = (await import('../functions/rb-historical-parity.mts')).default;
+-      expect((await h(new Request('https://s/', { method: 'POST', body: JSON.stringify(REQ) }))).status).toBe(401);
+-      expect((await h(new Request('https://s/', { method: 'GET', headers: { authorization: 'Bearer apptok' } }))).status).toBe(405);
+-      const res = await h(new Request('https://s/', { method: 'POST', headers: { authorization: 'Bearer apptok' }, body: JSON.stringify(REQ) }));
+-      expect(res.status).toBe(200);
+-      const text = await res.text();
+-      expect(JSON.parse(text)).toMatchObject({ ok: true, result: { mode: 'HISTORICAL_DIAGNOSTIC', provider: { feed: 'sip' } } });
+-      for (const s of ['AKHISTKEY', 'SKHISTSECRET', 'apptok']) expect(text).not.toContain(s);
+-      expect(urls.every((u) => u.includes('feed=sip') && u.includes('/bars?'))).toBe(true);
+-      const bad = await h(new Request('https://s/', { method: 'POST', headers: { authorization: 'Bearer apptok' }, body: JSON.stringify({ ...REQ, symbol: 'IBM;DROP' }) }));
+-      expect(bad.status).toBe(400);
+-      expect(getStore).not.toHaveBeenCalled();
+-      expect(blobStore).not.toHaveBeenCalled();
+-      expect(process.env.ALPACA_DATA_FEED).toBe('iex');
+-    } finally {
+-      vi.useRealTimers();
+-      vi.unstubAllGlobals();
+-      vi.unstubAllEnvs();
+-      vi.doUnmock('@netlify/blobs');
+-      vi.doUnmock('../lib/store');
+-    }
+-  });
+-
+-  it('a live webhook for the same ticker / direction / time after a historical test is stored normally (no dedupe collision)', async () => {
+-    const store = new MemoryStore();
+-    const { f } = fakeFetch();
+-    await runHistoricalSipTest(REQ, deps(f));
+-    expect(await store.list(D)).toHaveLength(0);
+-    const data: MarketDataClient = { name: 'Alpaca', feed: 'sip', host: 'h', getBars5: async () => BARS, getLatestTrades: async (s) => Object.fromEntries(s.map((x) => [x, { price: 258, tradeIso: new Date(ALERT).toISOString(), fetchedIso: new Date(ALERT).toISOString() }])) };
+-    const d: ProcessDeps = { store, data, log: () => {}, now: () => ALERT + 2000, sleep: async () => {} };
+-    const live = await processAlert({ strategy: 'RB_V1', symbol: 'IBM', direction: 'LONG', alert_name: 'RB v1 LONG Setup', alert_time: new Date(ALERT).toISOString() }, d);
+-    expect(live.kind).toBe('STORED');
+-    expect(await store.list(D)).toHaveLength(1);
+-    // and the live record is the normal live output: current price fetched, calculator reference computed
+-    if (live.kind === 'STORED') {
+-      expect(live.record.initialQuote?.price).toBe(258);
+-      expect(live.record.snapshot).toEqual(buildAlertSnapshot(BARS, ALERT, 'LONG'));
+-      expect((await enrichRecord(live.record, d)).status).toBe('OK');
+-    }
+-  });
+-});
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { assertHistoricalBarsRequest, classifyFailure, runHistoricalSipTest, type HistoricalDeps } from '../lib/historicalSip';
++import { DataFetchError, type MarketDataClient } from '../lib/alpaca';
++import { enrichRecord, processAlert, type ProcessDeps } from '../lib/processAlert';
++import { MemoryStore } from '../lib/store';
++import { daysUpTo, minuteBars, sessionBars, toFive } from '../../src/engine/automation/__tests__/fixtures';
++import { etToEpoch } from '../../src/engine/automation/etTime';
++import { buildAlertSnapshot } from '../../src/engine/automation/alertSnapshot';
++import { historicalWindow, requestWindows } from '../../src/engine/automation/historicalParity';
++import type { Bar } from '../../src/engine/automation/indicators';
++
++const D = '2026-10-30';
++const ALERT = etToEpoch(D, '15:54');
++const NOW = ALERT + 3600_000;
++const MIN1 = minuteBars(daysUpTo(D));
++const BARS = toFive(MIN1);
++const REQ = { symbol: 'IBM', direction: 'LONG', alertEt: '2026-10-30 15:54', label: 'IBM parity' };
++
++/** Fake Alpaca HTTP: serves bars, records every URL; `status` simulates provider errors. */
++function fakeFetch(o: { bars?: Bar[]; min1?: Bar[]; status?: number; text?: string } = {}) {
++  const urls: string[] = [];
++  const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++    const url = String(input);
++    urls.push(url);
++    expect(init?.method).toBe('GET');
++    if (o.status) return new Response(o.text ?? '{"message":"error"}', { status: o.status });
++    const u = new URL(url);
++    const s = Date.parse(u.searchParams.get('start')!);
++    const e = Date.parse(u.searchParams.get('end')!);
++    const src = u.searchParams.get('timeframe') === '1Min' ? (o.min1 ?? MIN1) : (o.bars ?? BARS);
++    const bars = src.filter((b) => b.t >= s && b.t <= e).map((b) => ({ ...b, t: new Date(b.t).toISOString() })); // Alpaca: end inclusive
++    return new Response(JSON.stringify({ bars, next_page_token: null }), { status: 200, headers: { 'content-type': 'application/json' } });
++  });
++  return { f: f as unknown as typeof fetch, urls };
++}
++
++const deps = (f: typeof fetch, o: Partial<HistoricalDeps> = {}): HistoricalDeps & { logs: [string, Record<string, unknown>][] } => {
++  const logs: [string, Record<string, unknown>][] = [];
++  return { keyId: 'AKHISTKEY', secretKey: 'SKHISTSECRET', fetchImpl: f, now: () => NOW, log: (e, x = {}) => void logs.push([e, x]), logs, ...o };
++};
++
++describe('historical SIP guard — bars only, SIP only, historical only', () => {
++  const ok = `https://data.alpaca.markets/v2/stocks/IBM/bars?timeframe=5Min&feed=sip&end=${encodeURIComponent(new Date(ALERT).toISOString())}`;
++  it('allows 1Min, blocks other timeframes', () => {
++    expect(() => assertHistoricalBarsRequest(ok.replace('5Min', '1Min'), 'GET', NOW)).not.toThrow();
++    expect(() => assertHistoricalBarsRequest(ok.replace('5Min', '1Day'), 'GET', NOW)).toThrow(/Blocked/);
++    expect(() => assertHistoricalBarsRequest(ok.replace('timeframe=5Min&', ''), 'GET', NOW)).toThrow(/Blocked/);
++  });
++  it('allows a historical SIP bars request', () => expect(() => assertHistoricalBarsRequest(ok, 'GET', NOW)).not.toThrow());
++  it.each([
++    ['latest trades', 'https://data.alpaca.markets/v2/stocks/trades/latest?symbols=IBM&feed=sip'],
++    ['latest quotes', 'https://data.alpaca.markets/v2/stocks/quotes/latest?symbols=IBM&feed=sip'],
++    ['per-symbol latest trade', 'https://data.alpaca.markets/v2/stocks/IBM/trades/latest?feed=sip'],
++    ['snapshot', 'https://data.alpaca.markets/v2/stocks/IBM/snapshot?feed=sip'],
++    ['snapshots', 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=IBM&feed=sip'],
++    ['IEX feed', ok.replace('feed=sip', 'feed=iex')],
++    ['no feed', ok.replace('&feed=sip', '')],
++    ['no end', 'https://data.alpaca.markets/v2/stocks/IBM/bars?timeframe=5Min&feed=sip'],
++    ['trading host', ok.replace('data.alpaca.markets', 'paper-api.alpaca.markets')],
++  ])('blocks %s', (_n, url) => expect(() => assertHistoricalBarsRequest(url, 'GET', NOW)).toThrow(/Blocked/));
++  it('blocks non-GET and an end newer than 16 minutes', () => {
++    expect(() => assertHistoricalBarsRequest(ok, 'POST', NOW)).toThrow(/Blocked/);
++    expect(() => assertHistoricalBarsRequest(ok, 'GET', ALERT + 10 * 60_000)).toThrow(/too recent/);
++  });
++});
++
++describe('runHistoricalSipTest', () => {
++  beforeEach(() => vi.stubEnv('ALPACA_DATA_FEED', 'iex'));
++  afterEach(() => vi.unstubAllEnvs());
++
++  it('never calls latest-trade / latest-quote / snapshot endpoints — bars only', async () => {
++    const { f, urls } = fakeFetch();
++    const out = await runHistoricalSipTest(REQ, deps(f));
++    expect(out.ok).toBe(true);
++    expect(urls.length).toBeGreaterThan(0);
++    for (const u of urls) {
++      expect(new URL(u).pathname).toBe('/v2/stocks/IBM/bars');
++      expect(u).not.toMatch(/latest|snapshot|quotes|trades/i);
++    }
++    expect(urls.map((u) => new URL(u).searchParams.get('timeframe')).sort()).toEqual(['1Min', '5Min']);
++  });
++
++  it('forces feed=sip even when ALPACA_DATA_FEED=iex, and leaves the env variable unchanged', async () => {
++    const { f, urls } = fakeFetch();
++    await runHistoricalSipTest(REQ, deps(f));
++    for (const u of urls) expect(new URL(u).searchParams.get('feed')).toBe('sip');
++    expect(process.env.ALPACA_DATA_FEED).toBe('iex');
++    vi.stubEnv('ALPACA_API_KEY', 'AK');
++    vi.stubEnv('ALPACA_SECRET_KEY', 'SK');
++    const { dataClient } = await import('../lib/env');
++    expect(dataClient()?.feed).toBe('iex'); // the live client is unaffected
++  });
++
++  it('5m history starts where the live path starts and ends before the active bucket; 1m covers the bucket to the cutoff', async () => {
++    const { f, urls } = fakeFetch();
++    await runHistoricalSipTest(REQ, deps(f));
++    const by = (tf: string) => new URL(urls.find((u) => u.includes(`timeframe=${tf}`))!);
++    const w = historicalWindow(ALERT);
++    expect([by('5Min').searchParams.get('start'), by('5Min').searchParams.get('end')]).toEqual([w.startIso, new Date(etToEpoch(D, '15:49:59')).toISOString()]);
++    expect([by('1Min').searchParams.get('start'), by('1Min').searchParams.get('end')]).toEqual([new Date(etToEpoch(D, '15:50')).toISOString(), new Date(etToEpoch(D, '15:54:59')).toISOString()]);
++    // live enrichRecord for the same alert requests the identical bars window
++    const seen: string[][] = [];
++    const data: MarketDataClient = { name: 'Alpaca', feed: 'iex', host: 'h', getBars5: async (_s, a, b) => (seen.push([a, b]), BARS), getLatestTrades: async () => ({}) };
++    const live = await processAlert({ strategy: 'RB_V1', symbol: 'IBM', direction: 'LONG', alert_name: 'RB v1 LONG Setup', alert_time: new Date(ALERT).toISOString() }, { store: new MemoryStore(), data, log: () => {}, now: () => ALERT + 2000, sleep: async () => {} });
++    expect(live.kind).toBe('STORED');
++    expect(seen[0][0]).toBe(w.startIso); // same warm-up start as live
++    expect(requestWindows({ alertMs: ALERT, cutoffs: [{ key: 'EXACT', ms: ALERT }] }).history5m.startIso).toBe(w.startIso);
++  });
++
++  it('IBM ≈15:54: active 15:50–15:55, 15m 15:30–15:45; LATEST bound = the completed-candle (old) snapshot values', async () => {
++    const { f } = fakeFetch();
++    const out = await runHistoricalSipTest(REQ, deps(f));
++    if (!out.ok) throw new Error(out.errors.join());
++    expect(out.result.timing).toMatchObject({ activeLabel: '15:50–15:55', confirm15mLabel: '15:30–15:45' });
++    expect(out.result.precision).toBe('APPROXIMATE_MINUTE');
++    const old = buildAlertSnapshot(BARS, etToEpoch(D, '15:55:10'), 'LONG').values!;
++    expect({ ...out.result.bounds[1].snapshot.values, rvol: 0 }).toEqual({ ...old, rvol: 0 }); // RVOL: parity formula (tested in historicalParity.test.ts)
++    expect(out.result.bounds[1].snapshot.rvolParity?.legacy).toBe(old.rvol);
++    expect(out.result.bounds[0].snapshot.minutesUsed).toEqual(['15:50', '15:51', '15:52', '15:53']);
++    expect(out.result).toMatchObject({ mode: 'HISTORICAL_DIAGNOSTIC', provider: { name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets' }, request: { currentPriceFetched: false }, testLabel: 'IBM parity' });
++    expect(out.result.bounds.every((b) => b.derived)).toBe(true);
++  });
++  it('NEE ≈15:44 SHORT: active 15:40–15:45 (not 15:35–15:40), completed 15m 15:15–15:30', async () => {
++    const { f } = fakeFetch();
++    const out = await runHistoricalSipTest({ symbol: 'NEE', direction: 'SHORT', alertEt: '2026-10-30 15:44', label: '' }, deps(f));
++    if (!out.ok) throw new Error(out.errors.join());
++    expect(out.result.timing).toMatchObject({ activeLabel: '15:40–15:45', confirm15mLabel: '15:15–15:30' });
++  });
++  it('requests never reach past the cutoff (no future data requested)', async () => {
++    const { f, urls } = fakeFetch();
++    await runHistoricalSipTest({ ...REQ, alertEt: '2026-10-30 15:52:00' }, deps(f));
++    const cutoff = etToEpoch(D, '15:52:00');
++    for (const u of urls) expect(Date.parse(new URL(u).searchParams.get('end')!)).toBeLessThan(cutoff);
++  });
++
++  it('an alert too recent for historical SIP is refused before any request', async () => {
++    const { f, urls } = fakeFetch();
++    const out = await runHistoricalSipTest(REQ, deps(f, { now: () => ALERT + 5 * 60_000 }));
++    expect(out).toMatchObject({ ok: false, status: 400, kind: 'INVALID_REQUEST' });
++    expect(urls).toHaveLength(0);
++  });
++
++  it('insufficient historical bars fail closed (no values, no ticket)', async () => {
++    const { f } = fakeFetch({ bars: sessionBars([D]).slice(-30) });
++    const out = await runHistoricalSipTest(REQ, deps(f));
++    if (!out.ok) throw new Error('expected a result');
++    for (const b of out.result.bounds) {
++      expect(b.snapshot.values).toBeNull();
++      expect(b.derived).toBeNull();
++      expect(b.snapshot.issues.map((i) => i.code)).toContain('INSUFFICIENT_HISTORY');
++    }
++  });
++
++  it('SIP entitlement / authorization errors are surfaced cleanly; never retried on IEX; secrets never echoed', async () => {
++    const ent = fakeFetch({ status: 403, text: '{"message":"subscription does not permit querying recent SIP data"}' });
++    const a = await runHistoricalSipTest(REQ, deps(ent.f));
++    expect(a).toMatchObject({ ok: false, kind: 'ENTITLEMENT' });
++    if (!a.ok) expect(a.errors[0]).toMatch(/SIP entitlement failure \(HTTP 403\).*subscription does not permit/);
++    expect(ent.urls.every((u) => u.includes('feed=sip'))).toBe(true);
++
++    const auth = fakeFetch({ status: 401, text: '{"message":"unauthorized. key AKHISTKEY"}' });
++    const b = await runHistoricalSipTest(REQ, deps(auth.f));
++    expect(b).toMatchObject({ ok: false, kind: 'AUTHORIZATION' });
++    expect(JSON.stringify(b)).not.toContain('AKHISTKEY');
++    expect(JSON.stringify(b)).not.toContain('SKHISTSECRET');
++
++    const win = await runHistoricalSipTest(REQ, deps(fakeFetch({ status: 422, text: '{"message":"invalid start"}' }).f));
++    expect(win).toMatchObject({ ok: false, kind: 'HISTORICAL_WINDOW' });
++  });
++
++  it('classifies network failures and missing configuration', async () => {
++    expect(classifyFailure(new DataFetchError('Alpaca request failed: timeout after 4000 ms', null)).kind).toBe('NETWORK');
++    expect(classifyFailure(new DataFetchError('Alpaca 503: down', 503)).kind).toBe('PROVIDER');
++    expect(await runHistoricalSipTest(REQ, deps(fakeFetch().f, { keyId: undefined }))).toMatchObject({ ok: false, status: 503, kind: 'NOT_CONFIGURED' });
++  });
++});
++
++/* ───────────────────────── isolation from the live pipeline ───────────────────────── */
++
++describe('isolation: no live alert, no candidate, no capital, no heat, no journal, no dedupe collision', () => {
++  const ROOT = join(__dirname, '..', '..');
++  const src = (p: string) => readFileSync(join(ROOT, p), 'utf8');
++  const FILES = ['netlify/lib/historicalSip.ts', 'netlify/functions/rb-historical-parity.mts', 'src/engine/automation/historicalParity.ts', 'src/components/live/HistoricalSipTest.tsx'];
++
++  it('historical modules import nothing that stores alerts or touches ranker / portfolio / journal / queue state', () => {
++    for (const f of FILES) {
++      // value imports only (`import type` is erased at build time and carries no behaviour)
++      const imports = [...src(f).matchAll(/^import\s+(?!type\s)[^;]*?from\s+'([^']+)'/gms)].map((m) => m[1]);
++      expect(imports.length, f).toBeGreaterThan(0);
++      for (const i of imports) expect(i, `${f} imports ${i}`).not.toMatch(/store|blobs|ranker|portfolio|journal|liveQueue|alertDecision'?$|processAlert|storage|opportunity|candidate/i);
++    }
++  });
++
++  it('the historical function never opens Netlify Blobs or the alert store', async () => {
++    vi.resetModules();
++    const getStore = vi.fn();
++    const blobStore = vi.fn();
++    vi.doMock('@netlify/blobs', () => ({ getStore }));
++    vi.doMock('../lib/store', async (orig) => ({ ...(await orig<typeof import('../lib/store')>()), blobStore }));
++    vi.stubEnv('RB_APP_ACCESS_TOKEN', 'apptok');
++    vi.stubEnv('ALPACA_API_KEY', 'AKHISTKEY');
++    vi.stubEnv('ALPACA_SECRET_KEY', 'SKHISTSECRET');
++    vi.stubEnv('ALPACA_DATA_FEED', 'iex');
++    const { f, urls } = fakeFetch();
++    vi.stubGlobal('fetch', f);
++    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
++    try {
++      const h = (await import('../functions/rb-historical-parity.mts')).default;
++      expect((await h(new Request('https://s/', { method: 'POST', body: JSON.stringify(REQ) }))).status).toBe(401);
++      expect((await h(new Request('https://s/', { method: 'GET', headers: { authorization: 'Bearer apptok' } }))).status).toBe(405);
++      const res = await h(new Request('https://s/', { method: 'POST', headers: { authorization: 'Bearer apptok' }, body: JSON.stringify(REQ) }));
++      expect(res.status).toBe(200);
++      const text = await res.text();
++      expect(JSON.parse(text)).toMatchObject({ ok: true, result: { mode: 'HISTORICAL_DIAGNOSTIC', provider: { feed: 'sip' } } });
++      for (const s of ['AKHISTKEY', 'SKHISTSECRET', 'apptok']) expect(text).not.toContain(s);
++      expect(urls.every((u) => u.includes('feed=sip') && u.includes('/bars?'))).toBe(true);
++      const bad = await h(new Request('https://s/', { method: 'POST', headers: { authorization: 'Bearer apptok' }, body: JSON.stringify({ ...REQ, symbol: 'IBM;DROP' }) }));
++      expect(bad.status).toBe(400);
++      expect(getStore).not.toHaveBeenCalled();
++      expect(blobStore).not.toHaveBeenCalled();
++      expect(process.env.ALPACA_DATA_FEED).toBe('iex');
++    } finally {
++      vi.useRealTimers();
++      vi.unstubAllGlobals();
++      vi.unstubAllEnvs();
++      vi.doUnmock('@netlify/blobs');
++      vi.doUnmock('../lib/store');
++    }
++  });
++
++  it('a live webhook for the same ticker / direction / time after a historical test is stored normally (no dedupe collision)', async () => {
++    const store = new MemoryStore();
++    const { f } = fakeFetch();
++    await runHistoricalSipTest(REQ, deps(f));
++    expect(await store.list(D)).toHaveLength(0);
++    const data: MarketDataClient = { name: 'Alpaca', feed: 'sip', host: 'h', getBars5: async () => BARS, getLatestTrades: async (s) => Object.fromEntries(s.map((x) => [x, { price: 258, tradeIso: new Date(ALERT).toISOString(), fetchedIso: new Date(ALERT).toISOString() }])) };
++    const d: ProcessDeps = { store, data, log: () => {}, now: () => ALERT + 2000, sleep: async () => {} };
++    const live = await processAlert({ strategy: 'RB_V1', symbol: 'IBM', direction: 'LONG', alert_name: 'RB v1 LONG Setup', alert_time: new Date(ALERT).toISOString() }, d);
++    expect(live.kind).toBe('STORED');
++    expect(await store.list(D)).toHaveLength(1);
++    // and the live record is the normal live output: current price fetched, calculator reference computed
++    if (live.kind === 'STORED') {
++      expect(live.record.initialQuote?.price).toBe(258);
++      expect(live.record.snapshot).toEqual(buildAlertSnapshot(BARS, ALERT, 'LONG'));
++      expect((await enrichRecord(live.record, d)).status).toBe('OK');
++    }
++  });
++});
+diff --git a/src/components/live/HistoricalSipTest.tsx b/src/components/live/HistoricalSipTest.tsx
+index 63967ff..d2bf6e1 100644
+--- a/src/components/live/HistoricalSipTest.tsx
++++ b/src/components/live/HistoricalSipTest.tsx
+@@ -1,6 +1,7 @@
+ import { useState, type FormEvent } from 'react';
+ import type { ParityTolerance } from '../../engine/automation/alertDecision';
+-import { compareHistorical, DERIVED_LABEL, DIAGNOSTIC_LABEL, type CutoffKey, type HistoricalResult, type Precision } from '../../engine/automation/historicalParity';
++import { compareHistorical, DERIVED_LABEL, DIAGNOSTIC_LABEL, RVOL_LEGACY_LABEL, RVOL_PARITY_FORMULA, type CutoffKey, type HistoricalResult, type Precision } from '../../engine/automation/historicalParity';
++import { etParts } from '../../engine/automation/etTime';
+ import { PARITY_FIELDS, PARITY_LABELS, type ParityField } from '../../engine/automation/parity';
+ import { historicalRequestBody, runHistoricalSip, usePersistent } from '../../lib/automationClient';
+ import { Panel } from '../ui';
+@@ -8,9 +9,9 @@ import { Panel } from '../ui';
+ /**
+  * HISTORICAL SIP PARITY TEST — diagnostic only, INTRABAR reconstruction. Kept apart from the live queue: it reads no
+  * alert records, writes no candidates, positions, journal entries or parity entries, and its state lives under its
+- * own browser key (v2: the intrabar result shape).
++ * own browser key (v3: TrendSpider-parity RVOL; a v2 result holds the legacy RVOL and is not reloaded).
+  */
+-const KEY = 'rbv1.diagnostics.historicalSip.v2';
++const KEY = 'rbv1.diagnostics.historicalSip.v3';
+ 
+ interface Saved {
+   form: { symbol: string; direction: 'LONG' | 'SHORT'; alertEt: string; label: string; precision: 'EXACT' | 'MINUTE' };
+@@ -176,7 +177,7 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
+               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                 {PARITY_FIELDS.map((f) => (
+                   <label key={f} className="block text-xs">
+-                    <span className="mb-0.5 block uppercase tracking-wider text-ink-400">{PARITY_LABELS[f]}</span>
++                    <span className="mb-0.5 block uppercase tracking-wider text-ink-400">{f === 'rvol' ? `${PARITY_LABELS[f]} (TrendSpider-parity)` : PARITY_LABELS[f]}</span>
+                     <span className="num block text-[13px] text-ink-100">{bounds.map((b) => (b.snapshot.values ? f4(b.snapshot.values[f]) : '—')).join(' … ')}</span>
+                     <input inputMode="decimal" placeholder="TrendSpider" value={ts[f] ?? ''} onChange={(e) => setSaved((s) => ({ ...s, ts: { ...s.ts, [f]: e.target.value } }))} className={`${box} mt-0.5`} />
+                   </label>
+@@ -204,7 +205,7 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
+                       <tbody>
+                         {rows.map((r) => (
+                           <tr key={r.field} className="border-t border-ink-700/60">
+-                            <td className="px-2 py-1 font-sans">{PARITY_LABELS[r.field]}</td>
++                            <td className="px-2 py-1 font-sans">{r.field === 'rvol' ? `${PARITY_LABELS[r.field]} (TrendSpider-parity SIP)` : PARITY_LABELS[r.field]}</td>
+                             <td className="px-2 py-1">{r.trendSpider}</td>
+                             {r.perBound.map((x, i) =>
+                               x ? (
+@@ -229,6 +230,42 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
+                   {bracketed && <p className="mt-2 text-xs text-ink-400">Bracketed: PASS = within tolerance of at least one bound. BETWEEN BOUNDS = between the earliest and latest state but within tolerance of neither (cannot be resolved with 1-minute data).</p>}
+                 </>
+               )}
++              {bounds.some((b) => b.snapshot.rvolParity) && (
++                <div className="mt-4 rounded border border-ink-700 p-3">
++                  <p className="text-sm font-bold text-ink-100">TrendSpider-parity SIP RVOL — calculated as <span className="num">{RVOL_PARITY_FORMULA}</span></p>
++                  <p className="text-xs text-ink-400">This is the RVOL value in the comparison above. The prior-20 SMA ends at the candle before {result.timing.activeLabel}, so it is the same for every bound; only the current volume grows while the candle forms.</p>
++                  <dl className="mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
++                    {bounds.map((b) => {
++                      const p = b.snapshot.rvolParity;
++                      if (!p) return null;
++                      const tag = bracketed ? ` (${b.key.toLowerCase()})` : '';
++                      return [
++                        <div key={`${b.key}-p`} className="flex gap-2">
++                          <dt className="text-ink-400">Parity RVOL{tag}:</dt>
++                          <dd className="num font-semibold text-ink-100">
++                            {p.value === null ? 'unavailable' : `${p.currentVolume.toLocaleString()} / ${p.baseline!.toFixed(2)} = ${f4(p.value)}`}
++                          </dd>
++                        </div>,
++                        <div key={`${b.key}-l`} className="flex gap-2">
++                          <dt className="text-ink-400">Legacy RVOL{tag}:</dt>
++                          <dd className="num text-ink-300">
++                            {p.legacy === null ? '—' : f4(p.legacy)} <span className="font-sans text-[11px] font-bold text-warn">{RVOL_LEGACY_LABEL}</span>
++                          </dd>
++                        </div>,
++                      ];
++                    })}
++                  </dl>
++                  {(() => {
++                    const p = bounds.find((b) => b.snapshot.rvolParity?.baselineBars.length)?.snapshot.rvolParity;
++                    return p ? (
++                      <p className="num mt-2 text-xs text-ink-400">
++                        Prior-20 baseline ({p.baselineBars.length} completed 5m candles, ET start): {p.baselineBars.map((x) => `${etParts(x.t).hhmm} ${x.v.toLocaleString()}`).join(' · ')}
++                      </p>
++                    ) : null;
++                  })()}
++                  <p className="mt-2 text-xs text-ink-400">Legacy = current volume ÷ SMA20 including the current candle (the live RB v1.1 formula, unchanged). It is shown for reference only and is never compared with TrendSpider. Formula parity is not data parity: TrendSpider volume can differ materially from Alpaca SIP.</p>
++                </div>
++              )}
+             </Panel>
+           ) : (
+             <Panel title={<span className="text-short">No complete SIP reconstruction — fail closed</span>}>
+diff --git a/src/engine/automation/__tests__/historicalParity.test.ts b/src/engine/automation/__tests__/historicalParity.test.ts
+index 18b9b5c..1dc162c 100644
+--- a/src/engine/automation/__tests__/historicalParity.test.ts
++++ b/src/engine/automation/__tests__/historicalParity.test.ts
+@@ -83,7 +83,7 @@ describe('partial signal candle — no future data', () => {
+     expect(s.values).toMatchObject({ open: mins[0].o, high: Math.max(...mins.map((b) => b.h)), low: Math.min(...mins.map((b) => b.l)), close: mins[3].c, volume: mins.reduce((a, b) => a + b.v, 0) });
+     expect(s.signal?.label).toBe('15:40–15:45');
+   });
+-  it('(6) indicators are the shared functions on [completed 5m history + the synthetic partial bar]', () => {
++  it('(6) indicators are the shared functions on [completed 5m history + the synthetic partial bar]; RVOL uses the parity formula', () => {
+     const hist = BARS5.filter((b) => b.t + 300_000 <= at('15:40'));
+     const p = s.values!;
+     const series: Bar[] = [...hist, { t: at('15:40'), o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume }];
+@@ -93,7 +93,9 @@ describe('partial signal candle — no future data', () => {
+     expect(p.ema20).toBe(ema(closes, 20)[n]);
+     expect(p.rsi).toBe(rsi(closes, 14)[n]);
+     expect(p.atr).toBe(atr(series, 14)[n]);
+-    expect(p.rvol).toBe(rvol(series.map((b) => b.v), 20)[n]);
++    const prior20 = hist.slice(-20).reduce((a, b) => a + b.v, 0) / 20;
++    expect(p.rvol).toBe(p.volume / prior20);
++    expect(s.rvolParity?.legacy).toBe(rvol(series.map((b) => b.v), 20)[n]); // legacy same-bar value, reference only
+     expect(p.vwap).toBe(vwapSession(series, (b) => etParts(b.t).date)[n]);
+     // and differs from the completed 15:40–15:45 bar (the old, leaky behaviour)
+     const full = buildAlertSnapshot(BARS5, at('15:45:05'), 'LONG').values!;
+@@ -146,12 +148,15 @@ describe('comparison across bounds (existing tolerances, unchanged)', () => {
+ 
+ describe('(10) IBM regression — alert ≈ 15:54 LONG', () => {
+   const res = run(req('2026-10-30 15:54'));
+-  it('active 15:50–15:55, 15m 15:30–15:45; the LATEST bound equals the completed 15:50–15:55 candle (the old 12/12 result)', () => {
++  it('active 15:50–15:55, 15m 15:30–15:45; the LATEST bound equals the completed 15:50–15:55 candle (the old 12/12 result) except RVOL, which uses the parity formula', () => {
+     expect(res.timing.activeLabel).toBe('15:50–15:55');
+     expect(res.timing.confirm15mLabel).toBe('15:30–15:45');
+     const old = buildAlertSnapshot(BARS5, at('15:55:10'), 'LONG');
+     expect(old.signal?.label).toBe('15:50–15:55');
+-    expect(res.bounds[1].snapshot.values).toEqual(old.values);
++    const latest = res.bounds[1].snapshot;
++    expect({ ...latest.values, rvol: 0 }).toEqual({ ...old.values, rvol: 0 });
++    expect(latest.rvolParity?.legacy).toBe(old.values!.rvol);
++    expect(latest.values!.rvol).toBe(old.values!.volume / latest.rvolParity!.baseline!);
+     expect(res.bounds[0].snapshot.minutesUsed).toEqual(['15:50', '15:51', '15:52', '15:53']);
+   });
+   it('previous IEX values still mismatch TrendSpider on Open, Low, ATR, VWAP, 15m Close (default tolerances)', () => {
+diff --git a/src/engine/automation/__tests__/historicalParityRvol.test.ts b/src/engine/automation/__tests__/historicalParityRvol.test.ts
+new file mode 100644
+index 0000000..3906439
+--- /dev/null
++++ b/src/engine/automation/__tests__/historicalParityRvol.test.ts
+@@ -0,0 +1,171 @@
++import { readdirSync, readFileSync, statSync } from 'node:fs';
++import { join } from 'node:path';
++import { describe, expect, it } from 'vitest';
++import { buildAlertSnapshot } from '../alertSnapshot';
++import { etToEpoch } from '../etTime';
++import { checkHistoricalRequest, historicalParityRvol, intrabarSnapshot, requestWindows, runIntrabarReconstruction, RVOL_PARITY_FORMULA } from '../historicalParity';
++import { rvol, type Bar } from '../indicators';
++import { daysUpTo, minuteBars, toFive } from './fixtures';
++
++/**
++ * Phase 1 — Historical SIP diagnostic RVOL aligned with TrendSpider: RVOL(t) = Volume(t) / SMA20(Volume) ending at t−1.
++ * The live snapshot builder and the shared rvol() keep the legacy same-bar window (asserted below).
++ */
++const D = '2026-10-30';
++const at = (hhmm: string) => etToEpoch(D, hhmm);
++const FIVE = 300_000;
++const MIN1 = minuteBars(daysUpTo(D), { vol: (i) => 1_000 + ((i * 37) % 23) * 120 });
++const BARS5 = toFive(MIN1);
++const req = (alertEt: string) => {
++  const r = checkHistoricalRequest({ symbol: 'VRSK', direction: 'LONG', alertEt }, etToEpoch(D, '19:00'));
++  if (!r.ok) throw new Error(r.errors.join(' '));
++  return r;
++};
++
++/** 20 completed 5m bars ending just before `startHhmm` on D, with the given volumes (oldest first). */
++const priorBars = (startHhmm: string, vols: number[]): Bar[] =>
++  vols.map((v, i) => ({ t: at(startHhmm) - (vols.length - i) * FIVE, o: 1, h: 1, l: 1, c: 1, v }));
++/** Volumes with an exact mean of `sma` that are not all equal (alternating ± spread). */
++const around = (sma: number, spread = 500) => Array.from({ length: 20 }, (_, i) => sma + (i % 2 ? spread : -spread));
++
++describe('TrendSpider-parity RVOL — denominator alignment', () => {
++  it('(1) the current candle is excluded from its own denominator', () => {
++    const hist = priorBars('12:30', around(3_558));
++    const a = historicalParityRvol(hist, at('12:30'), 4_432);
++    const b = historicalParityRvol(hist, at('12:30'), 44_320);
++    expect(a.baseline).toBe(3_558);
++    expect(b.baseline).toBe(3_558); // a 10× current candle does not move the baseline
++    expect(a.value).toBe(4_432 / 3_558);
++    expect(a.formula).toBe(RVOL_PARITY_FORMULA);
++  });
++
++  it('(2) the denominator is exactly the previous 20 completed 5m candles', () => {
++    const vols = Array.from({ length: 25 }, (_, i) => 1_000 + i * 100);
++    const hist = priorBars('12:30', vols);
++    const p = historicalParityRvol(hist, at('12:30'), 5_000);
++    expect(p.baselineBars).toHaveLength(20);
++    expect(p.baselineBars.map((x) => x.v)).toEqual(vols.slice(-20));
++    expect(p.baselineBars[19].t).toBe(at('12:25'));
++    expect(p.baseline).toBe(vols.slice(-20).reduce((a, b) => a + b, 0) / 20);
++    // the 21st-back candle has no effect; the 20th-back does
++    expect(historicalParityRvol(hist.map((b, i) => (i === 4 ? { ...b, v: 1e9 } : b)), at('12:30'), 5_000).baseline).toBe(p.baseline);
++    expect(historicalParityRvol(hist.map((b, i) => (i === 5 ? { ...b, v: 1e9 } : b)), at('12:30'), 5_000).baseline).not.toBe(p.baseline);
++    // a candle at or after the active start never enters (even if a provider returned it)
++    expect(historicalParityRvol([...hist, { t: at('12:30'), o: 1, h: 1, l: 1, c: 1, v: 1e9 }], at('12:30'), 5_000).baseline).toBe(p.baseline);
++  });
++
++  it('fewer than 20 completed candles (or a zero baseline) → null, never a guess', () => {
++    expect(historicalParityRvol(priorBars('12:30', around(3_000).slice(0, 19)), at('12:30'), 100)).toMatchObject({ baseline: null, value: null });
++    expect(historicalParityRvol(priorBars('12:30', new Array(20).fill(0)), at('12:30'), 100).value).toBeNull();
++  });
++
++  it('(3)(4) intrabar: numerator = partial volume up to the cutoff; denominator frozen across EARLIEST / LATEST', () => {
++    const r = req('2026-10-30 12:28');
++    const res = runIntrabarReconstruction(BARS5, MIN1, r, { host: 'h', windows: requestWindows(r) });
++    const [e, l] = res.bounds.map((b) => b.snapshot);
++    const prior20 = BARS5.filter((b) => b.t + FIVE <= at('12:25')).slice(-20);
++    const sma = prior20.reduce((a, b) => a + b.v, 0) / 20;
++    expect(e.rvolParity!.baseline).toBe(sma);
++    expect(l.rvolParity!.baseline).toBe(sma);
++    expect(e.rvolParity!.baselineBars).toEqual(l.rvolParity!.baselineBars);
++    const partial = (until: string) => MIN1.filter((b) => b.t >= at('12:25') && b.t < at(until)).reduce((a, b) => a + b.v, 0);
++    expect(e.rvolParity!.currentVolume).toBe(partial('12:28'));
++    expect(l.rvolParity!.currentVolume).toBe(partial('12:29'));
++    expect(e.values!.rvol).toBe(partial('12:28') / sma);
++    expect(l.values!.rvol).toBe(partial('12:29') / sma);
++    expect(l.values!.rvol).toBeGreaterThan(e.values!.rvol); // only the numerator grows
++  });
++
++  it('the RVOL20 > 1.5 condition is evaluated on the parity value', () => {
++    const r = req('2026-10-30 12:28');
++    for (const b of runIntrabarReconstruction(BARS5, MIN1, r, { host: 'h', windows: requestWindows(r) }).bounds) {
++      expect(b.snapshot.alertConditions.find((c) => c.label === 'RVOL20 > 1.5')?.pass).toBe(b.snapshot.values!.rvol > 1.5);
++    }
++  });
++});
++
++describe('(5)–(10) VRSK examples read off TrendSpider (Volume, prior-candle SMA20 → RVOL)', () => {
++  const CASES: [string, number, number, string][] = [
++    ['12:00', 100, 2_922, '0.034'],
++    ['12:05', 692, 2_864, '0.242'],
++    ['12:10', 658, 2_808, '0.234'],
++    ['12:20', 12_177, 2_797, '4.354'],
++    ['12:25', 6_649, 3_310, '2.009'],
++    ['12:30', 4_432, 3_558, '1.246'],
++  ];
++  for (const [hhmm, vol, sma, ts] of CASES) {
++    it(`VRSK ${hhmm}: ${vol} / ${sma} → TrendSpider ${ts}`, () => {
++      const p = historicalParityRvol(priorBars(hhmm, around(sma)), at(hhmm), vol);
++      expect(p.baseline).toBe(sma);
++      expect(p.value!.toFixed(3)).toBe(ts);
++    });
++  }
++  it('the legacy same-bar formula does NOT reproduce TrendSpider on the same inputs (why the diagnostic changed)', () => {
++    const vols = [...around(2_797), 12_177];
++    expect(rvol(vols, 20)[20]!.toFixed(3)).not.toBe('4.354');
++  });
++  it('VRSK real Alpaca SIP volumes 2026-10-30 (completed candles): 12:30 = 8,181 / 8,111 = 1.0086; 12:25 = 11,336 / 8,021 = 1.4133', () => {
++    // 5m SIP volumes 10:45 … 12:25 ET (regular session), read from Alpaca historical bars during the VRSK diagnostic.
++    const sip = [9536, 11296, 6495, 8834, 5019, 5922, 1515, 2824, 5610, 16602, 13927, 7083, 5609, 12367, 4579, 570, 2132, 2381, 15900, 22219, 11336];
++    const hist = priorBars('12:30', sip);
++    const c1230 = historicalParityRvol(hist, at('12:30'), 8_181);
++    expect(c1230.baseline).toBe(8_111);
++    expect(c1230.value!.toFixed(4)).toBe('1.0086');
++    const c1225 = historicalParityRvol(hist, at('12:25'), 11_336);
++    expect(c1225.baseline).toBe(8_021);
++    expect(c1225.value!.toFixed(4)).toBe('1.4133');
++  });
++});
++
++describe('(11)–(16) everything except RVOL is unchanged', () => {
++  const r = req('2026-10-30 12:28');
++  const res = runIntrabarReconstruction(BARS5, MIN1, r, { host: 'h', windows: requestWindows(r) });
++  it('OHLC, volume, ATR, EMA9, EMA20, RSI, VWAP equal the unchanged builder on [history + partial bar]; 15m equals the alert-time builder', () => {
++    for (const b of res.bounds) {
++      const s = b.snapshot;
++      const hist = BARS5.filter((x) => x.t + FIVE <= at('12:25'));
++      const mins = MIN1.filter((x) => x.t >= at('12:25') && x.t + 60_000 <= Date.parse(s.cutoffIso));
++      const partial: Bar = { t: at('12:25'), o: mins[0].o, h: Math.max(...mins.map((x) => x.h)), l: Math.min(...mins.map((x) => x.l)), c: mins[mins.length - 1].c, v: mins.reduce((a, x) => a + x.v, 0) };
++      const builder = buildAlertSnapshot([...hist, partial], at('12:30'), 'LONG').values!;
++      const at15 = buildAlertSnapshot(hist, r.alertMs, 'LONG').values!;
++      const { rvol: parity, close15m, ema20_15m, ...rest } = s.values!;
++      const { rvol: legacy, close15m: _c, ema20_15m: _e, ...expected } = builder;
++      expect(rest).toEqual(expected);
++      expect([close15m, ema20_15m]).toEqual([at15.close15m, at15.ema20_15m]);
++      expect(s.rvolParity!.legacy).toBe(legacy);
++      expect(parity).not.toBe(legacy);
++    }
++  });
++  it('intrabarSnapshot exposes the same parity value it compares', () => {
++    const s = intrabarSnapshot(BARS5, MIN1, r.alertMs, r.cutoffs[0].ms, 'LONG');
++    expect(s.values!.rvol).toBe(s.rvolParity!.value);
++  });
++});
++
++describe('(17)–(19) live path unchanged', () => {
++  it('(17) the live snapshot builder still uses the legacy same-bar RVOL (current candle inside its own SMA20)', () => {
++    const live = buildAlertSnapshot(BARS5, at('12:30') + 5_000, 'LONG');
++    const bars = BARS5.filter((b) => b.t + FIVE <= at('12:30'));
++    const i = bars.findIndex((b) => b.t === at('12:25'));
++    expect(live.values!.rvol).toBe(rvol(bars.slice(0, i + 1).map((b) => b.v), 20)[i]);
++  });
++  it('the shared rvol() keeps its same-bar definition', () => {
++    const v = [...new Array(19).fill(100), 300];
++    expect(rvol(v, 20)[19]).toBe(300 / ((19 * 100 + 300) / 20));
++  });
++  it('(18)(19) no live module (webhook, queue, decision, ranker, calculator, portfolio, journal) imports the diagnostic', () => {
++    const root = join(__dirname, '..', '..', '..', '..');
++    const files: string[] = [];
++    const walk = (dir: string) => {
++      for (const n of readdirSync(dir)) {
++        const p = join(dir, n);
++        if (statSync(p).isDirectory()) { if (n !== '__tests__' && n !== 'node_modules') walk(p); } else if (/\.(ts|tsx|mts)$/.test(n)) files.push(p);
++      }
++    };
++    walk(join(root, 'src'));
++    walk(join(root, 'netlify'));
++    const allowed = /historicalParity\.ts$|historicalSip\.ts$|rb-historical-parity\.mts$|HistoricalSipTest\.tsx$|automationClient\.ts$/;
++    const importers = files.filter((f) => /from\s+'[^']*historicalParity'/.test(readFileSync(f, 'utf8'))).filter((f) => !allowed.test(f));
++    expect(importers).toEqual([]);
++  });
++});
+diff --git a/src/engine/automation/historicalParity.ts b/src/engine/automation/historicalParity.ts
+index 55c34cc..119b865 100644
+--- a/src/engine/automation/historicalParity.ts
++++ b/src/engine/automation/historicalParity.ts
+@@ -8,6 +8,10 @@
+  *
+  *   • indicators + candle selection → buildAlertSnapshot (alertSnapshot.ts, UNCHANGED), fed the completed 5m history
+  *     plus ONE synthetic partial 5m bar (this file's adapter)
++ *   • RVOL20                         → historicalParityRvol (this file, diagnostic only): TrendSpider's formula,
++ *     current volume ÷ SMA20 of the 20 completed candles BEFORE the active one. The shared rvol() and the live
++ *     snapshot keep their legacy same-bar window (current candle inside its own SMA); that value is reported here
++ *     only as `legacy` for reference.
+  *   • 15m confirmation               → buildAlertSnapshot at the alert time (last COMPLETED 15m candle, unchanged rule)
+  *   • field comparison + tolerances  → compareParity (parity.ts, the Automation-settings tolerances)
+  *   • derived ticket                 → evaluateTrade (tradeCalculator.ts) with the frozen RB v1.1 defaults
+@@ -29,7 +33,7 @@
+ import { RB_V1_DEFAULTS, type RbSettings } from '../settings';
+ import { evaluateTrade, type Action, type Direction, type TradePlan } from '../tradeCalculator';
+ import type { ParityTolerance } from './alertDecision';
+-import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type DataIssue, type SnapshotConfig, type SnapshotResult } from './alertSnapshot';
++import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, regularSessionBars, type DataIssue, type SnapshotConfig, type SnapshotResult } from './alertSnapshot';
+ import { etParts, etToEpoch } from './etTime';
+ import type { Bar } from './indicators';
+ import { previousTradingDates, sessionFor } from './marketCalendar';
+@@ -159,12 +163,46 @@ export function requestWindows(req: Pick<CheckedRequest, 'alertMs' | 'cutoffs'>)
+ 
+ const FIFTEEN_CODES = ['NO_COMPLETED_15M', 'CONFIRM_15M_MISSING', 'CONFIRM_15M_PARTIAL', 'EMA20_15M_UNAVAILABLE'];
+ 
++export const RVOL_PARITY_LENGTH = 20;
++export const RVOL_PARITY_FORMULA = 'current volume / prior-20-bar SMA';
++export const RVOL_LEGACY_LABEL = 'LEGACY RB FORMULA — DIAGNOSTIC ONLY';
++
++export interface ParityRvol {
++  formula: typeof RVOL_PARITY_FORMULA;
++  /** Volume of the active candle up to the cutoff (the whole candle when the cutoff is its end). */
++  currentVolume: number;
++  /** The completed regular-session 5m candles in the denominator, oldest first (exactly 20 when available). */
++  baselineBars: { t: number; v: number }[];
++  /** SMA20 of baselineBars, i.e. the Volume SMA20 ending at the candle BEFORE the active one. */
++  baseline: number | null;
++  /** currentVolume / baseline — the value compared against TrendSpider. */
++  value: number | null;
++  /** The live/shared same-bar formula (current candle inside its own SMA20). Reference only, never compared. */
++  legacy: number | null;
++}
++
++/**
++ * TrendSpider-parity RVOL for the Historical SIP diagnostic only. TrendSpider's displayed values show
++ * RVOL(t) = Volume(t) / SMA20(Volume) ending at t−1: the active candle is NOT in its own baseline. The denominator
++ * depends only on candles that completed before the active candle started, so it stays frozen while the candle forms
++ * and only the numerator grows (earliest / latest bounds share one denominator).
++ * Same bar scope as the snapshot: regular-session 5m bars (regularSessionBars). Fewer than 20 → null (fail closed).
++ */
++export function historicalParityRvol(history5: Bar[], activeStartMs: number, currentVolume: number, legacy: number | null = null): ParityRvol {
++  const prior = regularSessionBars(history5).filter((b) => b.t + FIVE <= activeStartMs).slice(-RVOL_PARITY_LENGTH);
++  const baseline = prior.length === RVOL_PARITY_LENGTH ? prior.reduce((a, b) => a + b.v, 0) / RVOL_PARITY_LENGTH : null;
++  const value = baseline !== null && baseline > 0 && Number.isFinite(currentVolume) ? currentVolume / baseline : null;
++  return { formula: RVOL_PARITY_FORMULA, currentVolume, baselineBars: prior.map((b) => ({ t: b.t, v: b.v })), baseline, value, legacy };
++}
++
+ export interface IntrabarSnapshot extends SnapshotResult {
+   cutoffIso: string;
+   cutoffEt: string;
+   /** 1m bars (start ET) used for the partial signal candle. */
+   minutesUsed: string[];
+   minutesExpected: number;
++  /** RVOL inputs. `values.rvol` is `rvolParity.value`; the legacy same-bar value is kept here for reference only. */
++  rvolParity: ParityRvol | null;
+ }
+ 
+ /**
+@@ -204,6 +242,12 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
+     : null;
+   // Evaluated at the bucket end, the unchanged builder treats the partial bar as the newest completed 5m candle.
+   const s5 = partial ? buildAlertSnapshot([...history, partial], bucket.endMs, direction, config) : null;
++  // RVOL: TrendSpider-parity formula (denominator = the 20 completed candles before the active one). The builder's
++  // same-bar RVOL is kept only as the legacy reference.
++  const rvolParity = partial ? historicalParityRvol(history, bucket.startMs, partial.v, s5?.values?.rvol ?? null) : null;
++  if (s5?.values && rvolParity?.value == null) {
++    own.push({ kind: 'INCOMPLETE', code: 'RVOL_PARITY_BASELINE_UNAVAILABLE', message: `TrendSpider-parity RVOL needs ${RVOL_PARITY_LENGTH} completed regular-session 5m candles before ${etParts(bucket.startMs).hhmm} ET with volume > 0 (found ${rvolParity?.baselineBars.length ?? 0}).` });
++  }
+ 
+   const issues: DataIssue[] = [
+     ...own,
+@@ -216,9 +260,13 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
+     issues.push({ kind: 'INCOMPLETE', code: 'CONFIRM_15M_UNAVAILABLE', message: `15m Close / EMA20 for ${s15.confirm15m.label} could not be computed from the completed history (${s15.issues.filter((i) => i.kind === 'INCOMPLETE').map((i) => i.code).join(', ') || 'insufficient data'}).` });
+   }
+   const complete = !issues.some((i) => i.kind === 'INCOMPLETE') && !!s5?.values && !!v15;
+-  const values = complete ? { ...s5!.values!, close15m: v15!.close15m, ema20_15m: v15!.ema20_15m } : null;
++  const parityRvol = rvolParity?.value as number;
++  const values = complete ? { ...s5!.values!, rvol: parityRvol, close15m: v15!.close15m, ema20_15m: v15!.ema20_15m } : null;
+   const alertConditions = complete
+-    ? [...s5!.alertConditions.filter((c) => !c.label.startsWith('15m')), ...s15.alertConditions.filter((c) => c.label.startsWith('15m'))]
++    ? [
++        ...s5!.alertConditions.filter((c) => !c.label.startsWith('15m')).map((c) => (c.label.startsWith('RVOL20') ? { ...c, pass: parityRvol > 1.5 } : c)),
++        ...s15.alertConditions.filter((c) => c.label.startsWith('15m')),
++      ]
+     : [];
+   const failed = alertConditions.filter((c) => !c.pass).map((c) => c.label);
+   if (failed.length) issues.push({ kind: 'REVIEW', code: 'ALERT_NOT_REPRODUCED', message: `TrendSpider fired the ${direction} alert, but the reconstructed values do not satisfy: ${failed.join('; ')}.` });
+@@ -239,6 +287,7 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
+     cutoffEt: etParts(cutoff).hhmmss,
+     minutesUsed: mins.map((b) => etParts(b.t).hhmm),
+     minutesExpected,
++    rvolParity,
+   };
+ }
+ 
+@@ -334,7 +383,7 @@ export function runIntrabarReconstruction(
+   if (req.precision === 'APPROXIMATE_MINUTE') {
+     notices.push({ kind: 'REVIEW', code: 'APPROXIMATE_INTRABAR_RECONSTRUCTION', message: `Seconds unknown: the alert fired somewhere in ${etParts(req.cutoffs[0].ms).hhmm}:00–:59. Shown as a bracket of the earliest and latest possible state.` });
+   }
+-  notices.push({ kind: 'REVIEW', code: 'RVOL_SEMANTICS_UNDER_VALIDATION', message: 'RVOL uses the partial candle volume up to the cutoff ÷ the unchanged SMA(20) baseline. Whether TrendSpider evaluates RVOL on the partial or the completed candle is not yet established.' });
++  notices.push({ kind: 'REVIEW', code: 'RVOL_SEMANTICS_UNDER_VALIDATION', message: 'RVOL = active-candle volume up to the cutoff ÷ SMA20 of the 20 completed 5m candles before the active candle (TrendSpider formula; the denominator is fixed for the whole candle). The formula matches TrendSpider; the VOLUME DATA does not necessarily — TrendSpider volume can differ materially from Alpaca SIP.' });
+   return {
+     mode: 'HISTORICAL_DIAGNOSTIC',
+     reconstruction: 'INTRABAR',

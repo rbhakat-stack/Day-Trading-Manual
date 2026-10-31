@@ -125,7 +125,7 @@ curl -X POST https://<your-site>.netlify.app/.netlify/functions/trendspider-aler
 | Indicators | Bars up to and including the signal candle only; ≥ 100 bars of history required (6 trading days fetched) |
 | EMA9 / EMA20 | α = 2/(n+1), seeded with an SMA |
 | RSI14 / ATR14 | Wilder (RMA) smoothing, SMA-seeded |
-| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1). |
+| RVOL20 | Volume ÷ SMA(Volume, 20), current bar included (TrendSpider Relative Volume, Length 20, SMA, Base 1). **Known difference:** TrendSpider's denominator is the SMA20 ending at the *previous* bar (current bar excluded). Live RB v1.1 is frozen and unchanged; only the Historical SIP diagnostic uses the TrendSpider formula (section 9). |
 | VWAP | HLC3. **SESSION** (default, resets 09:30) or **ROLLING_14** — TrendSpider's `VWAP(14, 0, HLC3)` meaning is an open VERIFY item; both values are shown and the parity screen decides |
 | 15m confirmation | Last **fully completed** regular-session 15m candle at the alert time (`lastCompleted15mCandle`, same function as the manual calculator): 10:07 → 09:45–10:00 · 10:18 → 10:00–10:15 · 14:40 → 14:15–14:30 · 15:40 → 15:15–15:30 (15:40 also hard-fails the entry window). 15m bars are aggregated from the 5m bars |
 | Consistency check | The six TrendSpider alert conditions are re-checked on the automated values; if TrendSpider fired but the automated data disagrees → *DATA MISMATCH — MANUAL REVIEW* |
@@ -268,14 +268,32 @@ separate decision, to be made only after enough parity evidence.
   * close = last close
   * volume = summed volume up to the cutoff
 * It is appended to the completed 5m history.
-* The **unchanged** `buildAlertSnapshot`, and therefore the unchanged EMA / Wilder RSI / ATR / RVOL / VWAP functions,
-  computes O/H/L/C, ATR14, EMA9, EMA20, RSI14, RVOL20 and VWAP with that partial bar as the newest bar.
-* No formula is duplicated.
+* The **unchanged** `buildAlertSnapshot`, and therefore the unchanged EMA / Wilder RSI / ATR / VWAP functions,
+  computes O/H/L/C, ATR14, EMA9, EMA20, RSI14 and VWAP with that partial bar as the newest bar.
+* RVOL20 is the one exception: it uses the diagnostic-only `historicalParityRvol` (below), not the shared same-bar
+  `rvol()`.
 * VWAP uses the configured mode (SESSION by default) over the same bars, so only volume up to the cutoff counts.
 
-**RVOL** = partial-candle volume ÷ the unchanged SMA(20) baseline, with the current bar included as before. Whether
-TrendSpider's alert evaluates RVOL on the partial or the completed candle is **not established**, so every result
-carries **RVOL SEMANTICS UNDER VALIDATION**. Compare the earliest and latest bounds against TrendSpider to decide.
+**RVOL: TrendSpider-parity formula (diagnostic only).** TrendSpider's displayed Volume, Volume SMA20 and Relative
+Volume values (VRSK, 6 consecutive completed candles) show:
+
+`RVOL(t) = Volume(t) ÷ SMA20(Volume) ending at t−1`
+
+That is, the current candle is **not** in its own baseline. The diagnostic uses exactly that:
+
+* **Numerator:** active-candle volume up to the cutoff (the whole candle when the cutoff is its end).
+* **Denominator:** SMA of the 20 completed regular-session 5m candles **before** the active candle. It depends only
+  on candles that finished before the active one started, so it is **frozen** for the whole candle. The earliest and
+  latest bounds share it; only the numerator grows.
+* **Fewer than 20 completed candles:** `RVOL_PARITY_BASELINE_UNAVAILABLE`, fail closed.
+* **Alert condition:** `RVOL20 > 1.5` in the diagnostic is evaluated on this value.
+
+The parity table compares TrendSpider's RVOL with this **TrendSpider-parity SIP RVOL** and nothing else. The old
+same-bar value is shown beside it as *LEGACY RB FORMULA — DIAGNOSTIC ONLY*, for reference.
+
+**Formula parity is not data parity.** TrendSpider's volume series can differ materially from Alpaca SIP. On VRSK
+12:25, TrendSpider shows 6,649 shares and SIP has 11,336. No scaling or vendor correction is applied. Every result
+still carries **RVOL SEMANTICS UNDER VALIDATION** until the cross-ticker volume study is done.
 
 **15m confirmation is unchanged.** It is the last fully completed 15m candle at the alert time (the same rule and code
 as live), computed only from completed history. At 15:44 it is 15:15–15:30, because 15:30–15:45 is still forming.
@@ -292,7 +310,8 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
 * **IBM ≈ 15:54 LONG.**
   * Active candle 15:50–15:55, 15m candle 15:30–15:45.
   * The **latest** bound includes all five minutes, so it equals the completed 15:50–15:55 candle that previously
-    matched all 12 TrendSpider values (a regression test asserts the identity on synthetic data).
+    matched all 12 TrendSpider values (a regression test asserts the identity on synthetic data). RVOL is the
+    exception: it now uses the TrendSpider-parity formula, so it differs slightly from that earlier value.
   * The **earliest** bound (through 15:54:00) omits the 15:54 minute. High, low, close, volume, RVOL and VWAP can
     differ by whatever traded in that last minute. If TrendSpider matches the latest bound and not the earliest, the
     alert fired late in the 15:54 minute, or TrendSpider values the candle as of its close.
@@ -324,7 +343,7 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
   * network
   * missing bars, or insufficient lookback (from the snapshot)
 * **No secrets in responses.** Provider messages are sanitised, and keys never appear in responses or logs.
-* **No persistence.** Results are kept only in your browser (`rbv1.diagnostics.historicalSip.v2`), apart from all
+* **No persistence.** Results are kept only in your browser (`rbv1.diagnostics.historicalSip.v3`), apart from all
   live keys.
 
 ### Interpreting the results
@@ -354,7 +373,10 @@ as live), computed only from completed history. At 15:44 it is 15:15–15:30, be
   trades. Alpaca's 5m bar is assumed to equal the aggregate of its 1m bars.
 * **Early session.** Alerts before 09:45 have no completed 15m candle, so the result is incomplete. That is consistent
   with the live rule, and RB v1 does not trade before 09:45 anyway.
-* **RVOL semantics** remain under validation (see above).
+* **Odd-lot-only minutes.** Alpaca emits no 1m bar for a minute that contains only odd-lot trades, so that volume is
+  missing from both the 1m and the 5m bars. On VRSK 2026-10-30, 10:50–12:35, this lost 6,609 of 177,010 shares. Such a
+  minute can also raise INTRABAR_MINUTES_MISSING even though trades did occur.
+* **RVOL:** the formula matches TrendSpider; the volume data may not (see above).
 
 ### Rollback
 

@@ -8,6 +8,10 @@
  *
  *   • indicators + candle selection → buildAlertSnapshot (alertSnapshot.ts, UNCHANGED), fed the completed 5m history
  *     plus ONE synthetic partial 5m bar (this file's adapter)
+ *   • RVOL20                         → historicalParityRvol (this file, diagnostic only): TrendSpider's formula,
+ *     current volume ÷ SMA20 of the 20 completed candles BEFORE the active one. The shared rvol() and the live
+ *     snapshot keep their legacy same-bar window (current candle inside its own SMA); that value is reported here
+ *     only as `legacy` for reference.
  *   • 15m confirmation               → buildAlertSnapshot at the alert time (last COMPLETED 15m candle, unchanged rule)
  *   • field comparison + tolerances  → compareParity (parity.ts, the Automation-settings tolerances)
  *   • derived ticket                 → evaluateTrade (tradeCalculator.ts) with the frozen RB v1.1 defaults
@@ -29,7 +33,7 @@
 import { RB_V1_DEFAULTS, type RbSettings } from '../settings';
 import { evaluateTrade, type Action, type Direction, type TradePlan } from '../tradeCalculator';
 import type { ParityTolerance } from './alertDecision';
-import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type DataIssue, type SnapshotConfig, type SnapshotResult } from './alertSnapshot';
+import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, regularSessionBars, type DataIssue, type SnapshotConfig, type SnapshotResult } from './alertSnapshot';
 import { etParts, etToEpoch } from './etTime';
 import type { Bar } from './indicators';
 import { previousTradingDates, sessionFor } from './marketCalendar';
@@ -159,12 +163,46 @@ export function requestWindows(req: Pick<CheckedRequest, 'alertMs' | 'cutoffs'>)
 
 const FIFTEEN_CODES = ['NO_COMPLETED_15M', 'CONFIRM_15M_MISSING', 'CONFIRM_15M_PARTIAL', 'EMA20_15M_UNAVAILABLE'];
 
+export const RVOL_PARITY_LENGTH = 20;
+export const RVOL_PARITY_FORMULA = 'current volume / prior-20-bar SMA';
+export const RVOL_LEGACY_LABEL = 'LEGACY RB FORMULA — DIAGNOSTIC ONLY';
+
+export interface ParityRvol {
+  formula: typeof RVOL_PARITY_FORMULA;
+  /** Volume of the active candle up to the cutoff (the whole candle when the cutoff is its end). */
+  currentVolume: number;
+  /** The completed regular-session 5m candles in the denominator, oldest first (exactly 20 when available). */
+  baselineBars: { t: number; v: number }[];
+  /** SMA20 of baselineBars, i.e. the Volume SMA20 ending at the candle BEFORE the active one. */
+  baseline: number | null;
+  /** currentVolume / baseline — the value compared against TrendSpider. */
+  value: number | null;
+  /** The live/shared same-bar formula (current candle inside its own SMA20). Reference only, never compared. */
+  legacy: number | null;
+}
+
+/**
+ * TrendSpider-parity RVOL for the Historical SIP diagnostic only. TrendSpider's displayed values show
+ * RVOL(t) = Volume(t) / SMA20(Volume) ending at t−1: the active candle is NOT in its own baseline. The denominator
+ * depends only on candles that completed before the active candle started, so it stays frozen while the candle forms
+ * and only the numerator grows (earliest / latest bounds share one denominator).
+ * Same bar scope as the snapshot: regular-session 5m bars (regularSessionBars). Fewer than 20 → null (fail closed).
+ */
+export function historicalParityRvol(history5: Bar[], activeStartMs: number, currentVolume: number, legacy: number | null = null): ParityRvol {
+  const prior = regularSessionBars(history5).filter((b) => b.t + FIVE <= activeStartMs).slice(-RVOL_PARITY_LENGTH);
+  const baseline = prior.length === RVOL_PARITY_LENGTH ? prior.reduce((a, b) => a + b.v, 0) / RVOL_PARITY_LENGTH : null;
+  const value = baseline !== null && baseline > 0 && Number.isFinite(currentVolume) ? currentVolume / baseline : null;
+  return { formula: RVOL_PARITY_FORMULA, currentVolume, baselineBars: prior.map((b) => ({ t: b.t, v: b.v })), baseline, value, legacy };
+}
+
 export interface IntrabarSnapshot extends SnapshotResult {
   cutoffIso: string;
   cutoffEt: string;
   /** 1m bars (start ET) used for the partial signal candle. */
   minutesUsed: string[];
   minutesExpected: number;
+  /** RVOL inputs. `values.rvol` is `rvolParity.value`; the legacy same-bar value is kept here for reference only. */
+  rvolParity: ParityRvol | null;
 }
 
 /**
@@ -204,6 +242,12 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
     : null;
   // Evaluated at the bucket end, the unchanged builder treats the partial bar as the newest completed 5m candle.
   const s5 = partial ? buildAlertSnapshot([...history, partial], bucket.endMs, direction, config) : null;
+  // RVOL: TrendSpider-parity formula (denominator = the 20 completed candles before the active one). The builder's
+  // same-bar RVOL is kept only as the legacy reference.
+  const rvolParity = partial ? historicalParityRvol(history, bucket.startMs, partial.v, s5?.values?.rvol ?? null) : null;
+  if (s5?.values && rvolParity?.value == null) {
+    own.push({ kind: 'INCOMPLETE', code: 'RVOL_PARITY_BASELINE_UNAVAILABLE', message: `TrendSpider-parity RVOL needs ${RVOL_PARITY_LENGTH} completed regular-session 5m candles before ${etParts(bucket.startMs).hhmm} ET with volume > 0 (found ${rvolParity?.baselineBars.length ?? 0}).` });
+  }
 
   const issues: DataIssue[] = [
     ...own,
@@ -216,9 +260,13 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
     issues.push({ kind: 'INCOMPLETE', code: 'CONFIRM_15M_UNAVAILABLE', message: `15m Close / EMA20 for ${s15.confirm15m.label} could not be computed from the completed history (${s15.issues.filter((i) => i.kind === 'INCOMPLETE').map((i) => i.code).join(', ') || 'insufficient data'}).` });
   }
   const complete = !issues.some((i) => i.kind === 'INCOMPLETE') && !!s5?.values && !!v15;
-  const values = complete ? { ...s5!.values!, close15m: v15!.close15m, ema20_15m: v15!.ema20_15m } : null;
+  const parityRvol = rvolParity?.value as number;
+  const values = complete ? { ...s5!.values!, rvol: parityRvol, close15m: v15!.close15m, ema20_15m: v15!.ema20_15m } : null;
   const alertConditions = complete
-    ? [...s5!.alertConditions.filter((c) => !c.label.startsWith('15m')), ...s15.alertConditions.filter((c) => c.label.startsWith('15m'))]
+    ? [
+        ...s5!.alertConditions.filter((c) => !c.label.startsWith('15m')).map((c) => (c.label.startsWith('RVOL20') ? { ...c, pass: parityRvol > 1.5 } : c)),
+        ...s15.alertConditions.filter((c) => c.label.startsWith('15m')),
+      ]
     : [];
   const failed = alertConditions.filter((c) => !c.pass).map((c) => c.label);
   if (failed.length) issues.push({ kind: 'REVIEW', code: 'ALERT_NOT_REPRODUCED', message: `TrendSpider fired the ${direction} alert, but the reconstructed values do not satisfy: ${failed.join('; ')}.` });
@@ -239,6 +287,7 @@ export function intrabarSnapshot(hist5: Bar[], min1: Bar[], alertMs: number, cut
     cutoffEt: etParts(cutoff).hhmmss,
     minutesUsed: mins.map((b) => etParts(b.t).hhmm),
     minutesExpected,
+    rvolParity,
   };
 }
 
@@ -334,7 +383,7 @@ export function runIntrabarReconstruction(
   if (req.precision === 'APPROXIMATE_MINUTE') {
     notices.push({ kind: 'REVIEW', code: 'APPROXIMATE_INTRABAR_RECONSTRUCTION', message: `Seconds unknown: the alert fired somewhere in ${etParts(req.cutoffs[0].ms).hhmm}:00–:59. Shown as a bracket of the earliest and latest possible state.` });
   }
-  notices.push({ kind: 'REVIEW', code: 'RVOL_SEMANTICS_UNDER_VALIDATION', message: 'RVOL uses the partial candle volume up to the cutoff ÷ the unchanged SMA(20) baseline. Whether TrendSpider evaluates RVOL on the partial or the completed candle is not yet established.' });
+  notices.push({ kind: 'REVIEW', code: 'RVOL_SEMANTICS_UNDER_VALIDATION', message: 'RVOL = active-candle volume up to the cutoff ÷ SMA20 of the 20 completed 5m candles before the active candle (TrendSpider formula; the denominator is fixed for the whole candle). The formula matches TrendSpider; the VOLUME DATA does not necessarily — TrendSpider volume can differ materially from Alpaca SIP.' });
   return {
     mode: 'HISTORICAL_DIAGNOSTIC',
     reconstruction: 'INTRABAR',

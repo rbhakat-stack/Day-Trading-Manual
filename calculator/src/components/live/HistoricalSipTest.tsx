@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { ParityTolerance } from '../../engine/automation/alertDecision';
-import { compareHistorical, DERIVED_LABEL, DIAGNOSTIC_LABEL, type CutoffKey, type HistoricalResult, type Precision } from '../../engine/automation/historicalParity';
+import { compareHistorical, DERIVED_LABEL, DIAGNOSTIC_LABEL, RVOL_LEGACY_LABEL, RVOL_PARITY_FORMULA, type CutoffKey, type HistoricalResult, type Precision } from '../../engine/automation/historicalParity';
+import { etParts } from '../../engine/automation/etTime';
 import { PARITY_FIELDS, PARITY_LABELS, type ParityField } from '../../engine/automation/parity';
 import { historicalRequestBody, runHistoricalSip, usePersistent } from '../../lib/automationClient';
 import { Panel } from '../ui';
@@ -8,9 +9,9 @@ import { Panel } from '../ui';
 /**
  * HISTORICAL SIP PARITY TEST — diagnostic only, INTRABAR reconstruction. Kept apart from the live queue: it reads no
  * alert records, writes no candidates, positions, journal entries or parity entries, and its state lives under its
- * own browser key (v2: the intrabar result shape).
+ * own browser key (v3: TrendSpider-parity RVOL; a v2 result holds the legacy RVOL and is not reloaded).
  */
-const KEY = 'rbv1.diagnostics.historicalSip.v2';
+const KEY = 'rbv1.diagnostics.historicalSip.v3';
 
 interface Saved {
   form: { symbol: string; direction: 'LONG' | 'SHORT'; alertEt: string; label: string; precision: 'EXACT' | 'MINUTE' };
@@ -176,7 +177,7 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 {PARITY_FIELDS.map((f) => (
                   <label key={f} className="block text-xs">
-                    <span className="mb-0.5 block uppercase tracking-wider text-ink-400">{PARITY_LABELS[f]}</span>
+                    <span className="mb-0.5 block uppercase tracking-wider text-ink-400">{f === 'rvol' ? `${PARITY_LABELS[f]} (TrendSpider-parity)` : PARITY_LABELS[f]}</span>
                     <span className="num block text-[13px] text-ink-100">{bounds.map((b) => (b.snapshot.values ? f4(b.snapshot.values[f]) : '—')).join(' … ')}</span>
                     <input inputMode="decimal" placeholder="TrendSpider" value={ts[f] ?? ''} onChange={(e) => setSaved((s) => ({ ...s, ts: { ...s.ts, [f]: e.target.value } }))} className={`${box} mt-0.5`} />
                   </label>
@@ -204,7 +205,7 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
                       <tbody>
                         {rows.map((r) => (
                           <tr key={r.field} className="border-t border-ink-700/60">
-                            <td className="px-2 py-1 font-sans">{PARITY_LABELS[r.field]}</td>
+                            <td className="px-2 py-1 font-sans">{r.field === 'rvol' ? `${PARITY_LABELS[r.field]} (TrendSpider-parity SIP)` : PARITY_LABELS[r.field]}</td>
                             <td className="px-2 py-1">{r.trendSpider}</td>
                             {r.perBound.map((x, i) =>
                               x ? (
@@ -228,6 +229,42 @@ export function HistoricalSipTest({ token, tol }: { token: string; tol: ParityTo
                   </div>
                   {bracketed && <p className="mt-2 text-xs text-ink-400">Bracketed: PASS = within tolerance of at least one bound. BETWEEN BOUNDS = between the earliest and latest state but within tolerance of neither (cannot be resolved with 1-minute data).</p>}
                 </>
+              )}
+              {bounds.some((b) => b.snapshot.rvolParity) && (
+                <div className="mt-4 rounded border border-ink-700 p-3">
+                  <p className="text-sm font-bold text-ink-100">TrendSpider-parity SIP RVOL — calculated as <span className="num">{RVOL_PARITY_FORMULA}</span></p>
+                  <p className="text-xs text-ink-400">This is the RVOL value in the comparison above. The prior-20 SMA ends at the candle before {result.timing.activeLabel}, so it is the same for every bound; only the current volume grows while the candle forms.</p>
+                  <dl className="mt-2 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+                    {bounds.map((b) => {
+                      const p = b.snapshot.rvolParity;
+                      if (!p) return null;
+                      const tag = bracketed ? ` (${b.key.toLowerCase()})` : '';
+                      return [
+                        <div key={`${b.key}-p`} className="flex gap-2">
+                          <dt className="text-ink-400">Parity RVOL{tag}:</dt>
+                          <dd className="num font-semibold text-ink-100">
+                            {p.value === null ? 'unavailable' : `${p.currentVolume.toLocaleString()} / ${p.baseline!.toFixed(2)} = ${f4(p.value)}`}
+                          </dd>
+                        </div>,
+                        <div key={`${b.key}-l`} className="flex gap-2">
+                          <dt className="text-ink-400">Legacy RVOL{tag}:</dt>
+                          <dd className="num text-ink-300">
+                            {p.legacy === null ? '—' : f4(p.legacy)} <span className="font-sans text-[11px] font-bold text-warn">{RVOL_LEGACY_LABEL}</span>
+                          </dd>
+                        </div>,
+                      ];
+                    })}
+                  </dl>
+                  {(() => {
+                    const p = bounds.find((b) => b.snapshot.rvolParity?.baselineBars.length)?.snapshot.rvolParity;
+                    return p ? (
+                      <p className="num mt-2 text-xs text-ink-400">
+                        Prior-20 baseline ({p.baselineBars.length} completed 5m candles, ET start): {p.baselineBars.map((x) => `${etParts(x.t).hhmm} ${x.v.toLocaleString()}`).join(' · ')}
+                      </p>
+                    ) : null;
+                  })()}
+                  <p className="mt-2 text-xs text-ink-400">Legacy = current volume ÷ SMA20 including the current candle (the live RB v1.1 formula, unchanged). It is shown for reference only and is never compared with TrendSpider. Formula parity is not data parity: TrendSpider volume can differ materially from Alpaca SIP.</p>
+                </div>
               )}
             </Panel>
           ) : (

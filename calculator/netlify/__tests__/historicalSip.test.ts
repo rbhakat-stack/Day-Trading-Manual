@@ -115,7 +115,9 @@ describe('runHistoricalSipTest', () => {
     if (!out.ok) throw new Error(out.errors.join());
     expect(out.result.timing).toMatchObject({ activeLabel: '15:50–15:55', confirm15mLabel: '15:30–15:45' });
     expect(out.result.precision).toBe('APPROXIMATE_MINUTE');
-    expect(out.result.bounds[1].snapshot.values).toEqual(buildAlertSnapshot(BARS, etToEpoch(D, '15:55:10'), 'LONG').values);
+    const old = buildAlertSnapshot(BARS, etToEpoch(D, '15:55:10'), 'LONG').values!;
+    expect({ ...out.result.bounds[1].snapshot.values, rvol: 0 }).toEqual({ ...old, rvol: 0 }); // RVOL: parity formula (tested in historicalParity.test.ts)
+    expect(out.result.bounds[1].snapshot.rvolParity?.legacy).toBe(old.rvol);
     expect(out.result.bounds[0].snapshot.minutesUsed).toEqual(['15:50', '15:51', '15:52', '15:53']);
     expect(out.result).toMatchObject({ mode: 'HISTORICAL_DIAGNOSTIC', provider: { name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets' }, request: { currentPriceFetched: false }, testLabel: 'IBM parity' });
     expect(out.result.bounds.every((b) => b.derived)).toBe(true);
