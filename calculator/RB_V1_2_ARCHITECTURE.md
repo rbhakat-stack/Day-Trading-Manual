@@ -456,3 +456,25 @@ Because the webhook gains authority, **rotate the webhook token at promotion**. 
    * **To resolve before promotion:** an independent v1.2 geometry reconstruction.
 7. **`alert_time` in the payload.** TrendSpider never sends it. If a manual payload carries one, the v1.1 snapshot candle can differ from the v1.2 receipt-mapped candle. That is flagged `SIGNAL_CANDLE_MISMATCH` (integrity, DATA REVIEW).
 8. **Server stamping.** New records keep `versions.strategy = RB v1.1` (`ACTIVE_LOGIC_VERSION`). Promotion changes that constant, and is a separate approval.
+
+---
+
+## 24. Implementation notes — Phase 3B step 6 (ranker, shadow only)
+
+1. **Opt-in mechanism.**
+   * An optional `Candidate.qualification` (TrendSpider source, rule set, proven RVOL minimum, waived rules) replaces the `rvolMode` setting planned in §21.
+   * Only the v1.2 shadow builder sets it, on non-persisted copies of v1.1 candidates. v1.1 candidates and saved Ranker settings are untouched.
+   * `rankerSettings.ts` is unchanged.
+2. **Waived calculator state.**
+   * The shared calculator's `INVALID_CANDLE_DIRECTION` and `HTF_CONFIRMATION_FAILED` are removed on the v1.2 copy.
+   * The action and ready flag are re-derived with the calculator's own branch rules: not crossed → stop order (ready); crossed within the chase limit → `MARKET_LATE_ENTRY`; any other fail → not ready.
+   * The plan is the calculator's, unchanged.
+3. **Scoring ceiling.** With the provisional floor, the maximum achievable score is 91 (6 + 85). This is the main input to the Phase 3C scoring decision.
+4. **Reconstruction dependency, and the smallest proposed Phase 3C fix.**
+   * `buildAlertSnapshot` marks `RVOL20_UNAVAILABLE` as INCOMPLETE, so the snapshot has no values. There is then no v1.1 candidate, and so no v1.2 candidate, although v1.2 scoring does not use RVOL.
+   * VWAP, EMA, RSI and 15m remain genuinely required by the existing trend, location and momentum components.
+   * **Proposal:**
+     * Add an optional `SnapshotConfig.optionalIndicators` (default empty, so v1.1 is unchanged). The v1.2 server audit calls the unchanged builder a second time with `['RVOL20']` optional.
+     * Store those values as `v12.reconstruction`.
+     * Build v1.2 candidates from `v12.reconstruction` when the v1.1 candidate is absent.
+   * This is one optional config field in a shared file, so it needs approval.

@@ -561,6 +561,41 @@ Excluded from CP0:
 
 ---
 
+## CR-009 — Phase 3B step 6: RB v1.2 ranker path (shadow only)
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-31 |
+| Commits | `1e09ee7` (code), `40fa03e` (replay research tool and outputs). Branch `rb-v1.2-phase3b`, not pushed |
+| Live behaviour changed | **No.** v1.1 scoring is byte-for-byte unchanged: the sha256 of the full `rankCandidates` output matches across 24 scenarios, against a golden produced by the pre-step-6 ranker (`dd74339`, exported with `git archive`). Every existing ranker, queue and freeze test passes unmodified |
+| Shared files | `opportunityTypes.ts` (optional `Candidate.qualification`), `opportunityScorer.ts` (QUALIFIED_FLOOR branch), `candidateRanker.ts` (TrendSpider-owned candle and 15m rules; RVOL not required, **only** for qualified candidates). `rankerSettings.ts` is **unchanged**: a candidate-level flag replaces the planned settings mode, so nothing can leak into saved settings |
+| Production risk | **LOW.** Every new branch requires `qualification`, which only the v1.2 shadow builder sets on non-persisted copies |
+
+**v1.2 scoring (provisional, shadow only):**
+* RVOL = the band of the proven 1.5 threshold, i.e. **6/15** (QUALIFIED_FLOOR). It is independent of SIP RVOL; tests cover 1.0, 1.413, 2.2, 5.0 and missing.
+* A SIP candle-direction or 15m disagreement never hard-fails.
+* The calculator's SIP candle/15m hard rules are waived on the v1.2 copy. The branch logic mirrors `evaluateTrade`, and the plan is unchanged.
+* Only qualified records that reach the scoring stage enter the v1.2 pool.
+* No thresholds, weights or other components changed.
+
+**Tests:** 646 passed (597 + 49), across 22 files. `npm run typecheck`: pass. `npm run build`: pass.
+
+**Replay** (`tools/v12ScoreReplay.ts`):
+* **Sample:** 38 candles from the Phase 2 master sample that close at or before 15:30 (real SIP, 3 days). Only 1 is genuine (VRSK 10-30 12:25); 37 are HYPOTHETICAL.
+* **Deltas:** where both versions score (20 candles), the delta is always −6, 0 or +6 (the floor 6 against SIP bands 12, 6 or 0). Median +6, mean +3.0.
+* **Threshold crossings:** none, at 85 or 90, in either direction. The sample contains no candidate scoring ≥ 80 except one at 80.
+* **Newly scored:** 18 candles that v1.1 could not score (a SIP 15m or candle hard fail) are scored in v1.2.
+* **Genuine VRSK:** 72 → 78 (SKIP → LOW_PRIORITY).
+* **Structural finding:** with RVOL fixed at 6, the maximum achievable score falls from 100 to **91**. ELITE (≥ 90) then needs at least 84 of the other 85 points.
+
+**Reconstruction dependency:** no replay candidate hit it. A v1.2 candidate is a copy of the v1.1 candidate, which needs complete snapshot values. `RVOL20_UNAVAILABLE` nulls those values, so v1.2 cannot score a qualified alert that does not need RVOL. VWAP, EMA, RSI and 15m are genuinely required by the existing trend, location and momentum components. Proposed smallest Phase 3C fix: see `RB_V1_2_ARCHITECTURE.md` §24.
+
+**Rollback:** `git revert 40fa03e 1e09ee7`. Code and research data only; v1.1 is unaffected either way.
+
+**Proposed commit (docs):** `docs: record Phase 3B step 6 (v1.2 ranker shadow path)`
+
+---
+
 ## CP0 — Rollback baseline before Phase 3B (2026-10-31)
 
 * **Branch:** `rb-v1.2-phase3b`, created from `main` at `3696669`. **Not pushed.**
