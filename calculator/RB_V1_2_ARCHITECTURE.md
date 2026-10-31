@@ -432,3 +432,27 @@ Because the webhook gains authority, **rotate the webhook token at promotion**. 
 6. Genuine-alert evidence is thin (6 alerts, 1 SHORT). Shadow mode adds more.
 7. The seven TrendSpider support questions from Phase 2.5 (see the change log).
 8. Follow-up outside 3B: the Historical SIP diagnostic's intrabar mode predates the candle-close finding; a completed-candle mode would make it consistent with v1.2.
+
+---
+
+## 23. Implementation notes — Phase 3B steps 1–5 (clarifications, not deviations)
+
+1. **Module names.**
+   * The trust boundary lives in `v12/ruleSets.ts`.
+   * Parity classification lives in `v12/parityDiagnostics.ts` (§21 planned it as `qualification.ts`).
+   * Two modules were added: `v12/audit.ts` (audit schema, integrity codes) and `v12/dispatch.ts`.
+2. **Dedupe during shadow mode.**
+   * v1.1 is still active, so the v1.2 key is **recorded, not enforced**.
+   * A record whose v1.2 key already exists is stored exactly as v1.1 would store it. Its audit gets `duplicateOf`, and the v1.2 shadow decision treats it as DUPLICATE.
+   * "Check both keys" (§7) applies from promotion onward.
+3. **Entry window.** v1.2 evaluates the window on the **mapped signal-candle close** (when TrendSpider evaluated the alert). v1.1 evaluates it on the receipt time.
+4. **Scoring before step 6.**
+   * The v1.1 ranker gives no score after a SIP candle or 15m hard fail, and keeps records with any snapshot issue out of allocation.
+   * Until the v1.2 ranking pass exists, the v1.2 decision uses the v1.1 ranking only when neither applies. Otherwise it reports **QUALIFIED — SCORE PENDING**, with no ticket.
+5. **Waived SIP vetoes.** The shared calculator's `INVALID_CANDLE_DIRECTION` and `HTF_CONFIRMATION_FAILED` hard rules re-check TrendSpider conditions on SIP. For qualified alerts they are waived and reported as `SIP_VETO_WAIVED:*` warnings. The calculator itself is unchanged, and the ticket is its unchanged plan.
+6. **Reconstruction source.**
+   * v1.2 reuses the v1.1 snapshot's values: the same mapped candle and the same bars.
+   * The v1.1 snapshot drops all values when *any* indicator is unavailable, so in that rare case (zero-volume history, or missing 15m bars) v1.2 reports `RECONSTRUCTION_INCOMPLETE`, not an indicator note.
+   * **To resolve before promotion:** an independent v1.2 geometry reconstruction.
+7. **`alert_time` in the payload.** TrendSpider never sends it. If a manual payload carries one, the v1.1 snapshot candle can differ from the v1.2 receipt-mapped candle. That is flagged `SIGNAL_CANDLE_MISMATCH` (integrity, DATA REVIEW).
+8. **Server stamping.** New records keep `versions.strategy = RB v1.1` (`ACTIVE_LOGIC_VERSION`). Promotion changes that constant, and is a separate approval.

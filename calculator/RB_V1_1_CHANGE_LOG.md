@@ -532,6 +532,35 @@ Excluded from CP0:
 
 ---
 
+## CR-008 — Phase 3B steps 1–5: RB v1.2 core (shadow only)
+
+| Field | Value |
+|---|---|
+| Date | 2026-10-31 |
+| Branch | `rb-v1.2-phase3b` (not pushed) |
+| Live behaviour changed | **No.** RB v1.1 stays the active decision path. Every record is still stamped RB v1.1, and the active queue decision is byte-identical to before (asserted by tests). Additive only: a `v12` audit on new server records, a shadow v1.2 dedupe key in the store, and a `shadow` field on queue rows |
+| Production risk | **LOW.** The server gains additive code wrapped in try/catch; the queue gains a shadow computation. No UI, Ranker, calculator or TrendSpider change |
+
+| Commit | Step | Files |
+|---|---|---|
+| `c0d8be6` | 1. Rule-set registry and trust boundary (**registry empty**) | `v12/ruleSets.ts`, tests |
+| `1351d4b` | 2. Receipt-time signal mapping and v1.2 dedupe key | `v12/signalMapping.ts`, tests |
+| `04c39db` | 3. SIP parity diagnostics (AGREE / KNIFE_EDGE / DISAGREE; RVOL diagnostic only) and the forming-15m helper | `v12/parityDiagnostics.ts`, tests |
+| `dc82b18` | 4. Additive server audit and shadow dual dedupe | `v12/audit.ts`, `netlify/lib/processAlert.ts`, `netlify/lib/log.ts`, `netlify/__tests__/v12Audit.test.ts` |
+| `dd74339` | 5. `decideAlertV12` and version dispatch | `v12/decideAlertV12.ts`, `v12/dispatch.ts`, `liveQueue.ts`, tests |
+
+**Tests:**
+* 596 passed across 21 files. That is 521 before Phase 3B plus 75 new: 9 + 14 + 10 + 9 + 33.
+* `npm run typecheck`: pass. `npm run build`: pass. The bundle contains no Alpaca host or key header.
+
+**Implementation clarifications** (recorded in `RB_V1_2_ARCHITECTURE.md` §23): module names; shadow dedupe recorded rather than enforced; the entry window evaluated on the mapped candle close; QUALIFIED — SCORE PENDING until step 6; waived SIP calculator vetoes; reconstruction reuses the v1.1 snapshot (pre-promotion item); `SIGNAL_CANDLE_MISMATCH` when a payload carries `alert_time`.
+
+**Rollback:** `git revert dd74339 dc82b18 04c39db 1351d4b c0d8be6` (newest first). The commits are independent apart from imports: steps 4–5 import steps 1–3, so revert in that order. No config, secret or data step is needed. Shadow dedupe keys already written to a store are inert under v1.1.
+
+**Proposed commit:** `docs: record Phase 3B steps 1-5 (RB v1.2 core, shadow)`
+
+---
+
 ## CP0 — Rollback baseline before Phase 3B (2026-10-31)
 
 * **Branch:** `rb-v1.2-phase3b`, created from `main` at `3696669`. **Not pushed.**
