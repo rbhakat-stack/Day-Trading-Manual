@@ -4,10 +4,12 @@ import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { Classification } from '../../engine/automation/autoCandidate';
 import { fmtEt, mmss } from '../../engine/automation/etTime';
 import type { ReplacementSuggestion } from '../../engine/ranker/candidateRanker';
+import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { FIT_KEYS, SETUP_KEYS } from '../../engine/ranker/opportunityTypes';
 import { usd } from '../../lib/format';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
+import { ShadowCell, ShadowPanel, VersionLegend } from './ShadowV12';
 
 export interface LiveActions {
   submit: (id: string) => void;
@@ -31,6 +33,8 @@ interface Props {
   versionLabel: string;
   actions: LiveActions;
   onOpenSettings: () => void;
+  /** RB v1.2 SHADOW display (comparison only). */
+  shadow: { maxScore: number; optionAGrades: Grades; logCount: number; onExportLog: () => void };
 }
 
 const SECTIONS: { id: QueueSection; title: string; hint: string }[] = [
@@ -47,7 +51,7 @@ const SECTIONS: { id: QueueSection; title: string; hint: string }[] = [
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings }: Props) {
+export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow }: Props) {
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
   const actionable = rows.filter((r) => r.decision.ticket);
   if (!enabled) {
@@ -77,6 +81,8 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
         </div>
       </div>
 
+      <VersionLegend logCount={shadow.logCount} onExport={shadow.onExportLog} />
+
       {parityStatus !== 'VALIDATED' && (
         <p className="rounded-lg border border-warn/50 bg-warn-dim/30 px-4 py-2 text-sm text-[#ffe2a8]">
           <b>Data parity not yet validated.</b> Until 20+ alerts have been compared with TrendSpider (Data validation tab) with no mismatch, check every value against your chart before submitting.
@@ -96,7 +102,7 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
         if (!xs.length) return null;
         return (
           <Panel key={s.id} title={`${s.title} (${xs.length})`} right={<span className="text-[11px] text-ink-400">{s.hint}</span>}>
-            <QueueTable rows={xs} now={now} actions={actions} />
+            <QueueTable rows={xs} now={now} actions={actions} shadow={shadow} />
           </Panel>
         );
       })}
@@ -178,12 +184,12 @@ const Field = ({ k, v, tone = 'text-ink-100' }: { k: string; v: string; tone?: s
 
 /* ───────────────────────── table + expandable details ───────────────────────── */
 
-function QueueTable({ rows, now, actions }: { rows: QueueRow[]; now: number; actions: LiveActions }) {
+function QueueTable({ rows, now, actions, shadow }: { rows: QueueRow[]; now: number; actions: LiveActions; shadow: Props['shadow'] }) {
   const [open, setOpen] = useState<string | null>(null);
-  const head = ['Rank', 'Ticker', 'Side', 'Score', 'Decision', 'Alert', 'Age', 'Entry', 'Stop', 'Target', 'Qty', 'Value', 'Planned risk', 'Current', 'To trigger', 'Status'];
+  const head = ['Rank', 'Ticker', 'Side', 'Score', 'RB v1.1 decision', 'RB v1.2 shadow', 'Alert', 'Age', 'Entry', 'Stop', 'Target', 'Qty', 'Value', 'Planned risk', 'Current', 'To trigger', 'Status'];
   return (
     <div className="-mx-4 overflow-x-auto">
-      <table className="num w-full min-w-[1100px] text-[12.5px]">
+      <table className="num w-full min-w-[1200px] text-[12.5px]">
         <thead>
           <tr className="text-left text-[10px] uppercase tracking-wider text-ink-400">{head.map((h) => <th key={h} className="px-2 py-1.5 font-medium">{h}</th>)}</tr>
         </thead>
@@ -203,6 +209,7 @@ function QueueTable({ rows, now, actions }: { rows: QueueRow[]; now: number; act
                     <div className="font-semibold">{r.decision.decision}</div>
                     <div className="text-[11px] text-ink-400">{r.decision.detail}</div>
                   </td>
+                  <td className="border-l border-dashed border-[#b48cff]/30 px-2 py-1.5"><ShadowCell r={r} /></td>
                   <td className="px-2 py-1.5">{fmtEt(r.record.alert.alertTimeMs).replace(' ET', '')}</td>
                   <td className={`px-2 py-1.5 ${bandTone[r.decision.freshness.band]}`}>{mmss(r.decision.freshness.ageMs)}</td>
                   <td className="px-2 py-1.5">{p(c?.entry)}</td>
@@ -218,7 +225,7 @@ function QueueTable({ rows, now, actions }: { rows: QueueRow[]; now: number; act
                 {open === id && (
                   <tr className="bg-ink-900/60">
                     <td colSpan={head.length} className="px-3 py-3">
-                      <Details r={r} now={now} actions={actions} />
+                      <Details r={r} now={now} actions={actions} shadow={shadow} />
                     </td>
                   </tr>
                 )}
@@ -231,7 +238,7 @@ function QueueTable({ rows, now, actions }: { rows: QueueRow[]; now: number; act
   );
 }
 
-function Details({ r, now, actions }: { r: QueueRow; now: number; actions: LiveActions }) {
+function Details({ r, now, actions, shadow }: { r: QueueRow; now: number; actions: LiveActions; shadow: Props['shadow'] }) {
   const v = r.record.snapshot?.values;
   const s = r.record.snapshot;
   const a = r.record.alert;
@@ -304,6 +311,7 @@ function Details({ r, now, actions }: { r: QueueRow; now: number; actions: LiveA
           />
         </Box>
       </div>
+      <ShadowPanel r={r} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} />
       {r.live?.plan && (
         <Box title="Calculation (shared RB v1.1 calculator)">
           <p className="num">
