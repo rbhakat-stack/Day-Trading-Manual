@@ -140,8 +140,22 @@ export function buildQueue(q: QueueInput): QueueOutput {
 
   // RB v1.2 SHADOW (comparison only): pre-pass → which qualified records reach scoring → v1.2 ranking pass over
   // copies of their candidates → final shadow decisions. Nothing here touches the v1.1 ranking, decisions or candidates.
+  // A record whose v1.1 snapshot is incomplete only because SIP RVOL could not be calculated has no v1.1 candidate;
+  // v1.2 builds a shadow-only candidate from its RVOL-optional rebuild (never added to `candidates`, never persisted).
+  const v12Lives = new Map(lives);
+  const v12Only: Candidate[] = [];
+  for (const rec of q.records as AutoAlertRecordV12[]) {
+    const snap = rec.v12?.rvolOptionalSnapshot;
+    if (!snap?.values || rec.status !== 'OK' || !released.has(rec.id) || byId.has(rec.id) || dup.get(rec.id)) continue;
+    const price = q.quotes[rec.alert.symbol]?.price ?? rec.initialQuote?.price;
+    if (!price) continue;
+    const r12: AutoAlertRecord = { ...rec, snapshot: snap };
+    v12Lives.set(rec.id, liveState(r12, price, q.now, q.rb));
+    const c = candidateFromRecord(r12, price, q.now, q.rb, q.classify(rec.alert.symbol));
+    if (c) v12Only.push(c);
+  }
   const v12Base = (rec: AutoAlertRecord) => ({
-    released: released.has(rec.id), candidateStatus: byId.get(rec.id)?.status ?? null, live: lives.get(rec.id) ?? null,
+    released: released.has(rec.id), candidateStatus: byId.get(rec.id)?.status ?? null, live: v12Lives.get(rec.id) ?? null,
     quote: q.quotes[rec.alert.symbol] ?? null, now: q.now, cfg: q.cfg, duplicateOf: dup.get(rec.id) ?? null, window,
   });
   const audits = new Map<string, V12Audit>();
@@ -151,7 +165,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     audits.set(rec.id, rec.v12);
     if (decideAlertV12({ ...v12Base(rec), record: rec, mode: 'SHADOW', ranked: null }).scoring === 'PENDING_V12_RANKING') v12Pool.add(rec.id);
   }
-  const v12Rank = v12Pool.size ? shadowRanking({ candidates, poolIds: v12Pool, lives, audits, positions: q.positions, rk: q.rk, today, window }).byId : new Map();
+  const v12Rank = v12Pool.size ? shadowRanking({ candidates: [...candidates, ...v12Only], poolIds: v12Pool, lives: v12Lives, audits, positions: q.positions, rk: q.rk, today, window }).byId : new Map();
 
   const rows: QueueRow[] = q.records.map((rec) => {
     const candidate = byId.get(rec.id) ?? null;

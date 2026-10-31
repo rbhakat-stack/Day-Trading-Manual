@@ -48,6 +48,11 @@ export interface V12Audit {
   /** Id of the earlier record holding the same v1.2 key (same symbol/direction/candle/rule set), else null. */
   duplicateOf: string | null;
   reconstruction: V12Reconstruction | null;
+  /**
+   * Set only when the v1.1 snapshot is incomplete because SIP RVOL20 could not be calculated: the same bars rebuilt
+   * with RVOL optional (RB_V1_2_ARCHITECTURE.md §25). v1.2 reconstructs and scores from it; v1.1 never reads it.
+   */
+  rvolOptionalSnapshot?: SnapshotResult | null;
   conditionDiagnostics: ConditionDiagnostic[];
   warnings: string[];
   /** Integrity problems found at processing (DATA REVIEW codes). Indicator disagreement is never listed here. */
@@ -77,6 +82,16 @@ export function receiptAudit(args: { body: unknown; symbol: string; direction: D
     dataReview: [],
     ticketAtAlert: null,
   };
+}
+
+/** True when the v1.1 snapshot dropped its values and SIP RVOL20 was one of the reasons (v1.2 rebuilds it RVOL-optional). */
+export function needsRvolOptionalSnapshot(snap: SnapshotResult | null): boolean {
+  return !!snap && !snap.values && snap.issues.some((i) => i.code === 'RVOL20_UNAVAILABLE');
+}
+
+/** The snapshot RB v1.2 reconstructs from: the RVOL-optional rebuild when one exists, else the v1.1 snapshot. */
+export function v12Snapshot(rec: AutoAlertRecordV12): SnapshotResult | null {
+  return rec.v12?.rvolOptionalSnapshot ?? rec.snapshot;
 }
 
 /** Snapshot issue codes that are objective reconstruction / integrity problems (RB_V1_2_ARCHITECTURE.md §9). */
@@ -109,9 +124,12 @@ export function integrityCodes(rec: Pick<AutoAlertRecord, 'status' | 'snapshot'>
   return out;
 }
 
-/** Enrichment-time part of the audit (called with the same bars and snapshot the v1.1 record stores). */
-export function withReconstruction(a: V12Audit, rec: Pick<AutoAlertRecord, 'status' | 'snapshot' | 'calcAtAlert'>, bars: Bar[], direction: Direction, tol: ParityTolerance): V12Audit {
-  const snap: SnapshotResult | null = rec.snapshot;
+/**
+ * Enrichment-time part of the audit (called with the same bars and snapshot the v1.1 record stores). `rvolOptional`
+ * is the RVOL-optional rebuild, passed only when needsRvolOptionalSnapshot(rec.snapshot).
+ */
+export function withReconstruction(a: V12Audit, rec: Pick<AutoAlertRecord, 'status' | 'snapshot' | 'calcAtAlert'>, bars: Bar[], direction: Direction, tol: ParityTolerance, rvolOptional: SnapshotResult | null = null): V12Audit {
+  const snap: SnapshotResult | null = rvolOptional ?? rec.snapshot;
   const v = snap?.values ?? null;
   const signalEnd = a.signalMapping.candleEndMs;
   const forming = signalEnd !== null ? forming15m(bars, signalEnd) : null;
@@ -119,7 +137,7 @@ export function withReconstruction(a: V12Audit, rec: Pick<AutoAlertRecord, 'stat
     source: 'SIP',
     open: v?.open ?? null, high: v?.high ?? null, low: v?.low ?? null, close: v?.close ?? null, volume: v?.volume ?? null,
     atr14: v?.atr ?? null, vwap: v?.vwap ?? null, ema9: v?.ema9 ?? null, ema20: v?.ema20 ?? null, rsi14: v?.rsi ?? null,
-    sipRvol: v?.rvol ?? null, close15mCompleted: v?.close15m ?? null, ema20_15mCompleted: v?.ema20_15m ?? null, forming15m: forming,
+    sipRvol: v && Number.isFinite(v.rvol) ? v.rvol : null, close15mCompleted: v?.close15m ?? null, ema20_15mCompleted: v?.ema20_15m ?? null, forming15m: forming,
   };
   const parity = classifyConditions(
     { open: reconstruction.open, close: reconstruction.close, vwap: reconstruction.vwap, ema9: reconstruction.ema9, ema20: reconstruction.ema20, rsi: reconstruction.rsi14, rvol: reconstruction.sipRvol, close15m: reconstruction.close15mCompleted, ema20_15m: reconstruction.ema20_15mCompleted },
@@ -131,9 +149,10 @@ export function withReconstruction(a: V12Audit, rec: Pick<AutoAlertRecord, 'stat
   return {
     ...a,
     reconstruction,
+    ...(rvolOptional ? { rvolOptionalSnapshot: rvolOptional } : {}),
     conditionDiagnostics: parity.diagnostics,
     warnings,
-    dataReview: integrityCodes(rec, a.signalMapping),
+    dataReview: integrityCodes({ status: rec.status, snapshot: snap }, a.signalMapping),
     ticketAtAlert: c ? { entry: c.entry, stop: c.stop, target: c.target, shares: c.shares, plannedRisk: c.plannedRisk } : null,
   };
 }

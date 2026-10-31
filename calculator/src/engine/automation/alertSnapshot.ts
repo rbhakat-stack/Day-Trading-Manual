@@ -20,6 +20,9 @@ import { sessionFor, type SessionKind } from './marketCalendar';
 
 export type VwapMode = 'SESSION' | 'ROLLING_14';
 
+/** Indicators that may be declared optional (RB v1.2 only — SIP RVOL is diagnostic there). Nothing else can be. */
+export type OptionalIndicator = 'RVOL20';
+
 export type IssueKind =
   | 'INCOMPLETE' // required data missing → DATA INCOMPLETE — DO NOT TRADE
   | 'REVIEW'; // data present but not trustworthy enough → DATA REVIEW REQUIRED
@@ -38,6 +41,12 @@ export interface SnapshotConfig {
   maxMissingBarRatio: number;
   /** Minimum regular-session bars before the signal candle (indicator warm-up). */
   minWarmupBars: number;
+  /**
+   * RB v1.2 reconstruction only: indicators whose absence does NOT make the snapshot incomplete. A missing optional
+   * indicator is returned as NaN (null after JSON storage) and its alert-condition re-check is omitted.
+   * Omitted / empty = RB v1.1 behaviour: every indicator is required.
+   */
+  optionalIndicators?: readonly OptionalIndicator[];
 }
 
 export const DEFAULT_SNAPSHOT_CONFIG: SnapshotConfig = { vwapMode: 'SESSION', maxSignalLagSec: 120, maxMissingBarRatio: 0.05, minWarmupBars: 100 };
@@ -182,7 +191,10 @@ export function buildAlertSnapshot(rawBars5: Bar[], alertMs: number, direction: 
   const vr = vwapRolling(upto, 14)[sigIndex];
   const vw = config.vwapMode === 'SESSION' ? vs : vr;
   const need: [number | null, string][] = [[e9, 'EMA9'], [e20, 'EMA20'], [r, 'RSI14'], [a, 'ATR14'], [rv, 'RVOL20'], [vw, 'VWAP']];
-  for (const [v, name] of need) if (v === null || !Number.isFinite(v) || (name !== 'RSI14' && v <= 0)) inc(`${name}_UNAVAILABLE`, `${name} could not be calculated from the available bars.`);
+  const optional: readonly string[] = config.optionalIndicators ?? [];
+  const unavailable = (v: number | null, name: string) => v === null || !Number.isFinite(v) || (name !== 'RSI14' && v <= 0);
+  for (const [v, name] of need) if (unavailable(v, name) && !optional.includes(name)) inc(`${name}_UNAVAILABLE`, `${name} could not be calculated from the available bars.`);
+  const rvolOk = !unavailable(rv, 'RVOL20');
   if (!(s.h >= s.l && s.h >= Math.max(s.o, s.c) && s.l <= Math.min(s.o, s.c) && s.l > 0)) inc('SIGNAL_CANDLE_INVALID', 'Signal candle OHLC is internally inconsistent.');
 
   // ── 15m confirmation: last fully completed regular-session 15m candle at the alert time ──
@@ -212,7 +224,7 @@ export function buildAlertSnapshot(rawBars5: Bar[], alertMs: number, direction: 
   const values: AlertTimeValues | null = complete
     ? {
         open: s.o, high: s.h, low: s.l, close: s.c, volume: s.v,
-        atr: a as number, ema9: e9 as number, ema20: e20 as number, rsi: r as number, rvol: rv as number, vwap: vw as number,
+        atr: a as number, ema9: e9 as number, ema20: e20 as number, rsi: r as number, rvol: rvolOk ? (rv as number) : Number.NaN, vwap: vw as number,
         vwapAlternative: config.vwapMode === 'SESSION' ? vr : vs,
         close15m: close15m as number, ema20_15m: ema20_15m as number,
       }
@@ -225,7 +237,7 @@ export function buildAlertSnapshot(rawBars5: Bar[], alertMs: number, direction: 
         { label: `5m Close ${L ? '>' : '<'} VWAP`, pass: L ? values.close > values.vwap : values.close < values.vwap },
         { label: `EMA9 ${L ? '>' : '<'} EMA20`, pass: L ? values.ema9 > values.ema20 : values.ema9 < values.ema20 },
         { label: `RSI14 ${L ? '> 55' : '< 45'}`, pass: L ? values.rsi > 55 : values.rsi < 45 },
-        { label: 'RVOL20 > 1.5', pass: values.rvol > 1.5 },
+        ...(rvolOk ? [{ label: 'RVOL20 > 1.5', pass: values.rvol > 1.5 }] : []),
         { label: `Close ${L ? '>' : '<'} Open`, pass: L ? values.close > values.open : values.close < values.open },
         { label: `15m Close ${L ? '>' : '<'} 15m EMA20`, pass: L ? values.close15m > values.ema20_15m : values.close15m < values.ema20_15m },
       ]

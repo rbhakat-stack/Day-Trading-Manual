@@ -24,7 +24,7 @@ import type { RankedCandidate, StrategyRules } from '../../ranker/candidateRanke
 import type { LifecycleStatus } from '../../ranker/opportunityTypes';
 import { checkTimeWindow, sortFails, type HardFail } from '../../rules';
 import type { TradeResult } from '../../tradeCalculator';
-import { integrityCodes, RB_V1_2, type AutoAlertRecordV12 } from './audit';
+import { integrityCodes, RB_V1_2, v12Snapshot, type AutoAlertRecordV12 } from './audit';
 
 /** Shared-calculator / ranker hard rules that re-check TrendSpider conditions on SIP data — waived in v1.2. */
 export const WAIVED_SIP_RULES = ['INVALID_CANDLE_DIRECTION', 'HTF_CONFIRMATION_FAILED'] as const;
@@ -113,7 +113,7 @@ export function decideAlertV12(a: V12DecideArgs): V12Decision {
   }
 
   // 4 integrity only (Invariant D) — indicator disagreement is never here
-  const integrity = [...integrityCodes(rec, m), ...(audit.error ? ['AUDIT_ERROR'] : [])];
+  const integrity = [...integrityCodes({ status: rec.status, snapshot: v12Snapshot(rec) }, m), ...(audit.error ? ['AUDIT_ERROR'] : [])];
   if (integrity.length) {
     return out('DATA REVIEW REQUIRED', rec.status === 'DATA_ERROR' ? 'DATA ERROR — MANUAL REVIEW REQUIRED' : 'DATA REVIEW — RECONSTRUCTION INCOMPLETE OR AMBIGUOUS', 'DATA_REVIEW',
       [...integrity.map((c) => `Integrity: ${c}`), ...(rec.errors ?? [])], { dataReview: integrity });

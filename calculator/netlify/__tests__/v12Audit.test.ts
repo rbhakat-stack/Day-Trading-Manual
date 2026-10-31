@@ -134,3 +134,25 @@ describe('dual dedupe (shadow: v1.2 key recorded, v1.1 key enforced)', () => {
     expect(b.v12!.dedupeKeys.v12).not.toBe(a.v12!.dedupeKeys.v12);
   });
 });
+
+describe('v1.2 RVOL-optional reconstruction at enrichment (Phase 3C.1)', () => {
+  const sig = etToEpoch(D, '10:10');
+  const noRvol = BARS.map((b) => (b.t === sig ? { ...b, v: 0 } : b));
+  it('SIP RVOL unavailable: the v1.1 record is exactly as before; only the v1.2 audit carries the RVOL-optional rebuild', async () => {
+    const r = await stored(body(), deps('10:15:12', { data: fakeData({ bars: noRvol }) }));
+    expect(r.status).toBe('OK');
+    expect(r.snapshot!.values).toBeNull();
+    expect(r.snapshot!.issues.find((i) => i.code === 'RVOL20_UNAVAILABLE')?.kind).toBe('INCOMPLETE');
+    expect(r.calcAtAlert).toBeNull();
+    const s12 = r.v12!.rvolOptionalSnapshot!;
+    expect(s12.values).not.toBeNull();
+    expect(s12.config.optionalIndicators).toEqual(['RVOL20']);
+    expect(r.v12!.reconstruction).toMatchObject({ high: s12.values!.high, low: s12.values!.low, atr14: s12.values!.atr, sipRvol: null });
+    expect(r.v12!.dataReview).toEqual([]);
+  });
+  it('SIP RVOL available: no rebuild is stored', async () => {
+    const r = await stored(body(), deps('10:15:12'));
+    expect(r.snapshot!.values).not.toBeNull();
+    expect(r.v12).not.toHaveProperty('rvolOptionalSnapshot');
+  });
+});

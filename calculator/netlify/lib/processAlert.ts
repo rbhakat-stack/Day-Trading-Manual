@@ -11,7 +11,7 @@
 import { dedupeKey, parseAlertPayload, withoutSecrets, type ParsedAlert } from '../../src/engine/automation/alertPayload';
 import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type SnapshotConfig } from '../../src/engine/automation/alertSnapshot';
 import { DEFAULT_AUTOMATION, type AutoAlertRecord } from '../../src/engine/automation/alertDecision';
-import { receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
+import { needsRvolOptionalSnapshot, receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
 import { inputsFromRecord } from '../../src/engine/automation/autoCandidate';
 import { etParts, etToEpoch } from '../../src/engine/automation/etTime';
 import { previousTradingDates } from '../../src/engine/automation/marketCalendar';
@@ -143,7 +143,7 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
     }
     const review = snapshot.issues.filter((i) => i.kind === 'REVIEW');
     if (review.length) deps.log('data_mismatch', { id: r.id, codes: review.map((i) => i.code) });
-    v12Enrich(r, bars, deps);
+    v12Enrich(r, bars, cfg, deps);
     deps.log('candidate_enriched', { id: r.id, bars: bars.length, signal: snapshot.signal?.label, confirm15m: snapshot.confirm15m?.label, issues: snapshot.issues.map((i) => i.code), ms: deps.now() - started });
   } catch (e) {
     r.status = 'DATA_ERROR';
@@ -182,10 +182,13 @@ async function v12Receipt(rec: AutoAlertRecordV12, body: unknown, receivedMs: nu
   }
 }
 
-function v12Enrich(r: AutoAlertRecordV12, bars: Parameters<typeof withReconstruction>[2], deps: ProcessDeps): void {
+function v12Enrich(r: AutoAlertRecordV12, bars: Parameters<typeof withReconstruction>[2], cfg: SnapshotConfig, deps: ProcessDeps): void {
   if (!r.v12) return;
   try {
-    r.v12 = withReconstruction(r.v12, r, bars, r.alert.direction, DEFAULT_AUTOMATION.parity);
+    // SIP RVOL is diagnostic in v1.2: if a missing SIP RVOL emptied the v1.1 snapshot, rebuild the same bars with RVOL
+    // optional (any other missing input still leaves the rebuild incomplete).
+    const rvolOptional = needsRvolOptionalSnapshot(r.snapshot) ? buildAlertSnapshot(bars, r.alert.alertTimeMs, r.alert.direction, { ...cfg, optionalIndicators: ['RVOL20'] }) : null;
+    r.v12 = withReconstruction(r.v12, r, bars, r.alert.direction, DEFAULT_AUTOMATION.parity, rvolOptional);
   } catch (e) {
     r.v12 = { ...r.v12, error: (e as Error).message };
     deps.log('v12_audit_failed', { id: r.id, stage: 'enrichment', error: (e as Error).message });
