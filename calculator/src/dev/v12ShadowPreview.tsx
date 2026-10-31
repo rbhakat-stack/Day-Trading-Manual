@@ -2,7 +2,7 @@
  * LOCAL PREVIEW ONLY (Step 7) — renders the real Live Alert Queue page with SYNTHETIC records and TEST/HYPOTHETICAL
  * rule sets so the RB v1.2 SHADOW presentation can be checked in a browser. Served by `vite` dev at
  * /tools/preview/v12-shadow.html; not imported by the app and not part of the production build. The production
- * registry stays EMPTY — the TEST entries below exist only in this page.
+ * registry (audited RBTS-L-001 / RBTS-S-001) is not used here — the TEST entries below exist only in this page.
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -54,7 +54,7 @@ const records: AutoAlertRecordV12[] = [
   rec({ symbol: 'NEE', direction: 'SHORT', values: SHORT_OK }), // qualified SHORT
   rec({ symbol: 'GM', noRvol: true }), // SIP RVOL unavailable → v1.2 continues from the RVOL-optional rebuild
   rec({ symbol: 'IBM', ruleSet: null }), // production today: no rule_set → NOT QUALIFIED
-  rec({ symbol: 'MSFT', ruleSet: 'RBTS-L-001' }), // well-formed but not in the (empty) registry → UNKNOWN
+  rec({ symbol: 'MSFT', ruleSet: 'RBTS-L-001' }), // not in this page's TEST registry → UNKNOWN (shows the unknown-rule-set presentation)
   rec({ symbol: 'VRSK', lagSec: 150 }), // > 120 s after close → mapping AMBIGUOUS → DATA REVIEW
   rec({ symbol: 'F', v12: false }), // pre-v1.2 record
 ];
@@ -70,7 +70,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <div className="mx-auto max-w-[1600px] space-y-3 p-4 text-ink-100">
       <p className="rounded border-2 border-dashed border-warn px-3 py-2 text-sm font-bold text-warn">
-        LOCAL PREVIEW — synthetic records with TEST/HYPOTHETICAL rule sets (RBTS-L-TEST / RBTS-S-TEST). Not production data; the production rule-set registry is empty.
+        LOCAL PREVIEW — synthetic records with TEST/HYPOTHETICAL rule sets (RBTS-L-TEST / RBTS-S-TEST). Not production data; the production registry holds only the audited RBTS-L-001 / RBTS-S-001.
       </p>
       <LiveQueuePage
         rows={q.rows}

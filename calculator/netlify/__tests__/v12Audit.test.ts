@@ -61,11 +61,11 @@ describe('v1.2 receipt + enrichment audit', () => {
     expect(d.logs.map((l) => l[0])).toContain('v12_shadow_audit');
   });
 
-  it('a well-formed rule_set is still UNKNOWN (registry empty) and stays in the stored payload; v1.1 is unaffected by the extra field', async () => {
+  it('the audited RBTS-L-001 on a LONG webhook is QUALIFIED (shadow) and stays in the stored payload; v1.1 is unaffected by the extra field', async () => {
     const d = deps('10:15:12');
     const r = await stored(body({ rule_set: 'RBTS-L-001' }), d);
-    expect(r.v12!.qualification.status).toBe('NOT_QUALIFIED');
-    expect(r.v12!.qualification.ruleSet).toMatchObject({ status: 'UNKNOWN', ruleSet: 'RBTS-L-001' });
+    expect(r.v12!.qualification.status).toBe('QUALIFIED');
+    expect(r.v12!.qualification.ruleSet).toMatchObject({ status: 'RECOGNISED', ruleSet: 'RBTS-L-001' });
     expect(r.payload).toMatchObject({ rule_set: 'RBTS-L-001' });
     expect(r.payload).not.toHaveProperty('token');
     expect(r.v12!.dedupeKeys.v12.endsWith('|RBTS-L-001')).toBe(true);

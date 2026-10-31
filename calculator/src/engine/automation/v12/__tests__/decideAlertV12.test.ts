@@ -100,7 +100,7 @@ describe('trust boundary in the decision (Invariant A)', () => {
     const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, ruleSet: null });
     expect(rowOf([r], 'NVDA', nowAfter(r)).shadow).toMatchObject({ decision: 'NOT QUALIFIED', qualified: false, detail: 'NOT QUALIFIED — RULE SET MISSING' });
   });
-  it('production registry (empty): even RBTS-L-001 is NOT QUALIFIED', () => {
+  it('an empty registry: even RBTS-L-001 is NOT QUALIFIED', () => {
     const r = rec({ symbol: 'NVDA', closeEt: '10:15', price: 100.95, ruleSet: 'RBTS-L-001', registry: [] });
     expect(rowOf([r], 'NVDA', nowAfter(r)).shadow).toMatchObject({ decision: 'NOT QUALIFIED', detail: 'NOT QUALIFIED — RULE SET UNKNOWN' });
   });

@@ -8,10 +8,10 @@
  *   • its direction matches the registered rule set.
  * Anything else is NOT QUALIFIED and never falls back to SIP re-qualification.
  *
- * The registry starts EMPTY on purpose: the live TrendSpider LONG/SHORT alert definitions have not been audited
- * (§3.1). An id is added only after its audit checklist is completed — a versioned code change with a change-log
- * record. Ids follow RBTS-<L|S>-<NNN>; the format is accepted structurally, but a well-formed id that is not
- * registered is UNKNOWN.
+ * An id is added only after its live TrendSpider alert definition has been audited against the §3.1 checklist — a
+ * versioned code change with a change-log record (RBTS-L-001 / RBTS-S-001: CR-012). Ids follow RBTS-<L|S>-<NNN>;
+ * NNN is incremented on every edit to that TrendSpider alert's conditions and never reused. A well-formed id that is
+ * not registered is UNKNOWN. Registration only affects the RB v1.2 SHADOW qualification; RB v1.1 never reads it.
  */
 import type { Direction } from '../../tradeCalculator';
 
@@ -33,8 +33,30 @@ export interface RuleSetEntry {
   rules: readonly string[];
 }
 
-/** Audited rule sets. EMPTY until the TrendSpider alert-definition audit is complete. */
-export const TRUSTED_RULE_SETS: readonly RuleSetEntry[] = Object.freeze([]);
+/** Alert settings shared by both audited Multi-Factor Alerts (not conditions; recorded for the audit trail). */
+const AUDITED_SETTINGS = 'TrendSpider Multi-Factor Alert · smallest timeframe 5m · all conditions AND · Extended Hours OFF · repeat: no limit · expiration: 30 days';
+
+/** Audited rule sets (TrendSpider LONG / SHORT alert-definition audit, 2026-10-31, CR-012). */
+export const TRUSTED_RULE_SETS: readonly RuleSetEntry[] = Object.freeze([
+  Object.freeze({
+    id: 'RBTS-L-001',
+    direction: 'LONG',
+    rulesVersion: 'RB v1.2',
+    audited: '2026-10-31',
+    checklistRef: `RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — ${AUDITED_SETTINGS}`,
+    active: true,
+    rules: Object.freeze(['5m Close > VWAP(14, 0, hlc3)', '5m EMA9 > EMA20', '5m RSI14 > 55', '5m RVOL(20, SMA, 1) > 1.5', '5m Close > Open', '15m Close > 15m EMA20']),
+  }),
+  Object.freeze({
+    id: 'RBTS-S-001',
+    direction: 'SHORT',
+    rulesVersion: 'RB v1.2',
+    audited: '2026-10-31',
+    checklistRef: `RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — ${AUDITED_SETTINGS}`,
+    active: true,
+    rules: Object.freeze(['5m Close < VWAP(14, 0, hlc3)', '5m EMA9 < EMA20', '5m RSI14 < 45', '5m RVOL(20, SMA, 1) > 1.5', '5m Close < Open', '15m Close < 15m EMA20']),
+  }),
+] satisfies RuleSetEntry[]);
 
 export type RuleSetStatus = 'RECOGNISED' | 'MISSING' | 'UNKNOWN' | 'RETIRED' | 'CONFLICT';
 

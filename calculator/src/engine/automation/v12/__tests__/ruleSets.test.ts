@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { classifyRuleSet, qualify, readRuleSet, TRUSTED_RULE_SETS, type RuleSetEntry } from '../ruleSets';
 
-/** Test-only registry. The production registry is EMPTY until the TrendSpider audit is complete. */
+/** Test-only registry (TEST ids). The production registry holds only the audited RBTS-L-001 / RBTS-S-001. */
 const REG: RuleSetEntry[] = [
   { id: 'RBTS-L-901', direction: 'LONG', rulesVersion: 'RB v1.2', audited: '2026-01-01', checklistRef: 'test', active: true, rules: ['5m Close > VWAP', 'RVOL(20,SMA,1) > 1.5'] },
   { id: 'RBTS-S-901', direction: 'SHORT', rulesVersion: 'RB v1.2', audited: '2026-01-01', checklistRef: 'test', active: true, rules: ['5m Close < VWAP'] },
@@ -10,13 +10,45 @@ const REG: RuleSetEntry[] = [
 const ok = { authenticated: true, test: false, registry: REG };
 
 describe('rule-set registry', () => {
-  it('starts EMPTY — no production webhook is trusted until the TrendSpider audit is done', () => {
-    expect(TRUSTED_RULE_SETS).toHaveLength(0);
+  it('production registry: exactly the audited RBTS-L-001 (LONG) and RBTS-S-001 (SHORT), frozen', () => {
+    expect(TRUSTED_RULE_SETS.map((e) => [e.id, e.direction, e.active])).toEqual([['RBTS-L-001', 'LONG', true], ['RBTS-S-001', 'SHORT', true]]);
     expect(Object.isFrozen(TRUSTED_RULE_SETS)).toBe(true);
-    // Even a well-formed id is UNKNOWN against the production registry.
-    expect(classifyRuleSet('RBTS-L-001', 'LONG').status).toBe('UNKNOWN');
-    expect(classifyRuleSet('RBTS-S-001', 'SHORT').status).toBe('UNKNOWN');
-    expect(qualify({ authenticated: true, test: false, ruleSet: 'RBTS-L-001', direction: 'LONG' }).status).toBe('NOT_QUALIFIED');
+    for (const e of TRUSTED_RULE_SETS) {
+      expect(Object.isFrozen(e)).toBe(true);
+      expect(Object.isFrozen(e.rules)).toBe(true);
+      expect(e.checklistRef).toMatch(/CR-012/);
+      expect(e.checklistRef).toMatch(/Extended Hours OFF/);
+    }
+    expect(TRUSTED_RULE_SETS[0].rules).toEqual(['5m Close > VWAP(14, 0, hlc3)', '5m EMA9 > EMA20', '5m RSI14 > 55', '5m RVOL(20, SMA, 1) > 1.5', '5m Close > Open', '15m Close > 15m EMA20']);
+    expect(TRUSTED_RULE_SETS[1].rules).toEqual(['5m Close < VWAP(14, 0, hlc3)', '5m EMA9 < EMA20', '5m RSI14 < 45', '5m RVOL(20, SMA, 1) > 1.5', '5m Close < Open', '15m Close < 15m EMA20']);
+  });
+
+  it.each([
+    ['(1) RBTS-L-001 + LONG', 'RBTS-L-001', 'LONG', 'RECOGNISED', 'QUALIFIED'],
+    ['(2) RBTS-S-001 + SHORT', 'RBTS-S-001', 'SHORT', 'RECOGNISED', 'QUALIFIED'],
+    ['(3) LONG rule set + SHORT direction', 'RBTS-L-001', 'SHORT', 'CONFLICT', 'NOT_QUALIFIED'],
+    ['(4) SHORT rule set + LONG direction', 'RBTS-S-001', 'LONG', 'CONFLICT', 'NOT_QUALIFIED'],
+    ['(5) missing rule set', null, 'LONG', 'MISSING', 'NOT_QUALIFIED'],
+    ['(6) unknown well-formed id', 'RBTS-L-002', 'LONG', 'UNKNOWN', 'NOT_QUALIFIED'],
+    ['(6) unknown malformed id', 'RB-LONG', 'LONG', 'UNKNOWN', 'NOT_QUALIFIED'],
+    ['(6) ids are case-sensitive', 'rbts-l-001', 'LONG', 'UNKNOWN', 'NOT_QUALIFIED'],
+  ] as const)('production registry: %s → %s / %s', (_n, ruleSet, direction, status, q) => {
+    expect(classifyRuleSet(ruleSet, direction).status).toBe(status);
+    expect(qualify({ authenticated: true, test: false, ruleSet, direction }).status).toBe(q);
+  });
+
+  it('production registry: retired revision → NOT QUALIFIED; test or unauthenticated webhooks never qualify', () => {
+    const retired = TRUSTED_RULE_SETS.map((e) => ({ ...e, active: false }));
+    expect(classifyRuleSet('RBTS-L-001', 'LONG', retired).status).toBe('RETIRED');
+    expect(qualify({ authenticated: true, test: false, ruleSet: 'RBTS-L-001', direction: 'LONG', registry: retired }).status).toBe('NOT_QUALIFIED');
+    expect(qualify({ authenticated: true, test: true, ruleSet: 'RBTS-L-001', direction: 'LONG' }).status).toBe('NOT_QUALIFIED');
+    expect(qualify({ authenticated: false, test: false, ruleSet: 'RBTS-S-001', direction: 'SHORT' }).status).toBe('NOT_QUALIFIED');
+  });
+
+  it('a qualified production alert records the audited conditions as assumed passed, never numeric values', () => {
+    const q = qualify({ authenticated: true, test: false, ruleSet: readRuleSet({ rule_set: ' RBTS-S-001 ' }), direction: 'SHORT' });
+    expect(q).toMatchObject({ status: 'QUALIFIED', numericValuesProvided: false });
+    expect(q.rulesAssumedPassed).toContain('5m RSI14 < 45');
   });
 
   it('readRuleSet: trimmed string or null (absent, empty, non-string, non-object body)', () => {
