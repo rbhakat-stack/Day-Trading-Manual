@@ -14,9 +14,12 @@ import type { Candidate, ManualPosition } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
 import type { RbSettings } from '../settings';
 import type { TradeResult } from '../tradeCalculator';
-import { decideAlert, existingCandidateFor, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type LiveQuote } from './alertDecision';
+import { existingCandidateFor, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type LiveQuote } from './alertDecision';
 import { candidateFromRecord, livePatch, liveState, type Classification } from './autoCandidate';
 import { etParts } from './etTime';
+import type { AutoAlertRecordV12 } from './v12/audit';
+import type { V12Decision } from './v12/decideAlertV12';
+import { decideActive, decideShadow } from './v12/dispatch';
 
 export interface QueueInput {
   records: AutoAlertRecord[];
@@ -39,7 +42,10 @@ export interface QueueRow {
   ranked: RankedCandidate | null;
   live: TradeResult | null;
   quote: LiveQuote | null;
+  /** Active decision — decided by the record's own logic version (RB v1.1 for every record while v1.2 is shadow). */
   decision: AlertDecision;
+  /** RB v1.2 SHADOW decision (comparison only; never drives the queue). Null for records without a v1.2 audit. */
+  shadow: V12Decision | null;
 }
 
 export interface QueueOutput {
@@ -136,7 +142,11 @@ export function buildQueue(q: QueueInput): QueueOutput {
     const ranked = rankedById.get(rec.id) ?? null;
     const quote = q.quotes[rec.alert.symbol] ?? null;
     const live = lives.get(rec.id) ?? null;
-    const decision = decideAlert({
+    const v12Inputs = {
+      released: released.has(rec.id), candidateStatus: candidate?.status ?? null, live, ranked, v11DataBlocked: dataBlocked.has(rec.id),
+      quote, now: q.now, cfg: q.cfg, duplicateOf: dup.get(rec.id) ?? null, window,
+    };
+    const { decision } = decideActive({
       record: rec,
       released: released.has(rec.id),
       candidate,
@@ -148,8 +158,9 @@ export function buildQueue(q: QueueInput): QueueOutput {
       parityMismatches: q.parity[rec.id] ?? [],
       duplicateOf: dup.get(rec.id) ?? null,
       window,
-    });
-    return { record: rec, candidate, ranked, live, quote, decision };
+    }, v12Inputs);
+    const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
+    return { record: rec, candidate, ranked, live, quote, decision, shadow };
   });
 
   return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed };
