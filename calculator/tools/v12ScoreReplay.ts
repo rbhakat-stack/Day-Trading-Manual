@@ -14,6 +14,11 @@
  *   • candles closing after 15:30 are outside the entry window in both versions and are skipped
  * Each candle is scored on its own (single-candidate queue), so portfolio interplay does not mix candles.
  * Read-only market data through assertHistoricalBarsRequest; credentials stay in memory.
+ *
+ * Phase 3C.1 adds the threshold comparison: each raw v1.2 score is tiered under Option A (RB v1.1 grades) and
+ * Option B (proportional rebase, rounded and rounded-up) — v12Thresholds.ts — plus a TrendSpider-informed reference:
+ * the v1.2 score with the floor replaced by the v1.1 band of the captured TrendSpider RVOL (only where TS RVOL > 1.5),
+ * tiered under the RB v1.1 grades. Raw scores are never rescaled.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -27,7 +32,10 @@ import { buildQueue } from '../src/engine/automation/liveQueue';
 import { previousTradingDates } from '../src/engine/automation/marketCalendar';
 import { receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../src/engine/automation/v12/audit';
 import type { RuleSetEntry } from '../src/engine/automation/v12/ruleSets';
+import { classifyScore } from '../src/engine/ranker/candidateRanker';
+import { rvolBand } from '../src/engine/ranker/opportunityScorer';
 import { cloneRankerDefaults } from '../src/engine/ranker/rankerSettings';
+import { exactProportionalGrades, thresholdsFor, tierUnder, v12MaxScore, type ThresholdOption } from '../src/engine/automation/v12/v12Thresholds';
 import { RB_V1_DEFAULTS } from '../src/engine/settings';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -66,7 +74,10 @@ interface Row {
   date: string; ticker: string; candle: string; direction: string; source: 'GENUINE' | 'HYPOTHETICAL'; tsRvol: number | null; sipRvol: number | null;
   v11Total: number | null; v11Rvol: number | null; v11Tier: string | null; v11Fails: string;
   v12Total: number | null; v12Rvol: number | null; v12Tier: string | null; v12Decision: string; waived: string; parity: string; note: string;
+  v12TierBRound?: string | null; v12TierBCeil?: string | null; refTotal?: number | null; refTier?: string | null;
 }
+const RK = cloneRankerDefaults();
+const OPTS: ThresholdOption[] = ['A_CURRENT', 'B_ROUND', 'B_CEIL'];
 
 async function main() {
   const c = creds();
@@ -112,7 +123,15 @@ async function main() {
       parity: (sh?.warnings ?? []).filter((w) => w.startsWith('PARITY_WARNING')).map((w) => w.split(':')[1]).join(' '), note: '',
     });
   }
-  const csvCols = Object.keys(out[0]) as (keyof Row)[];
+  for (const r of out) {
+    const t = r.v12Total;
+    r.v12TierBRound = t === null ? null : tierUnder(t, 'B_ROUND', RK);
+    r.v12TierBCeil = t === null ? null : tierUnder(t, 'B_CEIL', RK);
+    const ts = r.tsRvol ?? 0;
+    r.refTotal = t !== null && r.v12Rvol !== null && ts > 1.5 ? t - r.v12Rvol + (rvolBand(ts, RK)?.points ?? 0) : null;
+    r.refTier = r.refTotal === null ? null : classifyScore(r.refTotal, RK);
+  }
+  const csvCols = [...new Set(out.flatMap((r) => Object.keys(r)))] as (keyof Row)[];
   writeFileSync(join(DIR, 'v12-score-replay.csv'), [csvCols.join(',')].concat(out.map((r) => csvCols.map((k) => r[k] ?? '').join(','))).join('\n') + '\n');
 
   // ── summary ──
@@ -138,8 +157,45 @@ async function main() {
         `RVOL points v1.1 (SIP bands): ${[0, 6, 9, 12, 15].map((p) => `${p}:${both.filter((r) => r.v11Rvol === p).length}`).join(' ')} · v1.2: always 6`, '');
     }
   }
+  L.push(...thresholdSection(out));
   writeFileSync(join(DIR, 'v12-score-replay-summary.md'), L.join('\n') + '\n');
   console.log(`rows ${out.length}`);
+}
+
+/** Phase 3C.1 — Option A vs Option B threshold comparison (raw v1.2 scores, no rescaling). */
+function thresholdSection(out: Row[]): string[] {
+  const short: Record<string, string> = { ELITE: 'ELITE', HIGH_PRIORITY: 'HIGH', WATCHLIST: 'WATCH', LOW_PRIORITY: 'LOW', SKIP: 'SKIP' };
+  const sh = (t: string | null | undefined) => (t ? short[t] ?? t : '—');
+  const tierOf = (r: Row, o: ThresholdOption) => (o === 'A_CURRENT' ? r.v12Tier : o === 'B_ROUND' ? r.v12TierBRound : r.v12TierBCeil) ?? null;
+  const idx = (t: string | null | undefined) => ['SKIP', 'LOW_PRIORITY', 'WATCHLIST', 'HIGH_PRIORITY', 'ELITE'].indexOf(t ?? '');
+  const max = v12MaxScore(RK);
+  const ex = exactProportionalGrades(RK.grades, max);
+  const g = Object.fromEntries(OPTS.map((o) => [o, thresholdsFor(o, RK)]));
+  const pc = (x: number) => `${((x / max) * 100).toFixed(1)}%`;
+  const L: string[] = [`## Phase 3C.1 — threshold options (raw v1.2 scores on the 0–${max} scale)`, '',
+    `| Grade | v1.1 (share of 100) | exact × ${max}/100 | A (current) | B_ROUND | B_CEIL |`, '|---|---|---|---|---|---|'];
+  for (const k of ['elite', 'high', 'watchlist', 'low'] as const) L.push(`| ${k} | ${RK.grades[k]} (${RK.grades[k]}%) | ${ex[k]} | ${g.A_CURRENT[k]} (${pc(g.A_CURRENT[k])}) | ${g.B_ROUND[k]} (${pc(g.B_ROUND[k])}) | ${g.B_CEIL[k]} (${pc(g.B_CEIL[k])}) |`);
+  L.push('');
+  for (const [label, rows] of [['GENUINE alert-linked', out.filter((r) => r.source === 'GENUINE')], ['HYPOTHETICAL / TEST', out.filter((r) => r.source === 'HYPOTHETICAL')]] as const) {
+    const scored = rows.filter((r) => r.v12Total !== null).sort((a, b) => (b.v12Total as number) - (a.v12Total as number));
+    L.push(`### ${label} (${scored.length} scored in v1.2)`, '', '| Candle | Dir | TS RVOL | v1.1 total / tier | v1.2 raw | Δ vs v1.1 | A tier | B_ROUND tier | B_CEIL tier | TS-informed ref (v1.1 grades) | tier changed vs v1.1 (A / BR / BC) |', '|---|---|---|---|---|---|---|---|---|---|---|');
+    for (const r of scored) {
+      const dv = r.v11Total === null ? null : (r.v12Total as number) - r.v11Total;
+      const d = dv === null ? 'n/a' : `${dv >= 0 ? '+' : ''}${dv}`;
+      const ch = (o: ThresholdOption) => (r.v11Tier === null ? 'new' : tierOf(r, o) === r.v11Tier ? '—' : idx(tierOf(r, o)) > idx(r.v11Tier) ? 'up' : 'down');
+      L.push(`| ${r.ticker} ${r.date.slice(5)} ${r.candle} | ${r.direction[0]} | ${r.tsRvol ?? '—'} | ${r.v11Total ?? '—'} / ${sh(r.v11Tier)} | ${r.v12Total} | ${d} | ${sh(r.v12Tier)} | ${sh(r.v12TierBRound)} | ${sh(r.v12TierBCeil)} | ${r.refTotal ?? '—'} / ${sh(r.refTier)} | ${ch('A_CURRENT')} / ${ch('B_ROUND')} / ${ch('B_CEIL')} |`);
+    }
+    L.push('');
+    const both = scored.filter((r) => r.v11Tier !== null);
+    const withRef = scored.filter((r) => r.refTier);
+    L.push(`| Option | ELITE | HIGH | WATCH | LOW | SKIP | = v1.1 tier (of ${both.length}) | up | down | = TS-informed ref tier (of ${withRef.length}) |`, '|---|---|---|---|---|---|---|---|---|---|');
+    for (const o of OPTS) {
+      const c = (t: string) => scored.filter((r) => tierOf(r, o) === t).length;
+      L.push(`| ${o} | ${c('ELITE')} | ${c('HIGH_PRIORITY')} | ${c('WATCHLIST')} | ${c('LOW_PRIORITY')} | ${c('SKIP')} | ${both.filter((r) => tierOf(r, o) === r.v11Tier).length} | ${both.filter((r) => idx(tierOf(r, o)) > idx(r.v11Tier)).length} | ${both.filter((r) => idx(tierOf(r, o)) < idx(r.v11Tier)).length} | ${withRef.filter((r) => tierOf(r, o) === r.refTier).length} |`);
+    }
+    L.push('');
+  }
+  return L;
 }
 
 main().catch((e) => { console.error(String((e as Error).message ?? e).replace(/[A-Za-z0-9]{20,}/g, '[redacted]')); process.exit(1); });
