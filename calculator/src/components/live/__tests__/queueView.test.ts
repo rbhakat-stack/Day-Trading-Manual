@@ -162,6 +162,16 @@ describe('rendered queue', () => {
     expect(html.indexOf('RB v1.1 (ACTIVE)')).toBeLessThan(html.indexOf('RB v1.2 (SHADOW)'));
     expect(html).toContain('comparison only, not used for execution');
   });
+  it('Auto Refresh is a status indicator with the configured interval, not a control', () => {
+    const h = renderToStaticMarkup(createElement(LiveQueuePage, {
+      rows: main.rows, suggestions: [], now: NOW, enabled: true, feed: { lastOkMs: NOW, error: null }, quoteError: null, parityStatus: 'NOT VALIDATED', versionLabel: 'RB v1.1', actions, onOpenSettings: noop,
+      shadow: { maxScore: CTX.v12MaxScore, optionAGrades: RK.grades, logCount: 0, onExportLog: noop }, pollMs: 3000,
+    }));
+    const m = /<span role="status"[^>]*>(.*?)<\/span><\/span>/.exec(h);
+    expect(m).not.toBeNull();
+    expect(m![0].replace(/<!-- -->/g, '')).toContain('Auto Refresh 3s');
+    expect(m![0]).not.toMatch(/<button|<input|onClick/);
+  });
   it('filter chips with counts', () => {
     for (const s of ['All (5)', 'LONG (5)', 'SHORT (0)', 'Data Review (2)']) expect(html).toContain(s);
   });

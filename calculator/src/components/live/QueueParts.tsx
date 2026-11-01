@@ -118,10 +118,11 @@ export function QueueToolbar(props: {
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="mr-2 flex items-center gap-2 text-[14px] text-ink-200" title={`Polls the alert feed automatically (interval from Automation settings) · ${props.feedText}`}>
-          <span className={`inline-flex h-5 w-9 items-center rounded-full px-0.5 ${props.feedOk ? 'justify-end bg-[#22c55e]' : 'justify-start bg-[#a3263a]'}`} aria-hidden="true"><span className="h-4 w-4 rounded-full bg-white" /></span>
-          Auto Refresh{props.pollSec ? ` (${props.pollSec}s)` : ''}
-          <span className={`text-[11px] ${props.feedOk ? 'text-ink-400' : 'text-short'}`}>{props.feedText}</span>
+        {/* Status only (not a control): polling is configured in Automation settings. */}
+        <span role="status" className="mr-2 flex cursor-default select-none items-center gap-1.5 text-[14px] text-ink-200" title={`Polls the alert feed automatically every ${props.pollSec ?? '—'} s (set in Automation settings) · ${props.feedText}`}>
+          <span className={`text-[16px] leading-none ${props.feedOk ? 'text-[#22c55e]' : 'text-short'}`} aria-hidden="true">●</span>
+          Auto Refresh{props.pollSec ? ` ${props.pollSec}s` : ''}
+          <span className={`text-[11px] ${props.feedOk ? 'text-ink-400' : 'text-short'}`}>· {props.feedText}</span>
         </span>
         {props.hasShadow && <button type="button" onClick={props.onExport} disabled={!props.logCount} className={`${btn} disabled:opacity-40`}>Export v1.2 log ({props.logCount})</button>}
         <div className="relative">
