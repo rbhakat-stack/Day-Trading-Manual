@@ -10,7 +10,7 @@ import { cloneRankerDefaults, migrateRankerSettings, validateRankerSettings, typ
 import { emptyInputs, sampleDay } from './engine/ranker/rankerSamples';
 import { emptyForm, formFromInputs, toInputs, type FormState } from './lib/form';
 import { parseNum } from './lib/format';
-import { KEYS, load, save } from './lib/storage';
+import { download, KEYS, load, save } from './lib/storage';
 import { nowEt, previousDate } from './lib/time';
 import { InputPanel } from './components/InputPanel';
 import { DecisionPanel } from './components/DecisionPanel';
@@ -30,7 +30,7 @@ import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type 
 import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
-import { freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
+import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
@@ -531,6 +531,7 @@ export default function App() {
                 actions={liveActions}
                 onOpenSettings={() => setLiveSub('automation')}
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
+                history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
               />
             )}

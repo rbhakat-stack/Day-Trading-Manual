@@ -154,3 +154,18 @@ export function alertSnapshotsCsv(map: AlertSnapshotMap, fromDate = '', toDate =
     });
   return [SNAP_COLS.join(','), ...rows].join('\n') + '\n';
 }
+
+export type RetentionState = 'OPERATIONAL' | 'STALE_VISIBLE' | 'ARCHIVED';
+export const ARCHIVE_AFTER_MS = 12 * 3_600_000;
+
+/**
+ * CR-11 — queue visibility (records are never deleted; the server keeps every record and the snapshots are kept
+ * for 90 days):
+ *   0–10 min            OPERATIONAL
+ *   > 10 min            STALE_VISIBLE — still listed for the same session
+ *   next ET session or ≥ 12 h  ARCHIVED — removed from the queue, kept in history and exports
+ */
+export function retentionState(alertTimeMs: number, now: number): RetentionState {
+  if (etParts(alertTimeMs).date !== etParts(now).date || now - alertTimeMs >= ARCHIVE_AFTER_MS) return 'ARCHIVED';
+  return now - alertTimeMs >= RB_V1_DEFAULTS.alertWindowMinutes * 60_000 ? 'STALE_VISIBLE' : 'OPERATIONAL';
+}

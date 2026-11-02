@@ -7,6 +7,7 @@ import type { ReplacementSuggestion } from '../../engine/ranker/candidateRanker'
 import { ACTIVE_LOGIC_VERSION } from '../../engine/automation/v12/dispatch';
 import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
+import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
 import { QueueHeader, QueueLegend, QueueTable, QueueToolbar, type ColumnGroups, type QueueFilter } from './QueueParts';
@@ -40,12 +41,16 @@ interface Props {
   presentation?: PresentationConfig;
   /** Alert poll interval (Automation settings) — shown in the Auto Refresh indicator. */
   pollMs?: number;
+  /** CR-11 — retained alert-time snapshot history (90 days) and its CSV export. */
+  history?: { count: number; onExport: () => void };
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history }: Props) {
+  // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
+  const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
   const [filter, setFilter] = useState<QueueFilter>('ALL');
   const [cols, setCols] = useState<ColumnGroups>({ shadow: true, trade: true, safety: true });
@@ -90,6 +95,12 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
       )}
 
       <QueueLegend grades={shadow.optionAGrades} rows={rows} layout={layout} />
+      {history && (
+        <p className="text-[12px] text-ink-400">
+          History: {history.count} frozen alert snapshot(s) retained (90 days; server records are never deleted).{' '}
+          <button type="button" onClick={history.onExport} disabled={!history.count} className="font-semibold text-[#9db8ff] underline disabled:opacity-40">Export history CSV</button>
+        </p>
+      )}
 
       {parityStatus !== 'VALIDATED' && (
         <p className="rounded-lg border border-warn/40 bg-warn-dim/20 px-4 py-2 text-[13px] text-[#ffe2a8]">

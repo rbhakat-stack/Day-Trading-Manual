@@ -15,6 +15,8 @@ export const AUTO_KEYS = {
   config: 'rbv1.automation.config.v1',
   token: 'rbv1.automation.token.v1',
   classifications: 'rbv1.automation.classifications.v1',
+  /** Tickers the user deleted (so a built-in default classification does not reappear on reload). */
+  classificationsDeleted: 'rbv1.automation.classifications.deleted.v1',
   parity: 'rbv1.automation.parity.v1',
   /** RB v1.2 SHADOW comparison log (frozen first v1.2 score per alert; calibration data only). */
   v12ShadowLog: 'rbv1.v12.shadowLog.v1',
@@ -39,7 +41,43 @@ export function usePersistent<T>(key: string, initial: () => T): [T, (v: T | ((x
 export type ClassMap = Record<string, Classification>;
 
 export function initialClassifications(): ClassMap {
-  return { ...KNOWN_CLASSIFICATIONS, ...load<ClassMap>(AUTO_KEYS.classifications, {}) };
+  const deleted = new Set(load<string[]>(AUTO_KEYS.classificationsDeleted, []));
+  const known = Object.fromEntries(Object.entries(KNOWN_CLASSIFICATIONS).filter(([t]) => !deleted.has(t)));
+  // The tombstones only hide built-in defaults; anything in the saved map (e.g. re-imported later) is kept.
+  return { ...known, ...load<ClassMap>(AUTO_KEYS.classifications, {}) };
+}
+
+/* CR-02 — classification management (view / count / export / edit one / delete one). Import is unchanged above. */
+
+const TICKER_RE = /^[A-Z]{1,5}([.-][A-Z]{1,2})?$/;
+
+/** Validation for a single edited row (same rules as the CSV import). Null = valid. */
+export function classificationError(ticker: string, c: Classification): string | null {
+  if (!TICKER_RE.test(ticker.trim().toUpperCase())) return 'Ticker must be 1–5 letters (optionally .X / -X).';
+  if (!c.sector.trim()) return 'Sector is required.';
+  return null;
+}
+
+export function upsertClassification(map: ClassMap, ticker: string, c: Classification): ClassMap {
+  const t = ticker.trim().toUpperCase();
+  save(AUTO_KEYS.classificationsDeleted, load<string[]>(AUTO_KEYS.classificationsDeleted, []).filter((x) => x !== t));
+  return { ...map, [t]: { sector: c.sector.trim(), industry: c.industry.trim(), theme: c.theme.trim() } };
+}
+
+export function removeClassification(map: ClassMap, ticker: string): ClassMap {
+  const t = ticker.trim().toUpperCase();
+  const deleted = load<string[]>(AUTO_KEYS.classificationsDeleted, []);
+  if (!deleted.includes(t)) save(AUTO_KEYS.classificationsDeleted, [...deleted, t]);
+  const next = { ...map };
+  delete next[t];
+  return next;
+}
+
+/** CSV export in the same format the import accepts (Ticker,Sector,Industry,Theme), sorted by ticker. */
+export function classificationsCsv(map: ClassMap): string {
+  const cell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const rows = Object.keys(map).sort().map((t) => [t, map[t].sector, map[t].industry, map[t].theme].map(cell).join(','));
+  return ['Ticker,Sector,Industry,Theme', ...rows].join('\n') + '\n';
 }
 
 /** CSV import: "Ticker,Sector,Industry,Theme" (header optional). Returns the parsed rows and any bad lines. */
@@ -50,7 +88,7 @@ export function parseClassificationCsv(text: string): { rows: ClassMap; errors: 
     const cells = line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
     if (!line.trim() || (i === 0 && /^ticker$/i.test(cells[0]))) return;
     const [t, sector, industry = '', theme = ''] = cells;
-    if (!/^[A-Z]{1,5}([.-][A-Z]{1,2})?$/.test((t ?? '').toUpperCase()) || !sector) errors.push(`Line ${i + 1}: needs Ticker,Sector[,Industry,Theme]`);
+    if (!TICKER_RE.test((t ?? '').toUpperCase()) || !sector) errors.push(`Line ${i + 1}: needs Ticker,Sector[,Industry,Theme]`);
     else rows[t.toUpperCase()] = { sector, industry, theme };
   });
   return { rows, errors };

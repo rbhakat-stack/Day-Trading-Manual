@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DEFAULT_AUTOMATION, type AutomationConfig } from '../../engine/automation/alertDecision';
-import { checkHealth, parseClassificationCsv, type ClassMap } from '../../lib/automationClient';
+import { checkHealth, classificationError, classificationsCsv, parseClassificationCsv, removeClassification, upsertClassification, type ClassMap } from '../../lib/automationClient';
 import { Panel } from '../ui';
 
 interface Props {
@@ -107,6 +107,7 @@ export function AutomationSettings({ cfg, setCfg, token, setToken, classes, setC
           </button>
           <span className="text-xs text-ink-300">{csvMsg}</span>
         </div>
+        <ClassificationTable classes={classes} setClasses={setClasses} />
       </Panel>
     </div>
   );
@@ -120,3 +121,86 @@ function L({ t, children }: { t: string; children: React.ReactNode }) {
     </label>
   );
 }
+
+/** CR-02 — view, count, filter, export, edit one and delete one classification. The CSV import above is unchanged. */
+function ClassificationTable({ classes, setClasses }: { classes: ClassMap; setClasses: (c: ClassMap) => void }) {
+  const [q, setQ] = useState('');
+  const [edit, setEdit] = useState<{ ticker: string; sector: string; industry: string; theme: string; isNew: boolean } | null>(null);
+  const [err, setErr] = useState('');
+  const tickers = Object.keys(classes).sort();
+  const f = q.trim().toUpperCase();
+  const shown = tickers.filter((t) => !f || t.includes(f) || `${classes[t].sector} ${classes[t].industry} ${classes[t].theme}`.toUpperCase().includes(f));
+  const exportCsv = () => {
+    const url = URL.createObjectURL(new Blob([classificationsCsv(classes)], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'rb-classifications.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const saveEdit = () => {
+    if (!edit) return;
+    const e = classificationError(edit.ticker, edit);
+    if (e) return setErr(e);
+    setClasses(upsertClassification(classes, edit.ticker, edit));
+    setEdit(null);
+    setErr('');
+  };
+  const cellIn = (k: 'sector' | 'industry' | 'theme') => edit && <input aria-label={k} className={box} value={edit[k]} onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />;
+  return (
+    <div className="mt-4 border-t border-ink-700 pt-3" data-section="classifications">
+      <div className="flex flex-wrap items-center gap-2">
+        <b className="text-sm text-ink-100">{tickers.length} classified tickers</b>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker / sector / industry / theme" className={`${box} max-w-xs`} aria-label="Filter classifications" />
+        <button type="button" onClick={() => { setEdit({ ticker: '', sector: '', industry: '', theme: '', isNew: true }); setErr(''); }} className="rounded-lg border border-ink-600 px-3 py-1.5 text-xs text-ink-200 hover:bg-ink-700">Add ticker</button>
+        <button type="button" onClick={exportCsv} disabled={!tickers.length} className="rounded-lg border border-ink-600 px-3 py-1.5 text-xs text-ink-200 hover:bg-ink-700 disabled:opacity-40">Export CSV</button>
+        {err && <span className="text-xs text-short">{err}</span>}
+      </div>
+      <div className="mt-2 max-h-80 overflow-auto rounded border border-ink-700">
+        <table className="w-full text-[12.5px]">
+          <thead className="sticky top-0 bg-ink-900 text-left text-ink-300">
+            <tr><th className="px-2 py-1">Ticker</th><th className="px-2 py-1">Sector</th><th className="px-2 py-1">Industry</th><th className="px-2 py-1">Theme</th><th className="px-2 py-1" /></tr>
+          </thead>
+          <tbody>
+            {edit?.isNew && (
+              <tr className="border-t border-ink-700 bg-ink-850">
+                <td className="px-2 py-1"><input aria-label="ticker" className={box} value={edit.ticker} onChange={(e) => setEdit({ ...edit, ticker: e.target.value.toUpperCase() })} /></td>
+                <td className="px-2 py-1">{cellIn('sector')}</td><td className="px-2 py-1">{cellIn('industry')}</td><td className="px-2 py-1">{cellIn('theme')}</td>
+                <td className="whitespace-nowrap px-2 py-1"><Btn onClick={saveEdit}>Save</Btn> <Btn onClick={() => setEdit(null)}>Cancel</Btn></td>
+              </tr>
+            )}
+            {shown.map((t) => {
+              const c = classes[t];
+              const editing = edit && !edit.isNew && edit.ticker === t;
+              return (
+                <tr key={t} className="border-t border-ink-700/70" data-ticker={t}>
+                  <td className="px-2 py-1 font-bold text-ink-100">{t}</td>
+                  {editing ? (
+                    <><td className="px-2 py-1">{cellIn('sector')}</td><td className="px-2 py-1">{cellIn('industry')}</td><td className="px-2 py-1">{cellIn('theme')}</td></>
+                  ) : (
+                    <><td className="px-2 py-1 text-ink-200">{c.sector}</td><td className="px-2 py-1 text-ink-300">{c.industry}</td><td className="px-2 py-1 text-ink-300">{c.theme}</td></>
+                  )}
+                  <td className="whitespace-nowrap px-2 py-1 text-right">
+                    {editing ? (
+                      <><Btn onClick={saveEdit}>Save</Btn> <Btn onClick={() => setEdit(null)}>Cancel</Btn></>
+                    ) : (
+                      <>
+                        <Btn onClick={() => { setEdit({ ticker: t, ...c, isNew: false }); setErr(''); }}>Edit</Btn>{' '}
+                        <Btn danger onClick={() => { if (window.confirm(`Delete the classification for ${t}? Its alerts will show SCORING INCOMPLETE until it is classified again.`)) setClasses(removeClassification(classes, t)); }}>Delete</Btn>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {shown.length === 0 && <tr><td colSpan={5} className="px-2 py-3 text-center text-ink-400">No classifications match.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const Btn = ({ onClick, children, danger }: { onClick: () => void; children: React.ReactNode; danger?: boolean }) => (
+  <button type="button" onClick={onClick} className={`rounded border px-2 py-0.5 text-[11px] ${danger ? 'border-short/60 text-short hover:bg-short-dim' : 'border-ink-600 text-ink-200 hover:bg-ink-700'}`}>{children}</button>
+);

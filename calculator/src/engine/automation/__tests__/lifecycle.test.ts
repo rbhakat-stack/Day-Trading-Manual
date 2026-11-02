@@ -189,3 +189,27 @@ describe('CR-13 end of day — detect and flag only', () => {
     expect(r.lifecycle.eod.noNewEntries).toBe(true);
   });
 });
+
+describe('CR-11 archive / retention', () => {
+  it('0–10 min operational; > 10 min stale but visible; next session or ≥ 12 h archived', async () => {
+    const { retentionState } = await import('../lifecycle/alertTimeSnapshot');
+    expect(retentionState(T0, T0 + 9 * 60_000)).toBe('OPERATIONAL');
+    expect(retentionState(T0, T0 + 11 * 60_000)).toBe('STALE_VISIBLE');
+    expect(retentionState(T0, T0 + 5 * 3_600_000)).toBe('STALE_VISIBLE');
+    expect(retentionState(T0, T0 + 12 * 3_600_000)).toBe('ARCHIVED');
+    expect(retentionState(T0, etToEpoch('2026-11-02', '09:30'))).toBe('ARCHIVED');
+  });
+  it('snapshots are pruned after 90 days only; history export is a dated CSV of frozen values', async () => {
+    const { pruneAlertSnapshots, alertSnapshotsCsv } = await import('../lifecycle/alertTimeSnapshot');
+    const [s] = session(strong('XYZ'), [{ now: NOW, price: 100.95 }]);
+    const map = { [s.frozen.recordId]: s.frozen };
+    expect(pruneAlertSnapshots(map, T0 + 89 * 86_400_000)).toBe(map);
+    expect(pruneAlertSnapshots(map, T0 + 91 * 86_400_000)).toEqual({});
+    const csv = alertSnapshotsCsv(map).trim().split('\n');
+    expect(csv).toHaveLength(2);
+    expect(csv[0]).toMatch(/^date,recordId,symbol,direction/);
+    expect(csv[1]).toContain('2026-10-30');
+    expect(csv[1]).toContain(String(s.frozen.v11.total));
+    expect(alertSnapshotsCsv(map, '2026-10-31').trim().split('\n')).toHaveLength(1);
+  });
+});
