@@ -55,7 +55,12 @@ export interface AutoAlertRecord {
   errors: string[];
   attempts: number;
   versions: { rules: string; scoring: string; strategy: string };
+  /** End of the LATEST processing attempt (overwritten by retries — not a latency source). */
   processedIso: string | null;
+  /** End of the FIRST processing attempt — written once, never overwritten (Decision Latency). Absent on older records. */
+  firstProcessedIso?: string | null;
+  /** Retry observability (not used for Decision Latency). */
+  retry?: { count: number; lastProcessedIso: string; lastDurationMs: number };
 }
 
 /* ───────────────────────── configuration ───────────────────────── */

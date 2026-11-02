@@ -14,6 +14,7 @@ import type { Candidate, ManualPosition } from '../../ranker/opportunityTypes';
 import { etParts } from '../etTime';
 import type { QueueRow } from '../liveQueue';
 import type { AlertTimeSnapshot } from './alertTimeSnapshot';
+import type { AutoAlertRecordV12 } from '../v12/audit';
 
 export type ExecutionState =
   | 'SCORING'
@@ -22,6 +23,7 @@ export type ExecutionState =
   | 'LATE — REVIEW'
   | 'CHASED'
   | 'EXPIRED — STALE'
+  | 'ENTRY WINDOW CLOSED'
   | 'PORTFOLIO BLOCKED'
   | 'BELOW THRESHOLD'
   | 'NOT ELIGIBLE'
@@ -54,6 +56,11 @@ export interface Lifecycle {
   /** One-line reason for the execution state / actionability. */
   reason: string;
   terminal: boolean;
+  /**
+   * CR-13 — the RB v1.1 decision still carries its (historical) ticket but the 15:30 ET entry cutoff has passed:
+   * the ticket must NOT be executed. The v1.1 output itself is unchanged.
+   */
+  entryWindowClosed: boolean;
   gates: GateSequence;
   score: ScoreDisplay;
   eod: EodStatus;
@@ -96,6 +103,10 @@ export interface EodStatus {
 }
 
 const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+export const ENTRY_WINDOW_CLOSED = 'NO TICKET — ENTRY WINDOW CLOSED. DO NOT EXECUTE — AFTER 3:30 PM ENTRY CUTOFF (any ticket issued for this alert before 15:30 is historical).';
+const WINDOW_CLOSED_DETAIL = 'NOT ELIGIBLE — NEW ENTRY WINDOW CLOSED';
+/** The entry window closed AFTER a valid alert (alert before 15:30, evaluated at/after it) — time-driven, not never-eligible. */
+const closedAfterAlert = (row: QueueRow, detail: string) => detail === WINDOW_CLOSED_DETAIL && etParts(row.record.alert.alertTimeMs).hhmm < RB_V1_DEFAULTS.entryWindowEnd;
 export const EOD_TIMES = { noNewEntries: '15:30', cancel: '15:50', exit: '15:55', flat: '15:58', close: '16:00' } as const;
 
 /**
@@ -120,6 +131,36 @@ export function eodStatus(now: number, candidates: Candidate[], positions: Manua
 
 /* ───────────────────────── per-alert lifecycle ───────────────────────── */
 
+/** NOT ELIGIBLE reasons that are caused by the passage of time / price after the alert (the setup itself was valid). */
+const TIME_DRIVEN = ['STALE — DO NOT TRADE', 'DO NOT CHASE'];
+const TICKET_DECISIONS = ['TRADE NOW — ELITE', 'HIGH PRIORITY — TRADE CONSIDERATION'];
+
+/**
+ * CR-05 / never-eligible — why an alert was NEVER actionable, from the alert-time snapshot first (what RB decided at
+ * alert time), else the current decision. Null = it was a valid setup, so it may expire.
+ *   • NOT ELIGIBLE for a non-time reason (after regular session, entry window, duplicate, hard rule …)
+ *   • below the score threshold (SKIP)
+ *   • data never trustworthy within the window (DATA REVIEW / DATA ERROR)
+ *   • v1.2: TrendSpider not qualified (missing / unknown / retired / conflicting rule_set) and no ticket at alert time
+ */
+export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { state: ExecutionState; reason: string } | null {
+  const d = row.decision;
+  const strip = (x: string) => x.replace(/^NOT ELIGIBLE — /, '');
+  const atAlert = snap ? { decision: snap.v11.decision, detail: snap.v11.detail } : null;
+  for (const x of [atAlert, { decision: d.decision, detail: d.detail }]) {
+    if (!x) continue;
+    if (x.decision === 'NOT ELIGIBLE' && !TIME_DRIVEN.includes(x.detail) && !closedAfterAlert(row, x.detail)) return { state: 'NOT ELIGIBLE', reason: `NOT ELIGIBLE — ${strip(x.detail)} (never actionable)` };
+    if (x.decision === 'SKIP') return { state: 'BELOW THRESHOLD', reason: `${x.detail} (never actionable)` };
+  }
+  if (row.record.status === 'DATA_ERROR' || (atAlert?.decision ?? d.decision) === 'DATA REVIEW REQUIRED' && d.decision === 'DATA REVIEW REQUIRED') {
+    return { state: 'DATA REVIEW', reason: `Never actionable — ${atAlert?.detail ?? d.detail} (unresolved within the alert window)` };
+  }
+  const q = (row.record as AutoAlertRecordV12).v12?.qualification;
+  const ticketAtAlert = atAlert ? TICKET_DECISIONS.includes(atAlert.decision) : false;
+  if (q && q.status !== 'QUALIFIED' && !ticketAtAlert && !d.ticket) return { state: 'NOT ELIGIBLE', reason: `NOT ELIGIBLE — TrendSpider not qualified: rule_set ${q.ruleSet.status} (never actionable)` };
+  return null;
+}
+
 export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus): Lifecycle {
   const d = row.decision;
   const st = row.candidate?.status;
@@ -136,25 +177,33 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
     : frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const frozenScore: ScoreDisplay = frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const L = (executionState: ExecutionState, finalActionability: FinalActionability, reason: string, terminal = false, score = liveScore): Lifecycle =>
-    ({ alertTimeTier, executionState, finalActionability, reason, terminal, gates, score, eod });
+    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, gates, score, eod });
 
   // User-controlled lifecycle always wins: an order or position is governed by the broker, not by the alert clock.
   if (st === 'PENDING') return L('SUBMITTED', 'NO TICKET', 'Order marked submitted — manage it at the broker.', false, frozenScore);
   if (st === 'FILLED') return L('IN POSITION', 'NO TICKET', 'Position open — governed by its stop and target.', false, frozenScore);
   if (st && CLOSED.includes(st)) return L('CLOSED', 'NO TRADE', st.replace(/_/g, ' '), true, frozenScore);
 
-  // CR-05 — terminal staleness: no revival, no READY, no rescoring after the alert window.
-  if (now >= expiresAt) return L('EXPIRED — STALE', 'NO TRADE', `EXPIRED — STALE: no trigger within ${RB_V1_DEFAULTS.alertWindowMinutes} minutes of the alert. Terminal.`, true, frozenScore);
+  // CR-05 — terminal staleness: no revival, no READY, no rescoring after the alert window. Only an alert that was a
+  // valid setup can expire; one that was never eligible keeps the reason it was never actionable (time never
+  // rewrites "NOT ELIGIBLE — AFTER REGULAR SESSION" into "EXPIRED — STALE").
+  if (now >= expiresAt) {
+    const ne = neverEligible(row, snap);
+    if (ne) return L(ne.state, 'NO TRADE', ne.reason, true, frozenScore);
+    return L('EXPIRED — STALE', 'NO TRADE', `EXPIRED — STALE: no trigger within ${RB_V1_DEFAULTS.alertWindowMinutes} minutes of the alert. Terminal.`, true, frozenScore);
+  }
 
   if (d.decision === 'SCORING') return L('SCORING', 'NO TICKET', d.detail);
   if (d.section === 'DATA_REVIEW') return L('DATA REVIEW', 'NO TICKET', d.detail);
   if (action === 'SKIP_CHASED' || d.detail === 'DO NOT CHASE') return L('CHASED', 'NO TRADE', 'Price moved beyond the 0.25 ATR chase limit — do not chase.', true, frozenScore);
   // CR-07 — a crossed-but-late setup is a review state, never WATCHLIST.
   if (action === 'MARKET_LATE_ENTRY') return L('LATE — REVIEW', 'NO TICKET', 'Trigger crossed (≤ 0.25 ATR) — no automatic ticket; manual review only.', false, frozenScore);
+  // CR-13 — the 15:30 cutoff reached after a valid alert: RB v1.1 has withdrawn the ticket; say so unambiguously.
+  if (d.decision === 'NOT ELIGIBLE' && closedAfterAlert(row, d.detail)) return { ...L('ENTRY WINDOW CLOSED', 'NO TICKET', ENTRY_WINDOW_CLOSED, true, frozenScore), entryWindowClosed: true };
   if (d.decision === 'NOT ELIGIBLE') return L('NOT ELIGIBLE', 'NO TRADE', d.detail, true, frozenScore);
   if (d.decision === 'SKIP') return L('BELOW THRESHOLD', 'NO TRADE', d.detail, true);
   if (d.ticket) {
-    if (eod.noNewEntries) return L('ACTIVE', 'NO TICKET', `EOD — no new entries after ${EOD_TIMES.noNewEntries} ET. Do not submit.`);
+    if (eod.noNewEntries) return { ...L('ACTIVE', 'NO TICKET', ENTRY_WINDOW_CLOSED), entryWindowClosed: true };
     return L('ACTIVE', 'READY', d.detail);
   }
   if (gates.portfolio.startsWith('BLOCKED') || gates.capital.startsWith('BLOCKED')) return L('PORTFOLIO BLOCKED', 'NO TICKET', gates.portfolio.startsWith('BLOCKED') ? gates.portfolio : gates.capital);

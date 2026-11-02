@@ -151,6 +151,10 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
     deps.log('market_data_fetch_failed', { id: r.id, symbol: r.alert.symbol, error: (e as Error).message, attempt: r.attempts });
   }
   r.processedIso = new Date(deps.now()).toISOString();
+  // CR-01: the ORIGINAL decision time is written once (first attempt, whatever its outcome) and never overwritten.
+  // Retries are observable separately and are never used for Decision Latency.
+  r.firstProcessedIso = rec.firstProcessedIso ?? (rec.attempts === 0 ? r.processedIso : null);
+  if (r.attempts > 1) r.retry = { count: r.attempts - 1, lastProcessedIso: r.processedIso, lastDurationMs: deps.now() - started };
   // Immutability: never overwrite a record that another invocation already completed.
   const current = await deps.store.get(date, r.id);
   if (current?.status === 'OK') return current;

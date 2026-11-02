@@ -338,8 +338,9 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           ['Signal candle', f.signalCandle ?? '—'],
           ['Mapped candle (v1.2)', f.mappedCandle ?? '—'],
           ['Receipt lag', lat.receiptLagSec !== null ? `${lat.receiptLagSec} s after candle close${lat.signalCloseSource === 'ALERT_TIME' ? ' (alert-time boundary)' : ''}` : '—'],
-          ['RB processing', lat.processingSec !== null ? `${lat.processingSec} s` : '—'],
-          ['Total latency', lat.totalSec !== null ? `${lat.totalSec} s (signal close → decision ready)` : '— (decision time not recorded)'],
+          ['RB processing', lat.processingSec !== null ? `${lat.processingSec} s (first attempt)` : lat.retry ? '— (retried; first-attempt time not recorded)' : '—'],
+          ['Total decision latency', lat.totalSec !== null ? `${lat.totalSec} s (signal close → initial decision)` : '— (initial decision time not recorded)'],
+          ...(lat.retry ? [['Retries (not latency)', `${lat.retry.count} · last ${lat.retry.lastProcessedAt ? fmtEt(lat.retry.lastProcessedAt) : '—'}${lat.retry.lastDurationSec !== null ? ` · ${lat.retry.lastDurationSec} s` : ''}`] as [string, ReactNode]] : []),
           ['Mapping status', f.mappingStatus ?? '—'],
           ['Rule set', rs.status ? `${rs.id} (${rs.status})` : rs.id],
           ['TS Qualified', <b key="q" className={TONE_TEXT[q.label === 'QUALIFIED' ? 'ok' : q.tone]}>{q.label === 'QUALIFIED' ? 'YES' : q.label === '—' ? '—' : `NO — ${q.label}`}</b>],
@@ -382,7 +383,8 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
 
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[#3ee08f]">{active?.version ?? ''} active actions</span>
-        {r.decision.ticket && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
+        {r.decision.ticket && r.lifecycle?.entryWindowClosed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — after 3:30 PM entry cutoff</span>}
+        {r.decision.ticket && !r.lifecycle?.entryWindowClosed && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
         {canAct && <button type="button" onClick={() => actions.watch(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Watch</button>}
         {canAct && <button type="button" onClick={() => actions.skip(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Skip trade</button>}
         {v && <button type="button" onClick={() => actions.openInCalculator(r)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Open in manual Calculator</button>}

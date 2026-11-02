@@ -1,4 +1,8 @@
 /**
+ * READ-ONLY Alpaca clients: market data (below) and, separately guarded, broker facts (orders/positions of the paper
+ * account, GET list endpoints only — end of this file). Nothing in this module can submit, modify, cancel or close
+ * an order or position.
+ *
  * READ-ONLY Alpaca Market Data client.
  *
  * Architectural guard: every request goes through `assertReadOnlyDataRequest`, which allows ONLY HTTP GET to the
@@ -133,4 +137,73 @@ export class BarCache {
     if (this.m.size > 500) this.m.clear();
     this.m.set(key, { at: now, bars });
   }
+}
+
+/* ───────────────────────── READ-ONLY broker facts (CR-12) ───────────────────────── */
+
+/**
+ * READ-ONLY Alpaca broker client (orders and positions of the PAPER account only).
+ *
+ * Narrowest possible extension of the no-execution boundary, separate from the market-data guard above:
+ *   • method: GET only — the request below hard-codes `method: 'GET'` and sends no body;
+ *   • host: the paper Trading API host only (the live trading host is NOT allowed);
+ *   • paths: exactly the two LIST endpoints `/v2/orders` and `/v2/positions` — no ids, no sub-paths, so the
+ *     per-order / per-position endpoints (which accept DELETE/PATCH) are unreachable, and `/v2/account`,
+ *     activities, watchlists, assets and everything else are rejected;
+ *   • query: an allowlist of read filters only.
+ * There is no function here that submits, replaces, cancels or closes anything; tests assert POST/PUT/PATCH/DELETE
+ * are rejected for every URL and that every network call is a GET without a body.
+ */
+export const ALLOWED_BROKER_HOSTS = ['paper-api.alpaca.markets'];
+export const DEFAULT_BROKER_BASE_URL = 'https://paper-api.alpaca.markets';
+const BROKER_PATHS: Record<string, string[]> = {
+  '/v2/orders': ['status', 'limit', 'after', 'until', 'direction', 'nested', 'symbols'],
+  '/v2/positions': [],
+};
+
+export function assertReadOnlyBrokerRequest(url: string, method: string): void {
+  const u = new URL(url);
+  if (method.toUpperCase() !== 'GET') throw new Error(`Blocked: broker client only performs GET (got ${method}).`);
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || !ALLOWED_BROKER_HOSTS.includes(u.hostname)) throw new Error(`Blocked: ${u.hostname} is not the Alpaca paper trading host.`);
+  const allowed = BROKER_PATHS[u.pathname];
+  if (!allowed) throw new Error(`Blocked: ${u.pathname} is not a read-only broker list endpoint.`);
+  for (const k of u.searchParams.keys()) if (!allowed.includes(k)) throw new Error(`Blocked: query parameter "${k}" is not allowed.`);
+}
+
+export interface BrokerReadClient {
+  readonly host: string;
+  /** Raw Alpaca order objects (with bracket legs when nested=true), oldest first. */
+  listOrders(o: { afterIso: string; untilIso?: string; limit?: number }): Promise<unknown[]>;
+  /** Raw Alpaca position objects. */
+  listPositions(): Promise<unknown[]>;
+}
+
+export function createAlpacaBrokerRead(o: { keyId: string; secretKey: string; baseUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number }): BrokerReadClient {
+  const base = (o.baseUrl || DEFAULT_BROKER_BASE_URL).replace(/\/+$/, '');
+  assertReadOnlyBrokerRequest(`${base}/v2/positions`, 'GET'); // fail fast on a wrong host
+  const f = o.fetchImpl ?? fetch;
+  const timeoutMs = o.timeoutMs ?? 4000;
+  async function read(path: string, params: Record<string, string>): Promise<unknown[]> {
+    const qs = new URLSearchParams(params).toString();
+    const url = `${base}${path}${qs ? `?${qs}` : ''}`;
+    assertReadOnlyBrokerRequest(url, 'GET');
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const res = await f(url, { method: 'GET', headers: { 'APCA-API-KEY-ID': o.keyId, 'APCA-API-SECRET-KEY': o.secretKey, accept: 'application/json' }, signal: ctl.signal });
+      if (!res.ok) throw new DataFetchError(`Alpaca broker ${res.status}: ${(await res.text()).slice(0, 200)}`, res.status);
+      const j = await res.json();
+      return Array.isArray(j) ? j : [];
+    } catch (e) {
+      if (e instanceof DataFetchError) throw e;
+      throw new DataFetchError(`Alpaca broker request failed: ${(e as Error).name === 'AbortError' ? `timeout after ${timeoutMs} ms` : (e as Error).message}`, null);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    host: new URL(base).hostname,
+    listOrders: ({ afterIso, untilIso, limit = 500 }) => read('/v2/orders', { status: 'all', nested: 'true', direction: 'asc', limit: String(Math.min(500, Math.max(1, limit))), after: afterIso, ...(untilIso ? { until: untilIso } : {}) }),
+    listPositions: () => read('/v2/positions', {}),
+  };
 }

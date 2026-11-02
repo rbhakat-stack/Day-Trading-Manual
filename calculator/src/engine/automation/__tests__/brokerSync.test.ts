@@ -86,3 +86,20 @@ describe('CR-12 independent answers (manual trades never rewrite strategy histor
     expect(sync([o])[0]).toMatchObject({ strategyDecision: 'NO ALERT', manualOverride: true, recordId: null });
   });
 });
+
+describe('CR-12 live feed: raw broker objects and broker positions', () => {
+  it('raw order objects from the read-only feed reconcile like a paste', async () => {
+    const { brokerOrdersFrom } = await import('../lifecycle/brokerSync');
+    const { orders, errors } = brokerOrdersFrom([bracket({})]);
+    expect(errors).toEqual([]);
+    expect(reconcileBroker(orders, rowsFor(100.95))[0]).toMatchObject({ brokerStatus: 'FILLED', positionStatus: 'OPEN' });
+  });
+  it('broker positions are the authority for OPEN / CLOSED (exit outside the order window)', async () => {
+    const { brokerOrdersFrom } = await import('../lifecycle/brokerSync');
+    const { orders } = brokerOrdersFrom([bracket({})]);
+    const closed = reconcileBroker(orders, rowsFor(100.95), [])[0];
+    expect(closed.positionStatus).toBe('CLOSED');
+    expect(closed.notes.join(' ')).toMatch(/broker positions/);
+    expect(reconcileBroker(orders, rowsFor(100.95), [{ symbol: 'XYZ', qty: '197' }])[0].positionStatus).toBe('OPEN');
+  });
+});

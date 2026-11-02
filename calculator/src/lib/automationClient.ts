@@ -187,6 +187,41 @@ export function useLiveQuotes(cfg: AutomationConfig, token: string, symbols: str
   return { quotes, error };
 }
 
+export interface BrokerPosition { symbol: string; side?: string; qty?: string; avg_entry_price?: string; current_price?: string; market_value?: string; unrealized_pl?: string }
+export interface BrokerFeed {
+  /** 'OFF' = the server has broker sync disabled (RB_BROKER_SYNC_ENABLED); 'ERROR' = last read failed. */
+  status: 'LOADING' | 'LIVE' | 'OFF' | 'ERROR';
+  orders: unknown[];
+  positions: BrokerPosition[];
+  lastOkMs: number | null;
+  error: string | null;
+}
+
+/** CR-12 — polls the READ-ONLY rb-broker endpoint (paper account orders + positions). It never sends an order. */
+export function useBrokerFeed(enabled: boolean, token: string, date: string, pollMs = 30_000): BrokerFeed {
+  const [s, setS] = useState<BrokerFeed>({ status: 'LOADING', orders: [], positions: [], lastOkMs: null, error: null });
+  useEffect(() => {
+    if (!enabled || !token) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const j = await call<{ orders: unknown[]; positions: BrokerPosition[] }>(`rb-broker?date=${date}`, token);
+        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, lastOkMs: Date.now(), error: null });
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (!stop) setS((x) => ({ ...x, status: /HTTP 503/.test(msg) ? 'OFF' : 'ERROR', error: msg }));
+      }
+    };
+    void tick();
+    const h = setInterval(tick, Math.max(10_000, pollMs));
+    return () => {
+      stop = true;
+      clearInterval(h);
+    };
+  }, [enabled, token, date, pollMs]);
+  return s;
+}
+
 export async function checkHealth(token: string) {
   return call<{ ok: boolean; config: Record<string, unknown>; versions: Record<string, string>; execution: string }>('rb-health', token);
 }

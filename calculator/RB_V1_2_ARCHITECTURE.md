@@ -573,7 +573,7 @@ before and after).
 
 | CR | Where | Notes |
 |---|---|---|
-| 01 latency | `lifecycle/latency.ts` | signal close (v1.2 mapping, else 5-min boundary of alert time) → `receivedMs` → `processedIso`; never the clock; never read by a decision |
+| 01 latency | `lifecycle/latency.ts` | signal close (v1.2 mapping, else 5-min boundary of alert time) → first receipt → `firstProcessedIso` (first attempt; never a retry); never the clock; never read by a decision |
 | 02 classifications | `AutomationSettings` · `automationClient` | view/count/filter, CSV export (round-trips the import), edit one, delete one (built-in defaults tombstoned) |
 | 03 / 04 snapshot vs execution | `lifecycle/alertTimeSnapshot.ts`, `executionState.ts` | write-once snapshot (`rbv1.v12.alertSnapshots.v1`) finalized on completion or 60 s after receipt; execution state derived each pass |
 | 05 terminal stale | `executionState.ts` | `EXPIRED — STALE` at alert + 10 min, NO TRADE, no revival (submitted/filled orders excepted) |
@@ -583,11 +583,29 @@ before and after).
 | 09 freshness | unchanged v1.1 gate | data ≤ 5 s, last trade ≤ 60 s stay hard (tests: Case A / B) |
 | 10 gate sequencing | `gateSequence()` | score fail → Portfolio NOT EVALUATED — NOT REQUIRED, Capital NOT ATTEMPTED; portfolio block → Capital NOT ATTEMPTED |
 | 11 retention | `retentionState()`, `pruneAlertSnapshots()`, history CSV | queue hides previous-session / ≥ 12 h alerts; snapshots kept 90 days; server records never deleted |
-| 12 broker sync | `lifecycle/brokerSync.ts`, `BrokerSync.tsx` | read-only reconciliation of PASTED Alpaca order JSON; no broker connection (static NO TRADE EXECUTION guard unchanged) |
-| 13 EOD | `eodStatus()` | 15:30 no new entries (READY withheld by the execution layer), 15:50 cancel, 15:55 exit, 15:58 flat — flags only |
+| 12 broker sync | `alpaca.ts` (broker guard), `rb-broker.mts`, `lifecycle/brokerSync.ts`, `BrokerSync.tsx` | read-only paper-account orders/positions via GET-only list endpoints (flag-gated); pasted JSON as fallback |
+| 13 EOD | `eodStatus()` | 15:30 no new entries (ENTRY WINDOW CLOSED), 15:50 cancel, 15:55 exit, 15:58 flat — flags only |
 | 14 labels / audit | `ranker/componentAudit.ts` | display-layer labels consistent with points; Location/Extension audit cross-checked against the scorer |
 
-Known limitations: live Alpaca order polling (CR-12) needs a trading-API key and an approved change to the static
-NO TRADE EXECUTION guard — not done. The 15:30 EOD rule withholds READY in the v1.2 execution layer only; the v1.1
-ticket object itself is unchanged and its card shows the warning. Latency for a retried record reflects the last
-processing attempt.
+Punch-list follow-up (shadow-validation gate):
+
+* **CR-12 read-only Alpaca sync.** `netlify/lib/alpaca.ts` gains a SEPARATE guard, `assertReadOnlyBrokerRequest`, which
+  allows only GET to `paper-api.alpaca.markets` on exactly `/v2/orders` and `/v2/positions` (list endpoints, allowlisted
+  query parameters). There are no per-id paths, no account paths, no live host and no body. Endpoint
+  `rb-broker` (GET, app token, OFF unless `RB_BROKER_SYNC_ENABLED=true`) returns sanitized orders (with legs) and positions.
+  The market-data guard and every existing NO TRADE EXECUTION test are unchanged; `brokerReadOnly.test.ts` proves
+  POST/PUT/PATCH/DELETE are rejected for every URL. Alpaca keys have no read-only scope, so the boundary is in code (as it
+  always was for market data). The pasted-JSON fallback remains.
+* **Decision Latency** uses `firstProcessedIso` (end of the first attempt, written once) instead of `processedIso`, which
+  every retry overwrites. Retry facts go in `retry` {count, lastProcessedIso, lastDurationMs}. On older retried records the
+  original processing time was never stored, so it shows as not recorded.
+* **Never eligible ≠ expired.** Only a valid setup can become `EXPIRED — STALE`. These keep their reason:
+  * NOT ELIGIBLE for a non-time reason (after hours, too early, duplicate, hard rule);
+  * SKIP;
+  * unresolved data;
+  * a missing or invalid rule set when there was no ticket at alert time.
+* **15:30.** RB v1.1 evaluates the entry window at evaluation time (alert time + minutes since the alert), so it
+  withdraws its own ticket at 15:30 ("NOT ELIGIBLE — NEW ENTRY WINDOW CLOSED"). A v1.1 ticket is never shown after the
+  cutoff. The v1.2 layer reports `ENTRY WINDOW CLOSED` / `NO TICKET — ENTRY WINDOW CLOSED` and shows a "DO NOT EXECUTE —
+  AFTER 3:30 PM ENTRY CUTOFF" banner, listing the historical alert-time ticket struck through. An earlier note here said
+  v1.1 kept the ticket; that was wrong.

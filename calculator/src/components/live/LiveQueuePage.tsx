@@ -2,13 +2,15 @@ import { useState } from 'react';
 import { ticketString, type FreshnessBand, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { Classification } from '../../engine/automation/autoCandidate';
-import { mmss } from '../../engine/automation/etTime';
+import { fmtEt, mmss } from '../../engine/automation/etTime';
+const etTime = (ms: number) => fmtEt(ms).replace(' ET', '');
 import type { ReplacementSuggestion } from '../../engine/ranker/candidateRanker';
 import { ACTIVE_LOGIC_VERSION } from '../../engine/automation/v12/dispatch';
 import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
 import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { BrokerSyncPanel } from './BrokerSync';
+import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
 import { QueueHeader, QueueLegend, QueueTable, QueueToolbar, type ColumnGroups, type QueueFilter } from './QueueParts';
@@ -44,12 +46,14 @@ interface Props {
   pollMs?: number;
   /** CR-11 — retained alert-time snapshot history (90 days) and its CSV export. */
   history?: { count: number; onExport: () => void };
+  /** CR-12 — read-only broker feed (paper account), when enabled on the server. */
+  broker?: BrokerFeed;
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
@@ -57,7 +61,9 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const [cols, setCols] = useState<ColumnGroups>({ shadow: true, trade: true, safety: true });
   const [open, setOpen] = useState<Set<string>>(new Set());
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
-  const actionable = rows.filter((r) => r.decision.ticket);
+  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed);
+  // CR-13 — v1.1 tickets past the 15:30 entry cutoff: shown as historical, never as an order to place.
+  const cutoff = rows.filter((r) => r.lifecycle?.entryWindowClosed);
   if (!enabled) {
     return (
       <Panel title="Live Alert Queue">
@@ -109,9 +115,28 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
         </p>
       )}
 
-      <BrokerSyncPanel rows={allRows} />
+      <BrokerSyncPanel rows={allRows} feed={broker} now={now} />
 
       {stronger.length > 0 && <div className="grid gap-3 lg:grid-cols-2">{stronger.map((sg) => <SuggestionCard key={`${sg.pendingId}-${sg.candidateId}`} sg={sg} onKeep={actions.keep} onReplace={actions.replace} />)}</div>}
+
+      {cutoff.length > 0 && (
+        <div className="space-y-2" data-section="entry-cutoff">
+          <h3 className="rounded-lg bg-short px-3 py-2 text-[15px] font-black uppercase tracking-wide text-ink-950">
+            NO TICKET — ENTRY WINDOW CLOSED · DO NOT EXECUTE — AFTER 3:30 PM ENTRY CUTOFF
+          </h3>
+          <p className="text-[12px] text-ink-300">These alerts arrived before 15:30 ET. Any ticket they carried is historical and must not be placed now.</p>
+          <ul className="space-y-1">
+            {cutoff.map((r) => (
+              <li key={r.record.id} className="rounded-lg border-2 border-short bg-short-dim/20 px-3 py-2 text-[13px] text-ink-100" data-cutoff-row={r.record.alert.symbol}>
+                <b>{r.record.alert.symbol}</b> {r.record.alert.direction} · alert {etTime(r.record.alert.alertTimeMs)} ET
+                {r.candidate ? <span className="text-ink-400 line-through"> · historical {r.record.alert.direction === 'LONG' ? 'BUY' : 'SELL'} STOP {r.candidate.shares} @ {p(r.candidate.entry)}</span> : null}
+                <b className="ml-2 text-short">DO NOT EXECUTE</b>
+              </li>
+            ))}
+            {cutoff.filter((r) => r.decision.ticket).map((r) => <li key={`${r.record.id}-card`}><ActionCard r={r} actions={actions} /></li>)}
+          </ul>
+        </div>
+      )}
 
       {actionable.length > 0 && (
         <div className="space-y-2">
@@ -131,7 +156,8 @@ function ActionCard({ r, actions }: { r: QueueRow; actions: LiveActions }) {
   const t = r.decision.ticket as TrendSpiderTicket;
   const [copied, setCopied] = useState(false);
   const fr = r.decision.freshness;
-  const elite = r.decision.section === 'ACTION_NOW';
+  const closed = !!r.lifecycle?.entryWindowClosed;
+  const elite = r.decision.section === 'ACTION_NOW' && !closed;
   const L = r.record.alert.direction === 'LONG';
   const copy = async () => {
     try {
@@ -143,7 +169,8 @@ function ActionCard({ r, actions }: { r: QueueRow; actions: LiveActions }) {
     }
   };
   return (
-    <section className={`rounded-xl border-2 p-4 ${elite ? 'border-long bg-long-dim/20' : 'border-[#5b8cff] bg-[#13213f]/60'}`} aria-label={`${r.record.alert.symbol} trade ticket`}>
+    <section className={`rounded-xl border-2 p-4 ${closed ? 'border-short bg-short-dim/20' : elite ? 'border-long bg-long-dim/20' : 'border-[#5b8cff] bg-[#13213f]/60'}`} aria-label={`${r.record.alert.symbol} ${closed ? 'historical ticket — do not execute' : 'trade ticket'}`} data-cutoff={closed || undefined}>
+      {closed && <div className="mb-3 rounded-lg bg-short px-3 py-2 text-center text-[16px] font-black uppercase tracking-wide text-ink-950">DO NOT EXECUTE — AFTER 3:30 PM ENTRY CUTOFF</div>}
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-2xl font-black tracking-tight text-ink-100">
@@ -158,8 +185,8 @@ function ActionCard({ r, actions }: { r: QueueRow; actions: LiveActions }) {
           <div className="text-[10px] font-bold uppercase tracking-wider">{fr.band} · age {mmss(fr.ageMs)}</div>
         </div>
       </div>
-      <div className="mt-3 rounded-lg border border-ink-600 bg-ink-950 p-3">
-        <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-ink-300">TrendSpider order</div>
+      <div className={`mt-3 rounded-lg border border-ink-600 bg-ink-950 p-3 ${closed ? 'opacity-50 line-through' : ''}`}>
+        <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-ink-300">{closed ? 'RB v1.1 ticket — historical, not an order' : 'TrendSpider order'}</div>
         <dl className="num grid grid-cols-2 gap-x-4 gap-y-1 text-lg">
           <Field k="Action" v={t.action} tone={t.action === 'BUY' ? 'text-long' : 'text-short'} />
           <Field k="Order type" v={t.orderType} />
@@ -175,10 +202,10 @@ function ActionCard({ r, actions }: { r: QueueRow; actions: LiveActions }) {
       {r.lifecycle && r.lifecycle.finalActionability !== 'READY' && <p className="mt-2 rounded bg-short-dim/40 px-2 py-1 text-xs font-bold text-[#ffc0c8]">{r.lifecycle.finalActionability}: {r.lifecycle.reason}</p>}
       <p className="mt-2 rounded bg-warn-dim/40 px-2 py-1 text-xs font-semibold text-[#ffe2a8]">Manual execution only. Verify the TrendSpider ticket before submitting. Nothing has been placed.</p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" onClick={copy} className="rounded-lg border-2 border-[#5b8cff] px-3 py-2 text-xs font-bold uppercase tracking-wider text-[#bcd0ff] hover:bg-[#1a2c55]">
+        {!closed && <button type="button" onClick={copy} className="rounded-lg border-2 border-[#5b8cff] px-3 py-2 text-xs font-bold uppercase tracking-wider text-[#bcd0ff] hover:bg-[#1a2c55]">
           {copied ? '✓ Copied' : 'Copy TrendSpider order'}
-        </button>
-        <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded-lg bg-long px-3 py-2 text-xs font-bold uppercase tracking-wider text-ink-950 hover:brightness-110">Mark order submitted</button>
+        </button>}
+        {!closed && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded-lg bg-long px-3 py-2 text-xs font-bold uppercase tracking-wider text-ink-950 hover:brightness-110">Mark order submitted</button>}
         <button type="button" onClick={() => actions.watch(r.record.id)} className="rounded-lg border border-ink-600 px-3 py-2 text-xs font-semibold text-ink-200 hover:bg-ink-700">Watch</button>
         <button type="button" onClick={() => actions.skip(r.record.id)} className="rounded-lg border border-ink-600 px-3 py-2 text-xs font-semibold text-ink-300 hover:bg-short-dim hover:text-short">Skip trade</button>
       </div>

@@ -31,7 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
-import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
+import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
   coreChanged,
@@ -262,6 +262,7 @@ export default function App() {
   }, [autoCfg.enabled]);
   const autoDate = etParts(clock).date;
   const feed = useAlertRecords(autoCfg, autoToken, autoDate);
+  const brokerFeed = useBrokerFeed(autoCfg.enabled, autoToken, autoDate);
   const liveSymbols = useMemo(() => {
     const live = new Set(candidates.filter((c) => c.source === 'AUTO' && ['NEW', 'WATCHLIST', 'PENDING'].includes(c.status)).map((c) => c.ticker));
     for (const r of feed.records) if (r.status === 'OK' && clock - r.alert.alertTimeMs < 15 * 60_000) live.add(r.alert.symbol);
@@ -531,6 +532,7 @@ export default function App() {
                 actions={liveActions}
                 onOpenSettings={() => setLiveSub('automation')}
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
+                broker={brokerFeed}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
               />

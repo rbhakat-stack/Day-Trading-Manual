@@ -86,6 +86,11 @@ export function parseBrokerOrders(text: string): { orders: BrokerOrder[]; errors
   }
   const arr = Array.isArray(raw) ? raw : Array.isArray((raw as { orders?: unknown })?.orders) ? (raw as { orders: unknown[] }).orders : null;
   if (!arr) return { orders: [], errors: ['Expected an array of orders.'] };
+  return brokerOrdersFrom(arr);
+}
+
+/** Orders from raw Alpaca order objects (the read-only rb-broker feed or a pasted export). */
+export function brokerOrdersFrom(arr: unknown[]): { orders: BrokerOrder[]; errors: string[] } {
   const orders: BrokerOrder[] = [];
   const errors: string[] = [];
   arr.forEach((o, i) => {
@@ -134,7 +139,9 @@ function matchRow(o: BrokerOrder, rows: QueueRow[]): QueueRow | null {
  * Reconcile imported orders with the queue rows. Entry = an order without a parent that opens (buy for LONG / sell
  * for SHORT, first per ticker); exits = its filled bracket legs, then opposite-side orders for the same ticker after it.
  */
-export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[]): TradeSync[] {
+export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[], positions?: { symbol: string; qty?: string | number }[]): TradeSync[] {
+  // Live broker positions (when supplied) are the authority for open/closed; fills alone may miss an exit outside the window.
+  const held = positions ? new Set(positions.filter((p) => Number(p.qty ?? 0) !== 0).map((p) => p.symbol.toUpperCase())) : null;
   const sorted = [...orders].sort((a, b) => (a.submittedAt ?? 0) - (b.submittedAt ?? 0));
   // Bracket legs are exits of their parent, never entries of their own (even when listed at top level too).
   const used = new Set<string>(sorted.flatMap((o) => o.legs.map((l) => l.id)));
@@ -166,9 +173,11 @@ export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[]): TradeS
     const closedQty = Math.min(exitQty, o.filledQty);
     const sign = direction === 'LONG' ? 1 : -1;
     const realizedPL = closedQty && o.filledAvgPrice !== null && exitAvg !== null ? Math.round(sign * (exitAvg - o.filledAvgPrice) * closedQty * 100) / 100 : null;
-    const positionStatus: PositionStatus = o.filledQty <= 0 ? 'NONE' : exitQty >= o.filledQty ? 'CLOSED' : 'OPEN';
+    const fromFills: PositionStatus = o.filledQty <= 0 ? 'NONE' : exitQty >= o.filledQty ? 'CLOSED' : 'OPEN';
+    const positionStatus: PositionStatus = held && fromFills === 'OPEN' && !held.has(o.symbol) ? 'CLOSED' : held && fromFills === 'CLOSED' && held.has(o.symbol) ? 'OPEN' : fromFills;
     const notes: string[] = [];
     if (!row) notes.push('No RB alert matched this order (manual trade).');
+    if (positionStatus !== fromFills) notes.push(`Position status from broker positions (fills in the window say ${fromFills}).`);
     if (exits.length > 1 && new Set(exits.map((e) => e.reason)).size > 1) notes.push(`Mixed exits: ${exits.map((e) => `${e.o.filledQty} ${e.reason}`).join(', ')}`);
     out.push({
       recordId: row?.record.id ?? null, symbol: o.symbol, direction, entryOrderId: o.id,

@@ -192,6 +192,8 @@ export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataS
  */
 export function decisionBadge(r: QueueRow): Status {
   const d = r.decision;
+  // CR-13 — after the 15:30 cutoff the v1.1 ticket is historical: never labelled as ready to trade.
+  if (d.ticket && r.lifecycle?.entryWindowClosed) return { label: 'v1.1 TICKET — AFTER CUTOFF', tone: 'bad', detail: r.lifecycle.reason };
   if (d.ticket) return { label: 'TRADE READY', tone: 'ok', detail: d.decision };
   // CR-05 / CR-07 — a late or expired setup is named by its execution state, never WATCHLIST.
   const ex = r.lifecycle?.executionState;
@@ -214,6 +216,7 @@ export function finalBadge(r: QueueRow): Status {
   const d = r.decision;
   const lc = r.lifecycle;
   // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
+  if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
   if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
   if (lc?.terminal && !['CLOSED'].includes(lc.executionState)) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason };
@@ -224,7 +227,7 @@ export function finalBadge(r: QueueRow): Status {
 }
 
 const EXEC_TONE: Record<string, Tone> = {
-  ACTIVE: 'ok', 'NOT CROSSED': 'info', SCORING: 'muted', 'LATE — REVIEW': 'warn', CHASED: 'bad', 'EXPIRED — STALE': 'bad', 'PORTFOLIO BLOCKED': 'warn',
+  ACTIVE: 'ok', 'ENTRY WINDOW CLOSED': 'bad', 'NOT CROSSED': 'info', SCORING: 'muted', 'LATE — REVIEW': 'warn', CHASED: 'bad', 'EXPIRED — STALE': 'bad', 'PORTFOLIO BLOCKED': 'warn',
   'BELOW THRESHOLD': 'muted', 'NOT ELIGIBLE': 'bad', 'DATA REVIEW': 'warn', SUBMITTED: 'info', 'IN POSITION': 'info', CLOSED: 'muted',
 };
 
