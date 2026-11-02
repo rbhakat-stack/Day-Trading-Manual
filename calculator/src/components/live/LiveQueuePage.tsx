@@ -8,6 +8,7 @@ import { ACTIVE_LOGIC_VERSION } from '../../engine/automation/v12/dispatch';
 import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
 import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnapshot';
+import { BrokerSyncPanel } from './BrokerSync';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
 import { QueueHeader, QueueLegend, QueueTable, QueueToolbar, type ColumnGroups, type QueueFilter } from './QueueParts';
@@ -107,6 +108,8 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
           <b>Data parity: {parityStatus}.</b> Until 20+ alerts have been compared with TrendSpider (Data validation tab) with no mismatch, check every value against your chart before submitting.
         </p>
       )}
+
+      <BrokerSyncPanel rows={allRows} />
 
       {stronger.length > 0 && <div className="grid gap-3 lg:grid-cols-2">{stronger.map((sg) => <SuggestionCard key={`${sg.pendingId}-${sg.candidateId}`} sg={sg} onKeep={actions.keep} onReplace={actions.replace} />)}</div>}
 
