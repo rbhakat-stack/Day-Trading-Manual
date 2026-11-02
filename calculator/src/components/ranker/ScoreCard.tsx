@@ -1,4 +1,5 @@
 import type { RankedCandidate } from '../../engine/ranker/candidateRanker';
+import { displaySummary, locationAudit } from '../../engine/ranker/componentAudit';
 import { FIT_KEYS, SETUP_KEYS, type Recommendation } from '../../engine/ranker/opportunityTypes';
 import { usd } from '../../lib/format';
 import { Panel, toneClasses } from '../ui';
@@ -107,8 +108,8 @@ export function BreakdownCard({ r }: { r: RankedCandidate }) {
           </p>
         )}
         <div className="grid gap-5 md:grid-cols-2">
-          <ComponentList title={`Setup quality ${fmtScore(r.setup)} / 70`} items={comp(SETUP_KEYS)} />
-          <ComponentList title={`Portfolio fit ${fmtScore(r.fit)} / 30`} items={comp(FIT_KEYS)} />
+          <ComponentList title={`Setup quality ${fmtScore(r.setup)} / 70`} items={comp(SETUP_KEYS)} candidate={r.candidate} />
+          <ComponentList title={`Portfolio fit ${fmtScore(r.fit)} / 30`} items={comp(FIT_KEYS)} candidate={r.candidate} />
         </div>
       </Panel>
 
@@ -138,6 +139,7 @@ export function BreakdownCard({ r }: { r: RankedCandidate }) {
             <div key={x.key}>
               <div className="font-sans text-xs font-semibold uppercase tracking-wider text-ink-400">{x.label} — {x.na ?? `${fmtScore(x.points)} / ${x.max}`}</div>
               <ul className="mt-0.5 space-y-0.5">{x.calc.map((l, i) => <li key={i}>{l}</li>)}</ul>
+              {x.key === 'location' && <LocationAuditLine c={r.candidate} />}
             </div>
           ))}
           <div className="font-sans text-xs text-ink-400">Distances are divided by the 5-minute ATR so stocks at different prices are comparable. All weights and bands are RB v1 paper-testing assumptions.</div>
@@ -147,7 +149,7 @@ export function BreakdownCard({ r }: { r: RankedCandidate }) {
   );
 }
 
-function ComponentList({ title, items }: { title: string; items: RankedCandidate['components'] }) {
+function ComponentList({ title, items, candidate }: { title: string; items: RankedCandidate['components']; candidate: RankedCandidate['candidate'] }) {
   return (
     <div>
       <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-200">{title}</div>
@@ -165,11 +167,24 @@ function ComponentList({ title, items }: { title: string; items: RankedCandidate
                 )}
               </div>
               <ScoreBar points={x.na ? 0 : x.points} max={x.max} tone={x.missing || x.na ? 'bg-ink-500' : frac >= 0.8 ? 'bg-long' : frac >= 0.5 ? 'bg-[#5b8cff]' : 'bg-warn'} />
-              <div className={`mt-0.5 text-xs ${x.na ? 'font-semibold text-short' : x.missing ? 'text-warn' : 'text-ink-400'}`}>{x.summary}</div>
+              <div className={`mt-0.5 text-xs ${x.na ? 'font-semibold text-short' : x.missing ? 'text-warn' : 'text-ink-400'}`}>{displaySummary(x, candidate)}</div>
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/** CR-14 — every value behind the Location/Extension points (display only). */
+export function LocationAuditLine({ c }: { c: RankedCandidate['candidate'] }) {
+  const a = locationAudit(c);
+  if (!a) return null;
+  const n = (x: number, dp = 4) => x.toFixed(dp);
+  return (
+    <div className="mt-1 font-sans text-[11.5px] text-ink-400" data-audit="location">
+      Audit — price {n(a.price, 2)} · VWAP {n(a.vwap)} · EMA20 {n(a.ema20)} · EMA9 {n(a.ema9)} · ATR {n(a.atr)} · anchor {a.anchor} · numerator {a.numerator.toFixed(6)} ·
+      extension {n(a.extensionAtr)} ATR · band {a.band} = {a.bandPoints}{a.ema9Deduction ? ` − ${a.ema9Deduction} (EMA9)` : ''}{a.chaseDeduction ? ` − ${a.chaseDeduction} (beyond entry)` : ''} → {a.points}/10 · {a.bandLabel}
     </div>
   );
 }

@@ -12,11 +12,14 @@ import type { QualityTier } from '../../engine/ranker/opportunityTypes';
 import { FIT_KEYS, SETUP_KEYS } from '../../engine/ranker/opportunityTypes';
 import { usd } from '../../lib/format';
 import {
+  executionBadge, gateText,
   chaseStatus, dataStatus, decisionBadge, detailFields, finalBadge, finalState, isDataReview, portfolioStatus, portfolioSummary, qualificationStatus,
   ruleSetText, scoreTone, TIER_SHORT, TIER_TONE, type Status, type StrategyColumn, type Tone,
 } from './queueView';
 import type { LiveActions } from './LiveQueuePage';
 import { ShadowPanel } from './ShadowV12';
+import { LocationAuditLine } from '../ranker/ScoreCard';
+import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
 
 /* ───────────────────────── badges ───────────────────────── */
 
@@ -155,7 +158,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
   const strat = layout.filter((c) => c.role === 'ACTIVE' || cols.shadow);
   const stratCols = (c: StrategyColumn) => [c.scoreLabel, ...c.tierLabels, ...(c.role === 'ACTIVE' ? ['Decision'] : [])];
   const trade = cols.trade ? ['Entry', 'Stop', 'Target', 'Qty', '$ Risk', 'Cur Price'] : [];
-  const safety = [...(cols.safety ? ['Chase', 'Data', 'Portfolio'] : []), 'Final State'];
+  const safety = [...(cols.safety ? ['Chase', 'Data', 'Portfolio'] : []), 'Execution', 'Final State'];
   const span = 6 + strat.reduce((n, c) => n + stratCols(c).length, 0) + trade.length + safety.length;
   const toggle = (id: string) => { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); setOpen(n); };
   const th = 'whitespace-nowrap px-1.5 py-2 text-[12.5px] font-semibold text-ink-200';
@@ -199,7 +202,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                   <td className="pl-3 text-center">
                     <span className={`inline-flex h-6 w-6 items-center justify-center rounded border text-[12px] ${isOpen ? 'border-[#3d7bff] bg-[#1a2c55] text-white' : 'border-ink-600 text-ink-300'}`}>{isOpen ? '⌄' : '›'}</span>
                   </td>
-                  <td className={`${td} text-left text-ink-100`}>{fmtEt(f.alertTimeMs).replace(' ET', '')}</td>
+                  <td className={`${td} text-left text-ink-100`}>{fmtEt(f.alertTimeMs).replace(' ET', '')}<span className="block text-[11px] text-ink-400" title="Signal candle close → decision ready (persisted timestamps)">{latencyLabel(alertLatency(r.record))}</span></td>
                   <td className={`${td} font-bold text-ink-100`}>{r.record.alert.symbol}</td>
                   <td className={td}><SidePill side={r.record.alert.direction} /></td>
                   <td className={`${td} text-ink-200`} title={ruleSetText(r).status}>{ruleSetText(r).id}</td>
@@ -209,7 +212,9 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                     const tone = c.role === 'ACTIVE' && cell.tiers[0] ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100';
                     return (
                       <Fragment key={c.version}>
-                        <td className={`${td} border-l ${edge(c)} text-[15px] font-bold ${tone}`}>{cell.score ?? '—'}</td>
+                        <td className={`${td} border-l ${edge(c)} text-[15px] font-bold ${cell.frozen ? 'text-ink-400' : tone}`} title={cell.frozen ? 'Frozen alert-time score — reference only · NOT RANKED' : undefined}>
+                          {cell.score ?? '—'}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Frozen · not ranked</span>}
+                        </td>
                         {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}><TierPill t={t} /></td>)}
                         {c.role === 'ACTIVE' && <td className={`${td} border-r ${edge(c)}`}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>}
                       </Fragment>
@@ -232,6 +237,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                       <td className={td}><Pill s={portfolioStatus(r)} title={portfolioStatus(r).detail} /></td>
                     </>
                   )}
+                  <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
                   <td className={td}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
                 </tr>
                 {isOpen && (
@@ -301,6 +307,9 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
   const finTone: Tone = fin.ticket ? 'ok' : fin.tone;
   const why = !fin.ticket && r.decision.reasons.length > 0;
   const comparison = layout.filter((c) => c.role !== 'ACTIVE');
+  const lat = alertLatency(r.record);
+  const lc = r.lifecycle;
+  const ex = executionBadge(r);
   return (
     <div className="space-y-3 font-sans" data-details={r.record.id}>
       <div className="flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border-2 border-[#3d7bff] bg-ink-900 px-5 py-3">
@@ -328,7 +337,9 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           [`Alert time (${f.timeSource === 'RECEIVED' ? 'server' : 'payload'})`, fmtEt(f.alertTimeMs)],
           ['Signal candle', f.signalCandle ?? '—'],
           ['Mapped candle (v1.2)', f.mappedCandle ?? '—'],
-          ['Receipt lag', f.lagSec !== null ? `${f.lagSec} s after candle close` : '—'],
+          ['Receipt lag', lat.receiptLagSec !== null ? `${lat.receiptLagSec} s after candle close${lat.signalCloseSource === 'ALERT_TIME' ? ' (alert-time boundary)' : ''}` : '—'],
+          ['RB processing', lat.processingSec !== null ? `${lat.processingSec} s` : '—'],
+          ['Total latency', lat.totalSec !== null ? `${lat.totalSec} s (signal close → decision ready)` : '— (decision time not recorded)'],
           ['Mapping status', f.mappingStatus ?? '—'],
           ['Rule set', rs.status ? `${rs.id} (${rs.status})` : rs.id],
           ['TS Qualified', <b key="q" className={TONE_TEXT[q.label === 'QUALIFIED' ? 'ok' : q.tone]}>{q.label === 'QUALIFIED' ? 'YES' : q.label === '—' ? '—' : `NO — ${q.label}`}</b>],
@@ -351,7 +362,11 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           ['Portfolio slots', f.portfolio ? `${f.portfolio.slotsUsed} / ${f.portfolio.maxPositions} used` : '—'],
           ['Portfolio heat', f.portfolio ? `${money(f.portfolio.heatCommitted)} / ${money(f.portfolio.heatLimit, 0)}` : '—'],
           ['Portfolio status', <b key="p" className={TONE_TEXT[ps.tone]} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</b>],
-          ['Final execution state', <b key="f" className={TONE_TEXT[finTone]}>{fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`}</b>],
+          ['Gate sequence', <span key="g" className="text-[12.5px]">{gateText(r)}</span>],
+          ['Alert-time tier', lc?.alertTimeTier ? <b key="t">{TIER_SHORT[lc.alertTimeTier as QualityTier] ?? lc.alertTimeTier} <span className="font-normal text-ink-400">(frozen)</span></b> : '—'],
+          ['Current execution state', <b key="e" className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</b>],
+          ['Final execution state (Final Actionability)', <b key="f" className={TONE_TEXT[lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone]} title={lc?.reason}>{lc ? `${lc.finalActionability}${lc.finalActionability !== 'READY' ? ` — ${lc.reason}` : ''}` : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`}</b>],
+          ['Score basis', lc ? `${lc.score.basis}${lc.score.value !== null ? ` · ${lc.score.value}` : ''} · rank ${lc.score.rank === 'NOT RANKED' ? 'NOT RANKED' : `#${lc.score.rank}`}` : '—'],
         ]} />
       </div>
 
@@ -397,6 +412,9 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
             <Box title={`Score breakdown ${r.ranked?.total ?? '—'} / 100`}>
               {r.ranked ? (
                 <KV rows={[...SETUP_KEYS, ...FIT_KEYS].map((k) => { const x = r.ranked!.components.find((c) => c.key === k)!; return [x.label, x.na ?? `${x.points} / ${x.max}`]; })} />
+              ) : null}
+              {r.ranked ? (
+                <LocationAuditLine c={r.ranked.candidate} />
               ) : (
                 <p className="text-ink-400">Not scored.</p>
               )}

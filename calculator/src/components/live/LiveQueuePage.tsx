@@ -65,6 +65,7 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
   const shown = rows.filter((r) => filter === 'ALL' || (filter === 'DATA_REVIEW' ? isDataReview(r) : r.record.alert.direction === filter));
   const feedText = feed.error ? feed.error : feed.lastOkMs ? `updated ${Math.max(0, Math.round((now - feed.lastOkMs) / 1000))} s ago` : 'connecting…';
   const allOpen = shown.length > 0 && shown.every((r) => open.has(r.record.id));
+  const eod = rows[0]?.lifecycle?.eod ?? null;
   return (
     <div className="space-y-4">
       <QueueHeader layout={layout} rows={rows} versionLabel={versionLabel} />
@@ -74,6 +75,11 @@ export function LiveQueuePage({ rows, suggestions, now, enabled, feed, quoteErro
         hasShadow={layout.some((c) => c.role === 'SHADOW')} logCount={shadow.logCount} onExport={shadow.onExportLog}
       />
       {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
+      {eod && eod.phase !== 'OPEN' && (
+        <p role="status" className={`rounded-lg border px-4 py-2 text-[13px] font-semibold ${eod.actionRequired ? 'border-short bg-short-dim/30 text-[#ffc0c8]' : 'border-warn/40 bg-warn-dim/20 text-[#ffe2a8]'}`}>
+          {eod.phase}: {eod.message} <span className="font-normal">Flag only — RB never places, cancels or closes broker orders.</span>
+        </p>
+      )}
 
       {rows.length > 0 ? (
         <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} />
@@ -152,6 +158,7 @@ function ActionCard({ r, actions }: { r: QueueRow; actions: LiveActions }) {
       <div className="mt-2 text-xs text-ink-400">
         Planned risk {usd(r.candidate?.plannedRisk ?? 0)} (a stop can fill worse — not a guaranteed maximum loss) · position {usd(r.candidate?.positionValue ?? 0, 0)} · current {p(r.quote?.price)}
       </div>
+      {r.lifecycle && r.lifecycle.finalActionability !== 'READY' && <p className="mt-2 rounded bg-short-dim/40 px-2 py-1 text-xs font-bold text-[#ffc0c8]">{r.lifecycle.finalActionability}: {r.lifecycle.reason}</p>}
       <p className="mt-2 rounded bg-warn-dim/40 px-2 py-1 text-xs font-semibold text-[#ffe2a8]">Manual execution only. Verify the TrendSpider ticket before submitting. Nothing has been placed.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" onClick={copy} className="rounded-lg border-2 border-[#5b8cff] px-3 py-2 text-xs font-bold uppercase tracking-wider text-[#bcd0ff] hover:bg-[#1a2c55]">

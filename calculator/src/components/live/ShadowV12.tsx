@@ -5,7 +5,7 @@
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { V12Decision } from '../../engine/automation/v12/decideAlertV12';
-import type { ConditionDiagnostic } from '../../engine/automation/v12/parityDiagnostics';
+import { sipParitySummary, type ConditionDiagnostic } from '../../engine/automation/v12/parityDiagnostics';
 import { V12_SHADOW_GRADES, type Grades } from '../../engine/automation/v12/v12Thresholds';
 
 type Tone = 'ts' | 'sip' | 'rb' | 'shadow' | 'warn' | 'review' | 'muted';
@@ -103,8 +103,7 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
   const s = d.score;
   const q = a.qualification;
   const m = a.signalMapping;
-  const diags = a.conditionDiagnostics.filter((c) => c.rule !== 'RVOL');
-  const off = diags.filter((c) => c.class !== 'AGREE');
+  const par = sipParitySummary(a.conditionDiagnostics);
   const other = d.warnings.filter((w) => !w.startsWith('PARITY_WARNING') && !w.startsWith('PARITY_NOTE') && !w.startsWith('SIP_UNAVAILABLE') && w !== 'SIP_RVOL_DIAGNOSTIC_ONLY');
   const reasons = d.reasons.filter((x) => !x.startsWith('Integrity:'));
   const thresholds = s?.thresholds ?? { shadow: V12_SHADOW_GRADES, optionA: optionAGrades };
@@ -143,8 +142,10 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
         </div>
         <div>
           <H>Warnings &amp; integrity</H>
-          <div className="text-[11px] text-ink-400">SIP parity (diagnostic, never blocking): {diags.length - off.length} of {diags.length} agree</div>
-          {off.length > 0 && <ul className="mt-0.5 space-y-0.5 text-[11px]">{off.map((c) => <li key={c.rule} className={CLASS_TONE[c.class]}>{c.class.replace('_', ' ')} · {fmtDiag(c)}</li>)}</ul>}
+          <div className="text-[11px] text-ink-400">{par.text} (diagnostic, never blocking)</div>
+          <div className="text-[11px] text-ink-400">{par.rvolText}</div>
+          {par.off.length > 0 && <ul className="mt-0.5 space-y-0.5 text-[11px]">{par.off.map((c) => <li key={c.rule} className={CLASS_TONE[c.class]}>{c.class.replace('_', ' ')} · {fmtDiag(c)}</li>)}</ul>}
+          {par.forming && par.forming.class !== 'AGREE' && <div className="mt-0.5 text-[11px] text-ink-500">Forming 15m (learning, not counted): {par.forming.class.replace('_', ' ')} · {fmtDiag(par.forming)}</div>}
           {other.length > 0 && <ul className="mt-1 space-y-0.5 text-[11px] text-warn">{other.map((w) => <li key={w}>{WARNING_TEXT[w] ?? w}</li>)}</ul>}
           <div className="mt-1.5 text-[11px]">
             <span className="text-ink-400">Integrity (DATA REVIEW): </span>

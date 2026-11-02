@@ -27,6 +27,8 @@ export interface StrategyCell {
   tiers: (QualityTier | null)[];
   /** The strategy's decision text — only for the ACTIVE strategy, whose decision is the executable one. */
   decision: string | null;
+  /** CR-06 — the score is the FROZEN alert-time score shown for reference after a hard fail / expiry (not ranked). */
+  frozen?: boolean;
 }
 
 export interface StrategyColumn {
@@ -59,7 +61,13 @@ const PRESENTERS: Record<string, Presenter> = {
   'RB v1.1': {
     scoreLabel: () => 'Score',
     tierLabels: ['Tier'],
-    cell: (r, role) => ({ score: r.ranked?.total ?? null, tiers: [r.ranked?.tier ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null }),
+    cell: (r, role) => {
+      const sc = r.lifecycle?.score;
+      if (sc?.basis === 'FROZEN — REFERENCE ONLY' && (r.ranked?.total ?? null) === null) {
+        return { score: sc.value, tiers: [(r.lifecycle.alertTimeTier as QualityTier | null) ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true };
+      }
+      return { score: r.ranked?.total ?? null, tiers: [r.ranked?.tier ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null };
+    },
   },
   'RB v1.2': {
     scoreLabel: (ctx) => `Score (${ctx.v12MaxScore})`,
@@ -185,6 +193,10 @@ export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataS
 export function decisionBadge(r: QueueRow): Status {
   const d = r.decision;
   if (d.ticket) return { label: 'TRADE READY', tone: 'ok', detail: d.decision };
+  // CR-05 / CR-07 — a late or expired setup is named by its execution state, never WATCHLIST.
+  const ex = r.lifecycle?.executionState;
+  if (ex === 'EXPIRED — STALE') return { label: 'EXPIRED — STALE', tone: 'bad', detail: r.lifecycle.reason };
+  if (ex === 'LATE — REVIEW') return { label: 'LATE — REVIEW', tone: 'warn', detail: r.lifecycle.reason };
   switch (d.decision) {
     case 'DATA REVIEW REQUIRED': return { label: 'DATA REVIEW', tone: 'warn', detail: d.detail };
     case 'NOT ELIGIBLE': return chaseStatus(r).label === 'CHASED' ? { label: 'CHASED', tone: 'bad', detail: d.detail } : { label: 'NOT ELIGIBLE', tone: 'bad', detail: d.detail };
@@ -200,11 +212,33 @@ export function decisionBadge(r: QueueRow): Status {
 /** Final State column: READY (ticket), NO TRADE (hard-rule NOT ELIGIBLE), the lifecycle state once submitted, else NO TICKET. */
 export function finalBadge(r: QueueRow): Status {
   const d = r.decision;
+  const lc = r.lifecycle;
+  // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
+  if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
   if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
+  if (lc?.terminal && !['CLOSED'].includes(lc.executionState)) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason };
   if (d.decision === 'NOT ELIGIBLE') return { label: 'NO TRADE', tone: 'bad', detail: d.detail };
   if (d.decision === 'ORDER SUBMITTED' || d.decision === 'IN POSITION') return { label: d.decision === 'IN POSITION' ? 'IN POSITION' : 'SUBMITTED', tone: 'info', detail: d.detail };
   if (d.decision === 'CLOSED') return { label: 'CLOSED', tone: 'muted', detail: d.detail };
   return { label: 'NO TICKET', tone: 'muted', detail: d.detail };
+}
+
+const EXEC_TONE: Record<string, Tone> = {
+  ACTIVE: 'ok', 'NOT CROSSED': 'info', SCORING: 'muted', 'LATE — REVIEW': 'warn', CHASED: 'bad', 'EXPIRED — STALE': 'bad', 'PORTFOLIO BLOCKED': 'warn',
+  'BELOW THRESHOLD': 'muted', 'NOT ELIGIBLE': 'bad', 'DATA REVIEW': 'warn', SUBMITTED: 'info', 'IN POSITION': 'info', CLOSED: 'muted',
+};
+
+/** CR-07 — Current Execution State (separate from the alert-time tier and from Final Actionability). */
+export function executionBadge(r: QueueRow): Status {
+  const lc = r.lifecycle;
+  if (!lc) return { label: '—', tone: 'muted', detail: '' };
+  return { label: lc.executionState, tone: EXEC_TONE[lc.executionState] ?? 'muted', detail: lc.reason };
+}
+
+/** CR-10 — gate sequence text, e.g. "Score PASS → Portfolio BLOCKED — NO_POSITION_SLOT → Capital NOT ATTEMPTED". */
+export function gateText(r: QueueRow): string {
+  const g = r.lifecycle?.gates;
+  return g ? `Score ${g.score} → Portfolio ${g.portfolio} → Capital ${g.capital}` : '—';
 }
 
 /** Portfolio header from the allocator's snapshot. One ranking shares one snapshot; returns null when none exists yet. */

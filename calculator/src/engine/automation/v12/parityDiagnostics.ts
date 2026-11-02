@@ -125,3 +125,29 @@ export function forming15m(bars5: Bar[], signalEndMs: number): Forming15m | null
   const e = ema(agg.map((x) => x.c), 20)[i];
   return { label: `${etParts(last.t).hhmm}–${etParts(last.t + 15 * 60_000).hhmm}`, close: last.c, ema20: e, bars5: last.count };
 }
+
+/** The five non-RVOL conditions TrendSpider qualifies on (the forming 15m comparison is extra, for learning). */
+export const CORE_PARITY_RULES = ['CLOSE_VS_VWAP', 'EMA9_VS_EMA20', 'RSI', 'CANDLE_DIRECTION', 'CONFIRM_15M'] as const;
+
+export interface SipParitySummary {
+  agree: number;
+  total: number;
+  /** Core conditions that did not agree (knife-edge, disagree or unavailable). */
+  off: ConditionDiagnostic[];
+  /** e.g. "Non-RVOL SIP checks: 4/5 agree". */
+  text: string;
+  /** e.g. "SIP RVOL 2.31 vs 1.5 — diagnostic only (not counted, never blocking)". */
+  rvolText: string;
+  forming: ConditionDiagnostic | null;
+}
+
+/** CR-08 — parity count over the five non-RVOL conditions only; SIP RVOL is reported on its own diagnostic line. */
+export function sipParitySummary(diags: ConditionDiagnostic[]): SipParitySummary {
+  const core = CORE_PARITY_RULES.map((r) => diags.find((d) => d.rule === r)).filter((d): d is ConditionDiagnostic => !!d);
+  const agree = core.filter((d) => d.class === 'AGREE').length;
+  const rv = diags.find((d) => d.rule === 'RVOL');
+  const rvolText = rv?.sipValue !== null && rv?.sipValue !== undefined && Number.isFinite(rv.sipValue)
+    ? `SIP RVOL ${rv.sipValue.toFixed(2)} vs ${rv.threshold} — diagnostic only (not counted, never blocking)`
+    : 'SIP RVOL unavailable — diagnostic only (not counted, never blocking)';
+  return { agree, total: CORE_PARITY_RULES.length, off: core.filter((d) => d.class !== 'AGREE'), text: `Non-RVOL SIP checks: ${agree}/${CORE_PARITY_RULES.length} agree`, rvolText, forming: diags.find((d) => d.rule === 'CONFIRM_15M_FORMING') ?? null };
+}
