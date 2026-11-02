@@ -166,6 +166,8 @@ const PORTFOLIO_FAILS: HardFailCode[] = ['NO_POSITION_SLOT', 'CAPITAL_LIMIT', 'P
 export function portfolioStatus(r: QueueRow): Status {
   const k = r.ranked;
   if (!k) return { label: '—', tone: 'muted', detail: 'Not ranked.' };
+  // CR-10 — a failed score gate with no portfolio hard fail: the portfolio is not evaluated.
+  if (r.lifecycle?.gates.portfolio === 'NOT EVALUATED — NOT REQUIRED' && r.lifecycle.gates.score === 'FAIL') return { label: 'NOT EVALUATED', tone: 'muted', detail: 'Score gate failed — portfolio check not required; capital not attempted.' };
   const fails = [...new Set(k.hardFails.filter((f) => PORTFOLIO_FAILS.includes(f.code)).map((f) => f.code))];
   if (fails.length) return { label: 'BLOCKED', tone: 'bad', detail: fails.join(', ') };
   // A row held for data review is ranked for display only (rank null); its allocation is not a real one.

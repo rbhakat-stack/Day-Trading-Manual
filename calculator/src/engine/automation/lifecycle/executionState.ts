@@ -80,9 +80,13 @@ export function gateSequence(row: QueueRow): GateSequence {
   if (!r) return { score: 'NOT SCORED', portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };
   const tier = r.tier;
   const score: GateResult = r.total === null || !tier ? 'NOT SCORED' : tier === 'ELITE' || tier === 'HIGH_PRIORITY' ? 'PASS' : 'FAIL';
-  if (score !== 'PASS') return { score, portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };
   const rec = r.recommendation ?? '';
+  // Portfolio hard rules (slot / heat / correlation) are hard rules: RB v1.1 evaluates them regardless of the score, and
+  // a full portfolio also lowers the portfolio-fit points. When one failed, it is reported as the block — never hidden
+  // behind "NOT EVALUATED".
   const block = PORTFOLIO_BLOCKS[rec] ?? r.hardFails.find((f) => ['NO_POSITION_SLOT', 'PORTFOLIO_HEAT_LIMIT', 'CORRELATION_LIMIT'].includes(f.code))?.code;
+  if (score === 'FAIL' && block) return { score, portfolio: `BLOCKED — ${block}`, capital: 'NOT ATTEMPTED' };
+  if (score !== 'PASS') return { score, portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };
   if (block) return { score, portfolio: `BLOCKED — ${block}`, capital: 'NOT ATTEMPTED' };
   if (rec.startsWith('TRADE NOW')) return { score, portfolio: 'PASS', capital: 'PASS' };
   if (rec === 'BLOCKED — CAPITAL' || rec === 'CAPITAL WAITLIST' || r.allocation?.reason === 'CAPITAL') return { score, portfolio: 'PASS', capital: 'BLOCKED — CAPITAL_LIMIT' };
@@ -99,6 +103,9 @@ export interface EodStatus {
   actionRequired: boolean;
   pendingOrders: number;
   openPositions: number;
+  /** Tickers behind the counts (RB lifecycle, manual positions and — when merged — read-only broker facts). */
+  pendingTickers: string[];
+  openTickers: string[];
   message: string;
 }
 
@@ -114,11 +121,22 @@ export const EOD_TIMES = { noNewEntries: '15:30', cancel: '15:50', exit: '15:55'
  * ticker). It never places, cancels or closes anything — every broker action at EOD stays manual.
  */
 export function eodStatus(now: number, candidates: Candidate[], positions: ManualPosition[]): EodStatus {
-  const t = mins(etParts(now).hhmm);
   const today = etParts(now).date;
-  const pending = new Set(candidates.filter((c) => c.status === 'PENDING' && c.date === today && !c.archived).map((c) => c.ticker));
-  const open = new Set([...candidates.filter((c) => c.status === 'FILLED' && !c.archived).map((c) => c.ticker), ...positions.filter((p) => p.status === 'OPEN').map((p) => p.ticker)]);
-  const base = { pendingOrders: pending.size, openPositions: open.size };
+  const pending = candidates.filter((c) => c.status === 'PENDING' && c.date === today && !c.archived).map((c) => c.ticker);
+  const open = [...candidates.filter((c) => c.status === 'FILLED' && !c.archived).map((c) => c.ticker), ...positions.filter((p) => p.status === 'OPEN').map((p) => p.ticker)];
+  return eodFrom(now, pending, open);
+}
+
+/** Merge read-only broker facts (open positions, unfilled entry orders) into an EOD status — flag only. */
+export function withBrokerFacts(e: EodStatus, now: number, broker: { openTickers: string[]; pendingTickers: string[] }): EodStatus {
+  return eodFrom(now, [...e.pendingTickers, ...broker.pendingTickers], [...e.openTickers, ...broker.openTickers]);
+}
+
+function eodFrom(now: number, pendingList: string[], openList: string[]): EodStatus {
+  const t = mins(etParts(now).hhmm);
+  const pending = new Set(pendingList.map((x) => x.toUpperCase()));
+  const open = new Set(openList.map((x) => x.toUpperCase()));
+  const base = { pendingOrders: pending.size, openPositions: open.size, pendingTickers: [...pending].sort(), openTickers: [...open].sort() };
   const st = (phase: EodPhase, noNewEntries: boolean, actionRequired: boolean, message: string): EodStatus => ({ phase, noNewEntries, actionRequired, message, ...base });
   const flat = pending.size === 0 && open.size === 0;
   if (t < mins(EOD_TIMES.noNewEntries)) return st('OPEN', false, false, 'Normal session.');

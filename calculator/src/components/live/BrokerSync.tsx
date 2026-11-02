@@ -4,7 +4,7 @@ import { brokerOrdersFrom, parseBrokerOrders, reconcileBroker } from '../../engi
 import { AUTO_KEYS, usePersistent, type BrokerFeed } from '../../lib/automationClient';
 import { load } from '../../lib/storage';
 
-const money = (x: number | null) => (x === null ? '—' : `${x < 0 ? '−' : ''}$${Math.abs(x).toFixed(2)}`);
+const money = (x: number | null) => (x === null ? "—" : `${x < 0 ? "−" : ""}$${Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const px = (x: number | null) => (x === null ? '—' : x.toFixed(2));
 const n = (x: string | undefined) => (x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
 

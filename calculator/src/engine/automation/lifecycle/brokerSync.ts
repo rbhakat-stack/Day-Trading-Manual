@@ -190,3 +190,12 @@ export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[], positio
   }
   return out;
 }
+
+/** CR-13 — broker facts for the EOD flatness check: tickers with an open position, and unfilled entry orders. */
+export function brokerEodFacts(feed: { orders: unknown[]; positions: { symbol: string; qty?: string | number }[] }): { openTickers: string[]; pendingTickers: string[] } {
+  const { orders } = brokerOrdersFrom(feed.orders);
+  return {
+    openTickers: feed.positions.filter((p) => Number(p.qty ?? 0) !== 0).map((p) => p.symbol.toUpperCase()),
+    pendingTickers: orders.filter((o) => ['PENDING', 'PARTIAL'].includes(mapBrokerStatus(o.status)) && o.filledQty < (o.qty ?? Infinity)).map((o) => o.symbol),
+  };
+}

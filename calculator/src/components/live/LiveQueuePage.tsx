@@ -10,6 +10,8 @@ import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
 import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { BrokerSyncPanel } from './BrokerSync';
+import { eodStatus, withBrokerFacts } from '../../engine/automation/lifecycle/executionState';
+import { brokerEodFacts } from '../../engine/automation/lifecycle/brokerSync';
 import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
@@ -77,7 +79,10 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const shown = rows.filter((r) => filter === 'ALL' || (filter === 'DATA_REVIEW' ? isDataReview(r) : r.record.alert.direction === filter));
   const feedText = feed.error ? feed.error : feed.lastOkMs ? `updated ${Math.max(0, Math.round((now - feed.lastOkMs) / 1000))} s ago` : 'connecting…';
   const allOpen = shown.length > 0 && shown.every((r) => open.has(r.record.id));
-  const eod = rows[0]?.lifecycle?.eod ?? null;
+  // CR-13 — portfolio-level EOD check: RB lifecycle + manual positions (from the queue) plus, when the read-only broker
+  // feed is live, the broker's open positions and unfilled orders. Shown even when the queue is empty. Flag only.
+  const eodBase = rows[0]?.lifecycle?.eod ?? eodStatus(now, [], []);
+  const eod = broker?.status === 'LIVE' ? withBrokerFacts(eodBase, now, brokerEodFacts(broker)) : eodBase;
   return (
     <div className="space-y-4">
       <QueueHeader layout={layout} rows={rows} versionLabel={versionLabel} />
@@ -89,7 +94,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
       {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
       {eod && eod.phase !== 'OPEN' && (
         <p role="status" className={`rounded-lg border px-4 py-2 text-[13px] font-semibold ${eod.actionRequired ? 'border-short bg-short-dim/30 text-[#ffc0c8]' : 'border-warn/40 bg-warn-dim/20 text-[#ffe2a8]'}`}>
-          {eod.phase}: {eod.message} <span className="font-normal">Flag only — RB never places, cancels or closes broker orders.</span>
+          {eod.phase}: {eod.message}{eod.openTickers.length || eod.pendingTickers.length ? ` (${[...eod.openTickers.map((t) => `${t} open`), ...eod.pendingTickers.map((t) => `${t} pending`)].join(', ')})` : ''} <span className="font-normal">Flag only — RB never places, cancels or closes broker orders.</span>
         </p>
       )}
 
