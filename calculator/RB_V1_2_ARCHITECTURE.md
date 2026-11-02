@@ -563,3 +563,31 @@ Implements the §24.4 proposal, with two small refinements that do not change th
 * **Effect.** Registration changes only the v1.2 SHADOW qualification. Swapped direction is CONFLICT; missing, unknown and retired ids, test webhooks and unauthenticated requests are NOT QUALIFIED.
 * **VWAP difference.** The audited TrendSpider VWAP is `VWAP(14, 0, hlc3)`, while the SIP reconstruction uses SESSION VWAP by default. That affects only the diagnostic `CLOSE_VS_VWAP` parity class in v1.2; any change is approval-gated.
 * **Activation.** Activation and secret rotation follow `RB_V1_2_SHADOW_ACTIVATION.md`. Promotion of v1.2 (§16, §18) remains a separate decision under the §18 rollout gates; the §17 note on rotating the token at promotion is covered by the rotation plan.
+
+## 29. FINAL v1.2 package CR-01 – CR-14 (implemented; v1.1 ACTIVE, v1.2 SHADOW, not promoted)
+
+Rollback tag: `prod-v1.1-pre-v1.2-final` (annotated, at `e2866f8`). Every change is additive; the RB v1.1 decision
+(`decideAlert`), ranker, scorer, calculator and portfolio limits are unchanged (ranker golden test byte-for-byte; a
+historical replay of the 2026-10-30 SIP scenarios and the stored alerts gives identical v1.1 and v1.2-shadow output
+before and after).
+
+| CR | Where | Notes |
+|---|---|---|
+| 01 latency | `lifecycle/latency.ts` | signal close (v1.2 mapping, else 5-min boundary of alert time) → `receivedMs` → `processedIso`; never the clock; never read by a decision |
+| 02 classifications | `AutomationSettings` · `automationClient` | view/count/filter, CSV export (round-trips the import), edit one, delete one (built-in defaults tombstoned) |
+| 03 / 04 snapshot vs execution | `lifecycle/alertTimeSnapshot.ts`, `executionState.ts` | write-once snapshot (`rbv1.v12.alertSnapshots.v1`) finalized on completion or 60 s after receipt; execution state derived each pass |
+| 05 terminal stale | `executionState.ts` | `EXPIRED — STALE` at alert + 10 min, NO TRADE, no revival (submitted/filled orders excepted) |
+| 06 frozen score | `executionState.ts`, `queueView` | after a hard fail / expiry the alert-time score is shown "Frozen — reference only", NOT RANKED |
+| 07 tier / execution / actionability | `queueView`, `QueueParts` | Execution column; late setup = `LATE — REVIEW`, never WATCHLIST |
+| 08 SIP parity text | `parityDiagnostics.sipParitySummary`, `ShadowV12` | "Non-RVOL SIP checks: x/5 agree" + separate SIP RVOL diagnostic line |
+| 09 freshness | unchanged v1.1 gate | data ≤ 5 s, last trade ≤ 60 s stay hard (tests: Case A / B) |
+| 10 gate sequencing | `gateSequence()` | score fail → Portfolio NOT EVALUATED — NOT REQUIRED, Capital NOT ATTEMPTED; portfolio block → Capital NOT ATTEMPTED |
+| 11 retention | `retentionState()`, `pruneAlertSnapshots()`, history CSV | queue hides previous-session / ≥ 12 h alerts; snapshots kept 90 days; server records never deleted |
+| 12 broker sync | `lifecycle/brokerSync.ts`, `BrokerSync.tsx` | read-only reconciliation of PASTED Alpaca order JSON; no broker connection (static NO TRADE EXECUTION guard unchanged) |
+| 13 EOD | `eodStatus()` | 15:30 no new entries (READY withheld by the execution layer), 15:50 cancel, 15:55 exit, 15:58 flat — flags only |
+| 14 labels / audit | `ranker/componentAudit.ts` | display-layer labels consistent with points; Location/Extension audit cross-checked against the scorer |
+
+Known limitations: live Alpaca order polling (CR-12) needs a trading-API key and an approved change to the static
+NO TRADE EXECUTION guard — not done. The 15:30 EOD rule withholds READY in the v1.2 execution layer only; the v1.1
+ticket object itself is unchanged and its card shows the warning. Latency for a retried record reflects the last
+processing attempt.

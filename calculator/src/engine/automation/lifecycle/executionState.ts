@@ -69,7 +69,8 @@ const PORTFOLIO_BLOCKS: Record<string, string> = {
 /** CR-10 — gates are evaluated in order; a later gate is never reported as failing when an earlier one stopped it. */
 export function gateSequence(row: QueueRow): GateSequence {
   const r = row.ranked;
-  if (!r || row.decision.decision === 'SCORING') return { score: 'PENDING', portfolio: 'PENDING', capital: 'PENDING' };
+  if (row.decision.decision === 'SCORING') return { score: 'PENDING', portfolio: 'PENDING', capital: 'PENDING' };
+  if (!r) return { score: 'NOT SCORED', portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };
   const tier = r.tier;
   const score: GateResult = r.total === null || !tier ? 'NOT SCORED' : tier === 'ELITE' || tier === 'HIGH_PRIORITY' ? 'PASS' : 'FAIL';
   if (score !== 'PASS') return { score, portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };

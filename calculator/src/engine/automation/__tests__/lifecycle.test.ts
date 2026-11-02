@@ -213,3 +213,12 @@ describe('CR-11 archive / retention', () => {
     expect(alertSnapshotsCsv(map, '2026-10-31').trim().split('\n')).toHaveLength(1);
   });
 });
+
+describe('CR-10 gate sequencing for unscored records', () => {
+  it('DATA_ERROR (no ranking) → NOT SCORED / NOT EVALUATED / NOT ATTEMPTED, never PENDING', () => {
+    const rec: AutoAlertRecord = { ...strong('XYZ'), status: 'DATA_ERROR', snapshot: null as unknown as AutoAlertRecord['snapshot'], errors: ['provider error'] };
+    const r = run([rec]).rows[0];
+    expect(r.decision.decision).toBe('DATA REVIEW REQUIRED');
+    expect(r.lifecycle.gates).toEqual({ score: 'NOT SCORED', portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' });
+  });
+});
