@@ -21,6 +21,8 @@ import type { AutoAlertRecordV12, V12Audit } from './v12/audit';
 import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
+import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
+import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
 export interface QueueInput {
   records: AutoAlertRecord[];
@@ -35,6 +37,8 @@ export interface QueueInput {
   /** Parity mismatches entered on the Data Validation screen, by record id. */
   parity: Record<string, string[]>;
   strategyVersion: string;
+  /** Immutable alert-time snapshots (CR-03), read only — used for the separate execution layer. */
+  frozen?: AlertSnapshotMap;
 }
 
 export interface QueueRow {
@@ -47,6 +51,8 @@ export interface QueueRow {
   decision: AlertDecision;
   /** RB v1.2 SHADOW decision (comparison only; never drives the queue). Null for records without a v1.2 audit. */
   shadow: V12Decision | null;
+  /** v1.2 execution layer (CR-04/05/06/07/10/13): presentation of the decisions above; never feeds back into them. */
+  lifecycle: Lifecycle;
 }
 
 export interface QueueOutput {
@@ -167,6 +173,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
   }
   const v12Rank = v12Pool.size ? shadowRanking({ candidates: [...candidates, ...v12Only], poolIds: v12Pool, lives: v12Lives, audits, positions: q.positions, rk: q.rk, today, window }).byId : new Map();
 
+  const eod = eodStatus(q.now, candidates, q.positions);
   const rows: QueueRow[] = q.records.map((rec) => {
     const candidate = byId.get(rec.id) ?? null;
     const ranked = rankedById.get(rec.id) ?? null;
@@ -187,7 +194,9 @@ export function buildQueue(q: QueueInput): QueueOutput {
       window,
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
-    return { record: rec, candidate, ranked, live, quote, decision, shadow };
+    const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod);
+    return row;
   });
 
   return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed };

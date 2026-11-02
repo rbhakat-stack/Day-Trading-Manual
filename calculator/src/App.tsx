@@ -30,6 +30,7 @@ import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type 
 import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
+import { freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
@@ -276,6 +277,8 @@ export default function App() {
     return out;
   }, [feed.records, parityEntries, autoCfg.parity]);
   const paritySum = useMemo(() => paritySummary(Object.values(parityEntries), parityRows, autoCfg.parityRequired), [parityEntries, parityRows, autoCfg.parityRequired]);
+  // RB v1.2 (CR-03): write-once alert-time snapshots, read by the execution layer only. Older than 90 days are pruned.
+  const [alertSnaps, setAlertSnaps] = usePersistent<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, () => pruneAlertSnapshots(load<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, {}), Date.now()));
   const queue = useMemo(() => {
     if (!autoCfg.enabled) return null;
     return buildQueue({
@@ -290,8 +293,12 @@ export default function App() {
       classify: (s) => classes[s] ?? null,
       parity: Object.fromEntries(Object.entries(parityRows).map(([id, rows]) => [id, mismatchMessages(rows)])),
       strategyVersion: version.name,
+      frozen: alertSnaps,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps]);
+  useEffect(() => {
+    if (queue) setAlertSnaps((prev) => freezeAlertSnapshots(prev, queue.rows, clock, v12MaxScore(rankerSettings)).map);
+  }, [queue, clock, rankerSettings, setAlertSnaps]);
   useEffect(() => {
     if (queue?.changed) setCandidates(queue.candidates);
   }, [queue]);

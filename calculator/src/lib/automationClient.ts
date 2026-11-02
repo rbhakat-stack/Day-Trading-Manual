@@ -18,6 +18,8 @@ export const AUTO_KEYS = {
   parity: 'rbv1.automation.parity.v1',
   /** RB v1.2 SHADOW comparison log (frozen first v1.2 score per alert; calibration data only). */
   v12ShadowLog: 'rbv1.v12.shadowLog.v1',
+  /** RB v1.2 immutable alert-time snapshots (CR-03; write-once per alert, retained 90 days). */
+  alertSnapshots: 'rbv1.v12.alertSnapshots.v1',
 } as const;
 
 export function loadAutomationConfig(): AutomationConfig {
