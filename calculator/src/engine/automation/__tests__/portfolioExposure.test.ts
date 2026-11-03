@@ -127,8 +127,10 @@ describe('latched releases (reload, outage, new trade in the same ticker)', () =
   it('write-once', () => {
     expect(latchReleases(latched, first.x.released).map).toBe(latched);
   });
-  it('browser reload after close: the release persists, even while the broker feed is unavailable', () => {
-    expect(apply([old], [], null, latched).p).toMatchObject({ slotsUsed: 0, heatCommitted: 0 });
+  it('browser reload after close: released again on the next verified response; while the feed is unavailable the reservation returns (conservative)', () => {
+    expect(apply([old], [], NOV3, latched).p).toMatchObject({ slotsUsed: 0, heatCommitted: 0 });
+    // 6.1: an outage must never be able to suppress exposure, so no release applies without a verified response.
+    expect(apply([old], [], null, latched).p).toMatchObject({ slotsUsed: 1, heatCommitted: 99.8 });
   });
   it('genuine new FIS trade later: the new position counts once, the closed one stays released', () => {
     const fresh = cand({ id: 'new-fis', date: '2026-11-04', alertMs: Date.parse('2026-11-04T15:00:00Z'), plannedRisk: 80 });

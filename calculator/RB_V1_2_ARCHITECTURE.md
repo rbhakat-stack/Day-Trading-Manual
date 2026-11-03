@@ -688,6 +688,21 @@ Punch-list follow-up (shadow-validation gate):
 - **Effect on scores:** only the portfolio-fit points change. In the test fixture, GS and BAC correlation goes from 4 to 7 when the stale Financials exposure is released.
 - **Journal:** this does not read it, so it doesn't depend on the inaccurate cross-day rows (CR-15).
 
+**Fixes 6.1 / 6.2 (pre-deployment audit).**
+- **6.1 Release lifecycle.** A release record is bound to the execution it proved closed: the candidate's execution fingerprint (status, `executionRev`, fill, size, plan) plus the broker order id when known. `executionRev` is an optional `Candidate` field incremented whenever a candidate starts a new execution: entering PENDING, or entering FILLED not from PENDING. A release applies only when **all** of these hold:
+  1. the broker response is verified;
+  2. the fingerprint is unchanged;
+  3. any current position or working order in that ticker is represented by *another* active RB record;
+  4. its order is not being reused as evidence for a later execution.
+
+  Otherwise the candidate reserves again. With no verified broker data, no release applies at all, so old closed reservations reappear during outages (conservative). Release records are write-once; a release for a new execution supersedes the old one and references it.
+- **6.2 One exposure model.** `App.tsx` computes `reconcileExposure(...)` once from the same verified broker input and release records, and every portfolio computation uses it:
+  - the Opportunity Ranker;
+  - the initial-score and entry-score freezes;
+  - the Live Alert Queue.
+
+  `rankCandidates` gained an optional `exposureExclude` set. Excluded candidates are still ranked, listed and scored; only their portfolio exposure is omitted. Without the set the ranker is unchanged (golden tests).
+
 *Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.

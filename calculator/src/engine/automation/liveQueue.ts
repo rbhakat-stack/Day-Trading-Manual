@@ -70,7 +70,7 @@ export interface QueueOutput {
   suggestions: ReplacementSuggestion[];
   changed: boolean;
   /** Broker-verified exposure adjustments used by the allocator (records are unchanged). */
-  exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'added'>;
+  exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'voided' | 'added'>;
 }
 
 const LIVE_STATUSES = ['NEW', 'WATCHLIST'];
@@ -141,8 +141,8 @@ export function buildQueue(q: QueueInput): QueueOutput {
   );
   // Portfolio exposure seen by the allocator: broker-verified closes release capacity; uncertain data releases nothing.
   const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now });
-  const ranking = rankCandidates(exp.candidates.filter((c) => !dataBlocked.has(c.id)), exp.positions, q.rk, today, window);
-  const display = dataBlocked.size ? rankCandidates(exp.candidates, exp.positions, q.rk, today, window) : ranking;
+  const ranking = rankCandidates(candidates.filter((c) => !dataBlocked.has(c.id)), exp.positions, q.rk, today, window, exp.exclude);
+  const display = dataBlocked.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
   for (const r of display.ranked) if (dataBlocked.has(r.candidate.id)) rankedById.set(r.candidate.id, { ...r, rank: null });
 
@@ -211,7 +211,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     return row;
   });
 
-  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, added: exp.added } };
+  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added } };
 }
 
 const SECTION_ORDER = ['ACTION_NOW', 'HIGH_PRIORITY', 'DATA_REVIEW', 'SCORING', 'ACTIVE', 'WATCHLIST', 'IGNORE', 'CLOSED'];

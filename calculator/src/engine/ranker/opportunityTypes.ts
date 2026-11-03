@@ -199,6 +199,9 @@ export interface Candidate {
   notes: string;
   archived: boolean;
   keptAgainst: string[]; // candidate ids the user chose NOT to replace this pending order with
+  /** Execution revision: +1 each time the candidate starts a new execution (enters PENDING, or FILLED not from
+   *  PENDING). Lets a broker-confirmed release apply to one execution only. Optional; absent on older records. */
+  executionRev?: number;
 }
 
 /** Manually maintained position (no broker API). */

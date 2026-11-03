@@ -335,13 +335,17 @@ export function rankCandidates(
   s: RankerSettings,
   today: string,
   w: StrategyRules = DEFAULT_STRATEGY_RULES,
+  /** Candidate ids that hold NO portfolio exposure (broker-confirmed closed); they are still ranked and listed. */
+  exposureExclude?: ReadonlySet<string>,
 ): RankingResult {
-  const portfolio = buildPortfolio(positions, candidates, s);
+  // Exposure set for every portfolio snapshot below; identical to `candidates` when nothing is excluded.
+  const exposure = exposureExclude?.size ? candidates.filter((c) => !exposureExclude.has(c.id)) : candidates;
+  const portfolio = buildPortfolio(positions, exposure, s);
   const queue = candidates.filter((c) => c.date === today && !c.archived);
 
   // Steps 1–2 for every queue candidate
   const pre = queue.map((c) => {
-    const pf = buildPortfolio(positions, candidates, s, c.id);
+    const pf = buildPortfolio(positions, exposure, s, c.id);
     const sRules = strategyRules(c, pf, w);
     const pRules = portfolioRules(c, pf, s);
     const strategyFails = sortFails(sRules.filter((r) => !r.pass).map((r) => fail(r.code, r.detail, r.failLabel)));
@@ -443,7 +447,7 @@ export function rankCandidates(
   const group = (r: RankedCandidate) => (r.rank !== null ? 0 : r.candidate.status === 'FILLED' ? 1 : r.total !== null ? 2 : 3);
   ranked.sort((a, b) => group(a) - group(b) || (a.rank ?? 0) - (b.rank ?? 0) || (b.total ?? -1) - (a.total ?? -1) || a.candidate.createdAt - b.candidate.createdAt || a.candidate.id.localeCompare(b.candidate.id));
 
-  return { ranked, portfolio, suggestions: replacementSuggestions(ranked, candidates, positions, s, peerEff) };
+  return { ranked, portfolio, suggestions: replacementSuggestions(ranked, exposure, positions, s, peerEff) };
 }
 
 /**

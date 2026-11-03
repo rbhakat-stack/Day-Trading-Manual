@@ -31,7 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
-import { brokerVerified, latchReleases, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
+import { brokerVerified, executionRevPatch, latchReleases, reconcileExposure, type BrokerExposureInput, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
@@ -142,7 +142,6 @@ export default function App() {
     () => ({ entryWindowStart: settings.entryWindowStart, entryWindowEnd: settings.entryWindowEnd, chaseThresholdAtr: settings.chaseThresholdAtr }),
     [settings.entryWindowStart, settings.entryWindowEnd, settings.chaseThresholdAtr],
   );
-  const ranking = useMemo(() => rankCandidates(candidates, positions, rankerSettings, today, strategy), [candidates, positions, rankerSettings, today, strategy]);
 
   const setField = useCallback(<K extends keyof FormState>(k: K, v: FormState[K]) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -283,8 +282,24 @@ export default function App() {
   const paritySum = useMemo(() => paritySummary(Object.values(parityEntries), parityRows, autoCfg.parityRequired), [parityEntries, parityRows, autoCfg.parityRequired]);
   // RB v1.2 (CR-03): write-once alert-time snapshots, read by the execution layer only. Older than 90 days are pruned.
   const [alertSnaps, setAlertSnaps] = usePersistent<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, () => pruneAlertSnapshots(load<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, {}), Date.now()));
-  // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
+  // Broker-confirmed released portfolio reservations (write-once per candidate execution; audit trail).
   const [releasedExposure, setReleasedExposure] = usePersistent<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, () => load<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, {}));
+  // ONE portfolio exposure model for every decision surface (Live Alert Queue, Opportunity Ranker, score freezing):
+  // candidate records + manual positions + VERIFIED read-only Alpaca PAPER facts + safe release records.
+  const brokerExposure = useMemo<BrokerExposureInput>(
+    () => ({ verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions }),
+    [brokerFeed, autoDate, clock],
+  );
+  const exposureFor = useCallback(
+    (cs: Candidate[]) => reconcileExposure(cs, positions, brokerExposure, { classify: (s) => classes[s] ?? null, conservativeRisk: rankerSettings.portfolio.accountEquity * rankerSettings.portfolio.riskPerTradePct, latched: releasedExposure, now: clock }),
+    [positions, brokerExposure, classes, rankerSettings, releasedExposure, clock],
+  );
+  const rankerExposure = useMemo(() => exposureFor(candidates), [exposureFor, candidates]);
+  const ranking = useMemo(
+    () => rankCandidates(candidates, rankerExposure.positions, rankerSettings, today, strategy, rankerExposure.exclude),
+    [candidates, rankerExposure, rankerSettings, today, strategy],
+  );
+  // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
   const [terminalEvents, setTerminalEvents] = usePersistent<TerminalEventMap>(AUTO_KEYS.terminalEvents, () => pruneTerminalEvents(load<TerminalEventMap>(AUTO_KEYS.terminalEvents, {}), Date.now()));
   const queue = useMemo(() => {
     if (!autoCfg.enabled) return null;
@@ -303,13 +318,14 @@ export default function App() {
       frozen: alertSnaps,
       terminal: terminalEvents,
       // Portfolio exposure from read-only broker facts; only a live, today, fresh response may release capacity.
-      broker: { verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions },
+      broker: brokerExposure,
       releasedExposure,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerFeed, autoDate, releasedExposure]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure]);
   useEffect(() => {
-    if (queue?.exposure.released.length) setReleasedExposure((prev) => latchReleases(prev, queue.exposure.released).map);
-  }, [queue, setReleasedExposure]);
+    const found = [...rankerExposure.released, ...(queue?.exposure.released ?? [])];
+    if (found.length) setReleasedExposure((prev) => latchReleases(prev, found).map);
+  }, [queue, rankerExposure, setReleasedExposure]);
   useEffect(() => {
     if (queue) setTerminalEvents((prev) => latchTerminalEvents(prev, queue.rows, clock, autoCfg).map);
   }, [queue, clock, autoCfg, setTerminalEvents]);
@@ -378,7 +394,9 @@ export default function App() {
     return { tone: 'danger' as const, text: `The calculator shows ${what}, which cannot be sent to the ranker because ${why}.`, action: null };
   }, [result, inputs.ticker, inputs.direction, candidates, today]);
 
-  const patchCandidate = (id: string, patch: Partial<Candidate>) => setCandidates((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  // Any status change made through a generic patch also gets its execution revision (never downgraded).
+  const patchCandidate = (id: string, patch: Partial<Candidate>) =>
+    setCandidates((cs) => cs.map((c) => (c.id === id ? { ...c, ...(patch.status && patch.executionRev === undefined ? executionRevPatch(c, patch.status) : {}), ...patch } : c)));
 
   const rankerActions: RankerActions = {
     select: setSelectedId,
@@ -388,7 +406,8 @@ export default function App() {
         const target = next.find((c) => c.id === id);
         if (target && !target.initialScore) {
           // Freeze the score at first scoring. It is never rewritten afterwards.
-          const rc = rankCandidates(next, positions, rankerSettings, today, strategy).ranked.find((r) => r.candidate.id === id);
+          const ex = exposureFor(next);
+          const rc = rankCandidates(next, ex.positions, rankerSettings, today, strategy, ex.exclude).ranked.find((r) => r.candidate.id === id);
           if (rc && rc.total !== null) return next.map((c) => (c.id === id ? { ...c, initialScore: snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name) } : c));
         }
         return next;
@@ -399,7 +418,7 @@ export default function App() {
       if ((status === 'PENDING' || status === 'FILLED') && ['NEW', 'WATCHLIST'].includes(rc.candidate.status) && !rc.recommendation?.startsWith('TRADE')) {
         if (!confirm(`${rc.candidate.ticker} is "${rc.displayStatus}". Mark it as ${status === 'PENDING' ? 'a pending order' : 'filled'} anyway?`)) return;
       }
-      const patch: Partial<Candidate> = { status };
+      const patch: Partial<Candidate> = { status, ...executionRevPatch(rc.candidate, status) };
       if (status === 'FILLED' && !rc.candidate.entryScore) patch.entryScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
       const terminal: LifecycleStatus[] = ['TARGET_HIT', 'STOPPED_OUT', 'MANUAL_EXIT', 'SKIPPED', 'STALE', 'CANCELED', 'EXPIRED'];
       if (terminal.includes(status) && !rc.candidate.finalScore) patch.finalScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
@@ -409,7 +428,7 @@ export default function App() {
     keep: (sg) => setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, keptAgainst: [...c.keptAgainst, sg.candidateId] } : c))),
     replace: (sg) => {
       if (!confirm(`Cancel the pending ${sg.pendingTicker} order and reserve its capital for ${sg.candidateTicker}?\n\nThis only updates the ranker. You must cancel the ${sg.pendingTicker} stop order in TrendSpider/Alpaca yourself, and place the ${sg.candidateTicker} order yourself.`)) return;
-      setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, status: 'CANCELED' } : c.id === sg.candidateId ? { ...c, status: 'PENDING' } : c)));
+      setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, status: 'CANCELED' } : c.id === sg.candidateId ? { ...c, status: 'PENDING', ...executionRevPatch(c, 'PENDING') } : c)));
       setSelectedId(sg.candidateId);
     },
     logJournal: (id) => {
