@@ -212,8 +212,9 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                     const tone = c.role === 'ACTIVE' && cell.tiers[0] ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100';
                     return (
                       <Fragment key={c.version}>
-                        <td className={`${td} border-l ${edge(c)} text-[15px] font-bold ${cell.frozen ? 'text-ink-400' : tone}`} title={cell.frozen ? 'Frozen alert-time score — reference only · NOT RANKED' : undefined}>
-                          {cell.score ?? '—'}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Frozen · not ranked</span>}
+                        <td className={`${td} border-l ${edge(c)} text-[15px] font-bold ${cell.frozen ? 'text-ink-400' : tone}`} title={cell.frozen ? (cell.frozenLabel ? `Frozen alert-time score${cell.live != null ? ` — current re-evaluation ${cell.live} (live)` : ''}` : 'Frozen alert-time score — reference only · NOT RANKED') : undefined}>
+                          {cell.score ?? '—'}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}</span>}
+                          {cell.frozen && cell.live != null && <span className="block text-[10px] font-normal text-ink-500">now {cell.live} (live)</span>}
                         </td>
                         {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}><TierPill t={t} /></td>)}
                         {c.role === 'ACTIVE' && <td className={`${td} border-r ${edge(c)}`}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>}

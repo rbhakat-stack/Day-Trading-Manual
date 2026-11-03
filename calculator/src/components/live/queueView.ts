@@ -30,6 +30,10 @@ export interface StrategyCell {
   decision: string | null;
   /** CR-06 — the score is the FROZEN alert-time score shown for reference after a hard fail / expiry (not ranked). */
   frozen?: boolean;
+  /** Label under a frozen score (default "Frozen · not ranked"). */
+  frozenLabel?: string;
+  /** The current (live) re-evaluation when a frozen score is shown instead; never presented as the frozen value. */
+  live?: number | null;
 }
 
 export interface StrategyColumn {
@@ -58,12 +62,19 @@ interface Presenter {
  *   RB v1.1 → the Opportunity Ranker result (`row.ranked`: total, tier) and, when active, `row.decision`;
  *   RB v1.2 → the v1.2 score summary on `row.shadow` (raw total, Option B tier, Option A tier).
  */
+const USER_LIFECYCLE = ['SUBMITTED', 'IN POSITION', 'CLOSED'];
+
 const PRESENTERS: Record<string, Presenter> = {
   'RB v1.1': {
     scoreLabel: () => 'Score',
     tierLabels: ['Tier'],
     cell: (r, role) => {
       const sc = r.lifecycle?.score;
+      // Submitted / filled / closed: the alert-time score is the one that led to the trade. It is shown frozen and
+      // labelled; the live re-evaluation (portfolio fit and price-location points move) is kept separately.
+      if (sc?.basis === 'FROZEN — REFERENCE ONLY' && sc.value !== null && USER_LIFECYCLE.includes(r.lifecycle.executionState) && (r.ranked?.total ?? null) !== null) {
+        return { score: sc.value, tiers: [(r.lifecycle.alertTimeTier as QualityTier | null) ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true, frozenLabel: 'Alert-time · frozen', live: r.ranked?.total ?? null };
+      }
       if (sc?.basis === 'FROZEN — REFERENCE ONLY' && (r.ranked?.total ?? null) === null) {
         return { score: sc.value, tiers: [(r.lifecycle.alertTimeTier as QualityTier | null) ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true };
       }

@@ -744,6 +744,19 @@ Punch-list follow-up (shadow-validation gate):
   - When fresh verified data returns, only alerts that are still valid become READY again.
 - *Warning.* `PortfolioVerificationBanner` shows the same message on the Live Alert Queue and the Opportunity Ranker. It names the state, the last verified time, whether earlier verified exposure is still reserved, and that new tickets are withheld. Nothing is shown when the portfolio is verified.
 
+**Execution status, score provenance and the incremental baseline (MCD, 3 Nov). Display only.**
+- *Execution status* (`executionStatus`). Four separate answers:
+  1. RB candidate status (user-maintained, never rewritten).
+  2. Broker entry order: only when `reconcileBroker` linked it deterministically by a unique price match. NO_PRICE_MATCH and AMBIGUOUS orders are reported, never attributed.
+  3. Broker position.
+  4. Effective state: ALREADY EXECUTED / ORDER PENDING / PARTIALLY FILLED / EXECUTED — POSITION CLOSED / BROKER ENTRY CANCELED / PENDING — BROKER LINK UNVERIFIED.
+
+  A submitted or filled candidate never reads as a new-entry signal. The Ranker table shows its execution state, and the decision card captions its tier as historical opportunity quality. Stale broker facts are labelled "last known at …"; with no broker data the state stays conservative. A canceled entry does not re-arm anything: the user updates the candidate, and the existing lifecycle rules (expiry, chase, SETUP FAILED) apply.
+- *Scores.* The v1.1 alert-time score is frozen at first scoring (`candidate.initialScore` and the alert-time snapshot). Both were intact for MCD: 89 in a full-context replay, with v1.2 frozen at 80/91 HIGH (Option B).
+
+  The Live Alert Queue v1.1 cell showed the live re-ranking even for submitted, filled and closed rows. Live portfolio-fit and price-location points move after the alert, which is the 89 → 85 seen. Those rows now show the frozen alert-time score, labelled "Alert-time · frozen", with "now N (live)" underneath. The Ranker labels its headline score "Current re-evaluation (live)" and shows the frozen alert-time and entry-time scores beside it.
+- *Incremental baseline.* Each candidate's portfolio-fit evaluation intentionally excludes that candidate's own reservation (`buildPortfolio(..., c.id)`) so it is not counted twice. The fit panel now says so, shows the actual overall portfolio, and gives the slot and heat figures including the candidate. The calculation is unchanged.
+
 *Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.

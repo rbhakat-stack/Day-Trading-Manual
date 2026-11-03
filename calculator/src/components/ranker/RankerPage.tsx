@@ -13,7 +13,8 @@ import { BreakdownCard, DecisionCard } from './ScoreCard';
 import { StrategyVersionBar, type VersionControls } from '../StrategyVersionBar';
 import type { PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
 import { PortfolioVerificationBanner } from '../PortfolioVerificationBanner';
-import { gateRankingDisplay } from '../portfolioGate';
+import { gateRankingDisplay, withExecutionDisplay } from '../portfolioGate';
+import type { ExecutionStatus } from '../../engine/automation/lifecycle/executionStatus';
 
 export interface RankerActions {
   select: (id: string) => void;
@@ -47,12 +48,15 @@ interface Props {
   actions: RankerActions;
   /** Broker portfolio verification state (warning; TRADE NOW is shown as withheld while unverified). */
   verification?: PortfolioVerification;
+  /** Current execution status per candidate id (RB status / broker entry / position / effective state). */
+  executions?: Record<string, ExecutionStatus>;
 }
 
-export function RankerPage({ result: raw, candidates, positions, settings, version, settingsEpoch, selectedId, today, actions, verification }: Props) {
-  const result = verification ? gateRankingDisplay(raw, verification) : raw;
+export function RankerPage({ result: raw, candidates, positions, settings, version, settingsEpoch, selectedId, today, actions, verification, executions }: Props) {
+  const result = withExecutionDisplay(verification ? gateRankingDisplay(raw, verification) : raw, executions);
   const [sub, setSub] = useState<Sub>('rank');
   const selected = result.ranked.find((r) => r.candidate.id === selectedId) ?? null;
+  const selectedExecution = selected ? executions?.[selected.candidate.id] ?? null : null;
   const stronger = result.suggestions.filter((s) => s.kind === 'STRONGER');
   const tabs: { id: Sub; label: string }[] = [
     { id: 'rank', label: 'Ranker' },
@@ -89,7 +93,7 @@ export function RankerPage({ result: raw, candidates, positions, settings, versi
               <CandidateInput candidate={selected?.candidate ?? null} onScore={actions.score} />
             </div>
             <div className="order-1 space-y-4 lg:order-none">
-              <DecisionCard r={selected} />
+              <DecisionCard r={selected} execution={selectedExecution} />
               <div className="lg:hidden"><PortfolioBar pf={result.portfolio} reservePct={settings.portfolio.liquidityReservePct} /></div>
               {selected && <BreakdownCard r={selected} />}
             </div>
@@ -97,6 +101,7 @@ export function RankerPage({ result: raw, candidates, positions, settings, versi
               {selected ? (
                 <FitPanel
                   r={selected}
+                  overall={result.portfolio}
                   s={settings}
                   suggestions={result.suggestions}
                   onStatus={actions.setStatus}

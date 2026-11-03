@@ -1,11 +1,12 @@
 import type { RankedCandidate } from '../../engine/ranker/candidateRanker';
+import type { ExecutionStatus } from '../../engine/automation/lifecycle/executionStatus';
 import { displaySummary, locationAudit } from '../../engine/ranker/componentAudit';
 import { FIT_KEYS, SETUP_KEYS, type Recommendation } from '../../engine/ranker/opportunityTypes';
 import { usd } from '../../lib/format';
 import { Panel, toneClasses } from '../ui';
 import { fmtScore, recTone, REC_HELP, ScoreBar } from './shared';
 
-export function DecisionCard({ r }: { r: RankedCandidate | null }) {
+export function DecisionCard({ r, execution }: { r: RankedCandidate | null; execution?: ExecutionStatus | null }) {
   if (!r) {
     return (
       <section className="flex min-h-[12rem] flex-col items-center justify-center rounded-xl border border-ink-700 bg-ink-850 p-6 text-center">
@@ -15,7 +16,8 @@ export function DecisionCard({ r }: { r: RankedCandidate | null }) {
     );
   }
   const c = r.candidate;
-  const status = r.displayStatus;
+  const status = execution?.effective ?? r.displayStatus;
+  const executed = !!execution?.effective;
   const t = toneClasses[recTone(status)];
   const unscored = r.total === null;
   const belowThreshold = r.tier !== null && r.tier !== 'ELITE' && r.tier !== 'HIGH_PRIORITY';
@@ -54,8 +56,11 @@ export function DecisionCard({ r }: { r: RankedCandidate | null }) {
             <span className="text-xl font-semibold text-ink-400"> / 100</span>
           </div>
           {unscored && <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-ink-400">{r.strategyEligible ? 'No score until inputs are complete' : 'Not scored — not eligible'}</div>}
+          {!unscored && <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400" data-score-basis="live">Current re-evaluation (live)</div>}
+          {c.initialScore && <div className="text-[11px] text-ink-300" data-score-basis="alert-time">Alert-time (frozen): <b className="num">{c.initialScore.total ?? '—'}</b>{c.entryScore ? <> · Entry-time (frozen): <b className="num">{c.entryScore.total ?? '—'}</b></> : null}</div>}
         </div>
       </div>
+      {execution?.effective && <ExecutionBlock x={execution} />}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Mini label="Rank (relative)" value={r.rank ? `#${r.rank} of ${r.rankOf}` : '—'} sub={r.rank ? 'active candidates' : 'not ranked'} />
         <Mini label="Required capital" value={usd(c.positionValue, 0)} sub={Number.isFinite(r.capitalRequiredPct) ? `${(r.capitalRequiredPct * 100).toFixed(0)}% of available` : 'no capital available'} />
@@ -63,11 +68,24 @@ export function DecisionCard({ r }: { r: RankedCandidate | null }) {
         <Mini label="Portfolio fit" value={unscored ? '—' : `${fmtScore(r.fit)} / 30`} />
       </div>
       <div className={`mt-3 rounded-lg border px-3 py-2 text-sm ${!r.eligible || belowThreshold || unscored ? 'border-short/50 bg-short-dim/40' : 'border-long/50 bg-long-dim/40'}`}>
-        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-300">Eligibility (absolute): </span>
-        <span className={`font-bold ${!r.eligible || belowThreshold || unscored ? 'text-short' : 'text-long'}`}>{r.eligibilityLabel}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-300">{executed ? 'Opportunity quality (historical — not a new-entry signal): ' : 'Eligibility (absolute): '}</span>
+        <span className={`font-bold ${executed ? 'text-ink-200' : !r.eligible || belowThreshold || unscored ? 'text-short' : 'text-long'}`}>{r.eligibilityLabel}</span>
         {belowThreshold && r.rank === 1 && <span className="ml-2 text-xs text-ink-300">Ranking #1 does not make a below-threshold setup tradeable.</span>}
       </div>
     </section>
+  );
+}
+
+/** RB candidate / broker entry / broker position / effective state — four separate answers (display only). */
+export function ExecutionBlock({ x }: { x: ExecutionStatus }) {
+  return (
+    <div className="mt-3 rounded-lg border border-warn/50 bg-warn-dim/30 px-3 py-2 text-[12.5px]" data-section="execution-status">
+      <div><span className="text-ink-400">RB candidate: </span><b>{x.candidate}</b></div>
+      {x.brokerEntry && <div><span className="text-ink-400">Broker entry: </span><b>{x.brokerEntry}</b></div>}
+      {x.brokerPosition && <div><span className="text-ink-400">Broker position: </span><b>{x.brokerPosition}</b></div>}
+      <div className="mt-1 font-black uppercase tracking-wide text-warn">{x.effective}</div>
+      {x.notes.map((n, i) => <div key={i} className="text-[11px] text-ink-400">{n}</div>)}
+    </div>
   );
 }
 

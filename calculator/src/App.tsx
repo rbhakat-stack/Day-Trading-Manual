@@ -31,6 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
+import { executionStatus } from './engine/automation/lifecycle/executionStatus';
 import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
@@ -376,6 +377,11 @@ export default function App() {
     // Gate: only after today's alert feed and broker feed have both loaded (never treat "not loaded yet" as NO ALERT).
     setJournal((j) => syncJournalWhenReady(j, brokerTrades, ctx, { date: autoDate, alertsLoadedFor: feed.loadedDate, brokerLoadedFor: brokerFeed.loadedDate }).journal);
   }, [brokerTrades]);
+  // Current execution status of submitted / filled candidates (display only; candidate records are never rewritten).
+  const executions = useMemo(
+    () => Object.fromEntries(candidates.filter((c) => c.status === 'PENDING' || c.status === 'FILLED').map((c) => [c.id, executionStatus(c, brokerTrades, { verified: verification.verified, asOfMs: brokerFeed.lastOkMs })])),
+    [candidates, brokerTrades, verification.verified, brokerFeed.lastOkMs],
+  );
   useEffect(() => {
     if (queue?.changed) setCandidates(queue.candidates);
   }, [queue]);
@@ -657,6 +663,7 @@ export default function App() {
             today={today}
             actions={rankerActions}
             verification={verification}
+            executions={executions}
           />
         )}
         {tab === 'journal' && (

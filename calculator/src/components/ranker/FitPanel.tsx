@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { RankedCandidate, ReplacementSuggestion } from '../../engine/ranker/candidateRanker';
+import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
 import { assessCorrelation } from '../../engine/ranker/correlationRules';
 import { LIFECYCLE_LABELS, type Candidate, type LifecycleStatus } from '../../engine/ranker/opportunityTypes';
 import type { RankerSettings } from '../../engine/ranker/rankerSettings';
@@ -11,6 +12,8 @@ import { ScoreBar } from './shared';
 
 interface Props {
   r: RankedCandidate;
+  /** Actual overall portfolio (all exposures, including this candidate's own reservation). */
+  overall?: PortfolioSnapshot;
   s: RankerSettings;
   suggestions: ReplacementSuggestion[];
   onStatus: (id: string, status: LifecycleStatus) => void;
@@ -21,7 +24,7 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
-export function FitPanel({ r, s, suggestions, onStatus, onUpdate, onKeep, onReplace, onLogJournal, onDelete }: Props) {
+export function FitPanel({ r, overall, s, suggestions, onStatus, onUpdate, onKeep, onReplace, onLogJournal, onDelete }: Props) {
   const c = r.candidate;
   const pf = r.portfolio;
   const projectedHeat = pf.heatCommitted + c.plannedRisk;
@@ -33,19 +36,25 @@ export function FitPanel({ r, s, suggestions, onStatus, onUpdate, onKeep, onRepl
     <div className="space-y-4">
       {mine.map((sg) => <SuggestionCard key={`${sg.pendingId}-${sg.candidateId}`} sg={sg} onKeep={onKeep} onReplace={onReplace} />)}
 
-      <Panel title="Capital">
+      <p className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-[11.5px] leading-snug text-ink-300" data-section="incremental-baseline">
+        <b className="text-ink-100">Incremental portfolio-fit baseline — portfolio excluding the selected candidate.</b>{' '}
+        {c.ticker}'s own reservation is left out here so its portfolio fit is not counted twice; this is not a statement that the account holds no {c.ticker} position.
+        {overall && <> Actual portfolio: <b className="num text-ink-100">{overall.slotsUsed} / {overall.maxPositions}</b> slots · <b className="num text-ink-100">{usd(overall.heatCommitted, 0)}</b> heat.</>}
+      </p>
+      <Panel title="Capital (excluding this candidate)">
         <Row label="Required" value={usd(c.positionValue, 0)} strong />
         <Row label="Available (RB v1)" value={usd(pf.available, 0)} />
         <Row label="% of available" value={Number.isFinite(r.capitalRequiredPct) ? `${(r.capitalRequiredPct * 100).toFixed(0)}%` : '—'} tone={r.capitalRequiredPct > 0.8 ? 'warn' : undefined} />
         <Row label="Remaining after" value={usd(pf.available - c.positionValue, 0)} tone={pf.available - c.positionValue < 0 ? 'danger' : undefined} />
-        <Row label="Slots" value={`${pf.slotsUsed} / ${pf.maxPositions} used`} tone={pf.slotsUsed >= pf.maxPositions ? 'danger' : undefined} />
+        <Row label="Slots (excl. this candidate)" value={`${pf.slotsUsed} / ${pf.maxPositions} used`} tone={pf.slotsUsed >= pf.maxPositions ? 'danger' : undefined} />
+        <Row label="Slots including this candidate" value={`${pf.slotsUsed + 1} / ${pf.maxPositions}`} />
         <Row label="Planned reward ÷ capital" value={`${((c.expectedReward / Math.max(c.positionValue, 1)) * 100).toFixed(2)}%`} />
       </Panel>
 
-      <Panel title="Portfolio heat">
-        <Row label="Current heat (open + pending)" value={`${usd(pf.heatCommitted, 0)} / ${usd(pf.heatLimit, 0)}`} />
+      <Panel title="Portfolio heat (excluding this candidate)">
+        <Row label="Heat excl. this candidate (open + pending)" value={`${usd(pf.heatCommitted, 0)} / ${usd(pf.heatLimit, 0)}`} />
         <Row label="This trade's planned risk" value={usd(c.plannedRisk)} />
-        <Row label="Projected heat" value={`${usd(projectedHeat, 0)} / ${usd(pf.heatLimit, 0)}`} tone={projectedHeat > pf.heatLimit ? 'danger' : projectedHeat > pf.heatLimit * 0.9 ? 'warn' : undefined} strong />
+        <Row label="Projected heat including this candidate" value={`${usd(projectedHeat, 0)} / ${usd(pf.heatLimit, 0)}`} tone={projectedHeat > pf.heatLimit ? 'danger' : projectedHeat > pf.heatLimit * 0.9 ? 'warn' : undefined} strong />
         <div className="mt-2"><ScoreBar points={projectedHeat} max={pf.heatLimit} tone={projectedHeat > pf.heatLimit ? 'bg-short' : 'bg-warn'} /></div>
       </Panel>
 
@@ -123,8 +132,8 @@ function Lifecycle({ c, pnl, R, onStatus, onUpdate, onLogJournal, onDelete }: {
         </div>
       )}
       <div className="mt-2 grid grid-cols-2 gap-x-4 text-xs text-ink-400">
-        <span>Initial score: <span className="num text-ink-200">{c.initialScore ? c.initialScore.total : '—'}</span></span>
-        <span>Entry-time score: <span className="num text-ink-200">{c.entryScore ? c.entryScore.total : '—'}</span></span>
+        <span>Alert-time score (frozen): <span className="num text-ink-200">{c.initialScore ? c.initialScore.total : '—'}</span></span>
+        <span>Entry-time score (frozen): <span className="num text-ink-200">{c.entryScore ? c.entryScore.total : 'not captured'}</span></span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {closed && (
