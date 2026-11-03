@@ -40,5 +40,7 @@ export function configStatus() {
     })(),
     alpacaFeed: (env('ALPACA_DATA_FEED') || 'sip').toLowerCase(),
     brokerSyncEnabled: env('RB_BROKER_SYNC_ENABLED') === 'true',
+    /** CR-15 cross-day Journal reconciliation — server kill switch (default OFF; the client also needs its own opt-in). */
+    cr15Enabled: env('RB_CR15_CROSSDAY_RECONCILIATION_ENABLED') === 'true',
   };
 }

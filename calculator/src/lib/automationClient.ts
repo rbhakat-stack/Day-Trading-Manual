@@ -28,6 +28,8 @@ export const AUTO_KEYS = {
   releasedExposure: 'rbv1.v12.releasedExposure.v1',
   /** Last VERIFIED broker-only exposure (positions + working entries; replaced only by a verified response). */
   brokerSnapshot: 'rbv1.v12.brokerExposureSnapshot.v1',
+  /** CR-15 client mode: OFF (default) · PREVIEW (dry run, no writes) · AUTO (reconcile automatically after a verified backup). */
+  cr15Mode: 'rbv1.cr15.mode.v1',
   /** CR-12 — Alpaca order JSON pasted by the user for read-only reconciliation (no broker connection). */
   brokerOrders: 'rbv1.v12.brokerOrders.v1',
 } as const;
@@ -263,6 +265,55 @@ export function useBrokerHistory(enabled: boolean, token: string, dates: string[
       stop = true;
       clearInterval(h);
     };
+  }, [enabled, token, key, pollMs]);
+  return s;
+}
+
+/** Server feature flags from rb-health (read-only). null = unknown (not loaded / failed) — treated as OFF. */
+export function useServerFlags(enabled: boolean, token: string, pollMs = 300_000): { cr15: boolean | null } {
+  const [s, setS] = useState<{ cr15: boolean | null }>({ cr15: null });
+  useEffect(() => {
+    if (!enabled || !token) { setS({ cr15: null }); return; }
+    let stop = false;
+    const tick = async () => {
+      try {
+        const h = await checkHealth(token);
+        if (!stop) setS({ cr15: h.config?.cr15Enabled === true });
+      } catch {
+        if (!stop) setS({ cr15: null });
+      }
+    };
+    void tick();
+    const h = setInterval(tick, Math.max(60_000, pollMs));
+    return () => { stop = true; clearInterval(h); };
+  }, [enabled, token, pollMs]);
+  return s;
+}
+
+export interface BrokerHistoryFeed { status: 'IDLE' | 'LOADING' | 'LIVE' | 'ERROR'; orders: unknown[]; positions: BrokerPosition[]; complete: boolean; from: string | null; symbols: string[]; lastOkMs: number | null; error: string | null }
+
+/** CR-15 — bounded read-only order history for the open Journal trades' tickers since `from` (one request per poll). */
+export function useBrokerSymbolHistory(enabled: boolean, token: string, symbols: string[], from: string | null, pollMs = 60_000): BrokerHistoryFeed {
+  const idle: BrokerHistoryFeed = { status: 'IDLE', orders: [], positions: [], complete: false, from: null, symbols: [], lastOkMs: null, error: null };
+  const [s, setS] = useState<BrokerHistoryFeed>(idle);
+  const key = `${symbols.join(',')}|${from ?? ''}`;
+  useEffect(() => {
+    if (!enabled || !token || !from || !symbols.length) { setS(idle); return; }
+    let stop = false;
+    const [syms, f] = key.split('|');
+    const tick = async () => {
+      try {
+        const j = await call<{ orders: unknown[]; positions: BrokerPosition[]; complete?: boolean; from?: string; symbols?: string[] }>(`rb-broker?symbols=${encodeURIComponent(syms)}&from=${f}`, token);
+        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, complete: j.complete === true, from: j.from ?? null, symbols: j.symbols ?? [], lastOkMs: Date.now(), error: null });
+      } catch (e) {
+        if (!stop) setS((x) => ({ ...x, status: 'ERROR', error: (e as Error).message }));
+      }
+    };
+    setS((x) => ({ ...x, status: x.status === 'LIVE' ? x.status : 'LOADING' }));
+    void tick();
+    const h = setInterval(tick, Math.max(30_000, pollMs));
+    return () => { stop = true; clearInterval(h); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, token, key, pollMs]);
   return s;
 }

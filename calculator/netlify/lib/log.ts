@@ -13,6 +13,8 @@ export type LogEvent =
   | 'market_data_fetched'
   | 'broker_read'
   | 'broker_read_failed'
+  | 'broker_history_read'
+  | 'broker_history_failed'
   | 'candidate_enriched'
   | 'calculator_result'
   | 'hard_rule_result'

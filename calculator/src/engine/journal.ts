@@ -77,6 +77,20 @@ export interface JournalEntry {
   v12OptionB?: string | null;
   /** Set when a manually logged entry looks like the same trade — flagged for you to resolve, never merged. */
   possibleDuplicateOf?: string | null;
+
+  /* ── CR-15 cross-day reconciliation (optional; absent unless reconciliation was applied — older builds ignore them) ── */
+  /** Broker orders that closed this trade (bracket legs / closing orders), oldest first. */
+  exitOrderIds?: string[];
+  /** Quantity closed so far from broker fills (a partially closed trade stays OPEN). */
+  exitQty?: number | null;
+  /** Realized P/L from broker fills: (avg exit − avg entry) × closed qty, signed by direction; fees not included. */
+  realizedPnl?: number | null;
+  reconciliation?: 'CR15';
+  reconciledIso?: string | null;
+  /** This row is an exit of another trade (written as a separate trade before CR-15): kept for audit, not counted. */
+  supersededBy?: string | null;
+  supersededReason?: string | null;
+  supersededIso?: string | null;
 }
 
 /** Dashboard scope: all trades, trades RB recommended, or trades taken despite RB (manual overrides). */
@@ -97,9 +111,10 @@ export function isClosedTrade(e: JournalEntry): boolean {
   return CLOSED_OUTCOMES.includes(e.outcome) && e.exitPrice !== null && Number.isFinite(e.exitPrice) && e.quantity > 0;
 }
 
-/** Realised P/L in dollars (null if the trade is not closed). */
+/** Realised P/L in dollars (null if the trade is not closed). A CR-15 reconciled trade uses its broker-fill P/L. */
 export function tradePnl(e: JournalEntry): number | null {
   if (!isClosedTrade(e)) return null;
+  if (e.reconciliation === 'CR15' && e.realizedPnl !== null && e.realizedPnl !== undefined && Number.isFinite(e.realizedPnl)) return clean(e.realizedPnl);
   const entry = e.actualFill ?? e.plannedEntry;
   const perShare = e.direction === 'LONG' ? (e.exitPrice as number) - entry : entry - (e.exitPrice as number);
   return clean(perShare * e.quantity);
@@ -185,7 +200,11 @@ function group(closed: JournalEntry[], keyOf: (e: JournalEntry) => string): Grou
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
-export function computeMetrics(entries: JournalEntry[]): DashboardMetrics {
+/** Rows that count: a row superseded by CR-15 (an exit recorded as its own trade) is kept for audit only. */
+export const activeEntries = (entries: JournalEntry[]) => (entries.some((e) => e.supersededBy) ? entries.filter((e) => !e.supersededBy) : entries);
+
+export function computeMetrics(all: JournalEntry[]): DashboardMetrics {
+  const entries = activeEntries(all);
   const chronological = [...entries].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   const closed = chronological.filter(isClosedTrade);
   const pnls = closed.map((e) => tradePnl(e) as number);

@@ -1,10 +1,12 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { journalToCsv, OUTCOME_LABELS, tradePnl, tradeR, type JournalEntry, type Outcome } from '../engine/journal';
 import { parseNum, price, signedR, signedUsd, usd } from '../lib/format';
 import { download } from '../lib/storage';
 import { Panel } from './ui';
 
 interface Props {
+  /** CR-15 panel (only rendered when the server enables CR-15). */
+  cr15?: ReactNode;
   entries: JournalEntry[];
   update: (id: string, patch: Partial<JournalEntry>) => void;
   remove: (id: string) => void;
@@ -14,7 +16,7 @@ interface Props {
 const cell = 'border-t border-ink-700/70 px-2 py-1.5 align-middle';
 const inp = 'num w-20 rounded border border-ink-600 bg-ink-900 px-1.5 py-1 text-[13px] outline-none focus:border-[#5b8cff]';
 
-export function JournalView({ entries, update, remove, replaceAll }: Props) {
+export function JournalView({ entries, update, remove, replaceAll, cr15 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const sorted = [...entries].sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
   const stamp = new Date().toISOString().slice(0, 10);
@@ -45,6 +47,7 @@ export function JournalView({ entries, update, remove, replaceAll }: Props) {
         Journal data is stored only in this browser. Use Backup JSON regularly. P/L uses the actual fill when entered, otherwise the planned entry. R = P/L ÷ planned max loss.
         Rows marked BROKER are written automatically from the read-only Alpaca PAPER reconciliation (fills, exits and statuses come from the broker; notes stay yours).
       </p>
+      {cr15}
       {sorted.length === 0 ? (
         <p className="py-10 text-center text-sm text-ink-400">No trades yet. Calculate a trade and press “Save trade to journal”.</p>
       ) : (
@@ -64,12 +67,14 @@ export function JournalView({ entries, update, remove, replaceAll }: Props) {
                 // Broker-synced rows: fill, outcome and exit are broker-owned (read-only here; the next poll would reset them).
                 const broker = e.source === 'broker_sync';
                 return (
-                  <tr key={e.id} className="hover:bg-ink-800/60">
+                  <tr key={e.id} className={`hover:bg-ink-800/60 ${e.supersededBy ? 'opacity-50' : ''}`} title={e.supersededReason ?? undefined} data-superseded={e.supersededBy ? 'true' : undefined}>
                     <td className={cell}><input type="date" value={e.date} onChange={(v) => update(e.id, { date: v.target.value })} className={`${inp} w-32`} /></td>
                     <td className={cell}><input type="time" value={e.time} onChange={(v) => update(e.id, { time: v.target.value })} className={`${inp} w-24`} /></td>
                     <td className={`${cell} num font-semibold`}>
                       {e.ticker || '—'}
                       {broker && <BrokerBadges e={e} />}
+                      {e.supersededBy && <span className="ml-1 rounded bg-ink-700 px-1 py-0.5 text-[9px] font-bold uppercase text-ink-300">Superseded — exit of another trade (not counted)</span>}
+                      {e.reconciliation === 'CR15' && !e.supersededBy && <span className="ml-1 rounded bg-ink-700 px-1 py-0.5 text-[9px] font-bold uppercase text-long">Cross-day reconciled</span>}
                     </td>
                     <td className={`${cell} font-semibold ${e.direction === 'LONG' ? 'text-long' : 'text-short'}`}>{e.direction}</td>
                     <td className={`${cell} text-ink-300`}>{e.orderType}</td>

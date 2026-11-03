@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { computeMetrics, isClosedTrade, journalScope, tradeR, type GroupStats, type JournalEntry, type JournalScope } from '../engine/journal';
+import { activeEntries, computeMetrics, isClosedTrade, journalScope, tradeR, type GroupStats, type JournalEntry, type JournalScope } from '../engine/journal';
 import { pct, signedR, signedUsd, usd } from '../lib/format';
 import { Panel, Stat } from './ui';
 
 const SCOPES: [JournalScope, string][] = [['ALL', 'All trades'], ['RB_STRATEGY', 'RB strategy trades'], ['MANUAL_OVERRIDE', 'Manual overrides']];
 
-export function Dashboard({ entries: allEntries, failLabels }: { entries: JournalEntry[]; failLabels: Record<string, string> }) {
+export function Dashboard({ entries: rawEntries, failLabels }: { entries: JournalEntry[]; failLabels: Record<string, string> }) {
+  // CR-15: a superseded row (an exit recorded as its own trade before reconciliation) is audit-only — never counted.
+  const allEntries = activeEntries(rawEntries);
   // Scope filter: manual overrides (trades taken although RB did not ticket them) never mix into strategy-only metrics.
   const [scope, setScope] = useState<JournalScope>('ALL');
   const entries = journalScope(allEntries, scope);

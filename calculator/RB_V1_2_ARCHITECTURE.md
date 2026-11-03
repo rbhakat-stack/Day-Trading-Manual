@@ -771,3 +771,56 @@ Punch-list follow-up (shadow-validation gate):
 
   Legitimate open positions and pending entries (including a PENDING candidate whose order isn't at the broker yet) keep reserving. Candidate records are never rewritten; a banner explains any exclusion.
 - **Tests:** open position, pending entry, fully closed position, overnight stop exit, canceled entry, partial fill with a remaining position, and a reload after close.
+
+## 32. CR-15 — cross-day broker trade reconciliation (implemented behind a flag; OFF by default)
+
+**Problem.** The Journal sync reads one ET day's orders.
+- A bracket leg filled on a later day is listed on its own that day, because its parent is outside the window. `reconcileBroker` saw an un-parented SELL and wrote it as a new SHORT row: the FIS phantom, order `505618ca`.
+- The entry row is never revisited once its entry day has left the feed, so the FIS LONG stayed OPEN and its −$114.77 was missing.
+
+**Alpaca PAPER capabilities (checked read-only, 3 Nov).**
+- `GET /v2/orders?status=all&nested=true&symbols=…&after=…` is already inside the GET allowlist. It returns each entry with its bracket legs across days.
+- Orders carry `position_intent` (`buy_to_open`, `sell_to_close`, …).
+- `GET /v2/account/activities/FILL` gives per-execution fills: id, order, qty, price, cumulative and remaining quantity. GM's exit filled 116 + 107 @ $89.19.
+- CR-15 uses order-level cumulative fills (`filled_qty`, `filled_avg_price`). For P/L they are exact, because the sum of the fills equals the average × the quantity. The allowlist is not widened.
+- The FILL endpoint is noted for the future Supabase `fills` table.
+
+**Server (GET-only, same auth, same PAPER client).**
+- `rb-broker?symbols=A,B&from=YYYY-MM-DD` returns every order (all statuses, legs nested) for 1–20 tickers since `from` 04:00 ET, plus current positions.
+- `from` must be within the last 31 days. One page of 500 is returned, with `complete: false` when it is full.
+- Sanitized fields now include `position_intent`.
+- `rb-health` reports `cr15Enabled`, from `RB_CR15_CROSSDAY_RECONCILIATION_ENABLED`. It is not set, so the result is OFF.
+
+**Engine (`lifecycle/crossDayJournal.ts`, pure).** `planCrossDay(journal, evidence)` produces a reviewable plan; `applyCrossDay` applies it; `validateReconciledJournal` guards the write.
+- **Scope:** open broker-synced trades, not superseded, entered within 10 days.
+- **Exit evidence, strongest first:**
+  1. a bracket leg of the trade's entry (parent/child);
+  2. Alpaca `position_intent` `*_to_close` on a later opposite-side order (`*_to_open` is a new position, never an exit);
+  3. position continuity, only when exactly one open trade exists in that ticker and direction.
+- **Two or more open trades in a ticker and direction:** AMBIGUOUS, nothing attributed.
+- **A closing order larger than the position:** only this position is closed; the excess is noted as new exposure.
+- **The account is flat but the exits don't cover the position:** RECONCILIATION INCOMPLETE. No exit is invented.
+- **Unverified, stale, mismatched, truncated or unreadable evidence:** nothing is reconciled.
+- **What a plan changes:** only broker-owned fields — fill, quantity, outcome, exit price, exit reason, statuses and timestamps — plus the new optional fields `exitOrderIds`, `exitQty`, `realizedPnl`, `reconciliation`, `reconciledIso`.
+- **Partial exits:** the trade stays OPEN with `exitQty` and the partial `realizedPnl`.
+- **Superseded rows:** a Journal row whose order is an exit of a reconciled trade gets `supersededBy`, `supersededReason` and `supersededIso`. It is kept, never deleted, and excluded from the Dashboard (`activeEntries`).
+- **Protected:** id, date and time, notes, strategy decision, manual override, linkage, the frozen plan and scores, ruleSet and rulesVersion are protected by the validator.
+- **P/L and R:** P/L is (avg exit − avg entry) × closed qty, signed by direction, without fees. R uses the frozen planned risk (FIS: −1.15 R); with no planned risk, R is unavailable.
+- **Idempotent:** a second pass changes nothing, and duplicate events are deduplicated by order id. The day sync never re-syncs a superseded row. In AUTO, it does not add a known exit order as a new trade.
+
+**Browser data safety (`lib/journalBackup.ts`).**
+- Before the first write, the stored Journal is validated. It is then saved once as an IMMUTABLE backup (`rbv1.journal.backup.pre-cr15.v1`, the exact JSON string) and read back for verification. Any failure means no write.
+- Restore saves the current Journal (`rbv1.journal.backup.pre-restore.v1`), then writes back the exact pre-CR-15 JSON and sets the mode to OFF.
+- No key is removed. The CR-15 mode key is written only when you change it. Backup JSON / Restore JSON are unchanged.
+
+**Activation.**
+- The effective gate is `cr15Gate`: the server flag AND this browser's mode (`OFF` default / `PREVIEW` dry run / `AUTO`). An unknown server flag (health not loaded) is OFF, so a cached client mode cannot run CR-15 by itself.
+- In PREVIEW, the Journal tab panel shows each trade: rows, broker exits and their evidence, P/L before → after, superseded rows and unresolved trades.
+- "Back up & apply" writes once. AUTO is available only after a backup exists.
+- With the server flag OFF, the panel is hidden, no history is requested and the legacy Journal is unchanged.
+
+**Rollback compatibility (tested against the exact `ef73157` code).**
+- The old build reads a migrated Journal correctly: FIS shows STOP_HIT, −$114.77, −1.15 R, notes intact.
+- Its own day sync adds or changes nothing.
+- The only difference: it counts the superseded SHORT as an entry (no P/L), exactly as before migration.
+- To return the Dashboard exactly to the pre-CR-15 state, use Restore before a code rollback.

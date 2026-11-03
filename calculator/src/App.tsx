@@ -35,7 +35,10 @@ import { executionStatus } from './engine/automation/lifecycle/executionStatus';
 import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
-import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
+import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useBrokerSymbolHistory, useLiveQuotes, usePersistent, useServerFlags, type ClassMap } from './lib/automationClient';
+import { applyCrossDay, cr15Gate, crossDayEvidenceVerified, crossDayRequest, planCrossDay, validateReconciledJournal, type Cr15Mode, type CrossDayEvidence, type CrossDayPlan } from './engine/automation/lifecycle/crossDayJournal';
+import { ensurePreCr15Backup, readBackup, restorePreCr15 } from './lib/journalBackup';
+import { Cr15Panel } from './components/Cr15Panel';
 import {
   changedCoreFields,
   coreChanged,
@@ -375,8 +378,60 @@ export default function App() {
       record: t.recordId ? recs.get(t.recordId) ?? null : null,
     });
     // Gate: only after today's alert feed and broker feed have both loaded (never treat "not loaded yet" as NO ALERT).
-    setJournal((j) => syncJournalWhenReady(j, brokerTrades, ctx, { date: autoDate, alertsLoadedFor: feed.loadedDate, brokerLoadedFor: brokerFeed.loadedDate }).journal);
+    // CR-15 AUTO: an order that is an exit of an existing Journal trade (e.g. a bracket leg of a prior-day entry listed on
+    // its own today) is never added as a new opposite-side trade. With CR-15 OFF / PREVIEW nothing is filtered.
+    const exits = cr15Gate(serverFlagsRef.current, cr15ModeRef.current).autoWrites ? new Set(cr15PlanRef.current?.exitOrderIds ?? []) : null;
+    const trades = exits?.size ? brokerTrades.filter((x) => !exits.has(x.entryOrderId)) : brokerTrades;
+    setJournal((j) => syncJournalWhenReady(j, trades, ctx, { date: autoDate, alertsLoadedFor: feed.loadedDate, brokerLoadedFor: brokerFeed.loadedDate }).journal);
   }, [brokerTrades]);
+
+  /* ── CR-15 cross-day Journal reconciliation (effective only when the SERVER flag AND this browser's mode are on) ── */
+  const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
+  // Saved only when you change it (a browser that never uses CR-15 gets no new storage key).
+  const [cr15Mode, setCr15ModeState] = useState<Cr15Mode>(() => load<Cr15Mode>(AUTO_KEYS.cr15Mode, 'OFF'));
+  const setCr15Mode = useCallback((m: Cr15Mode) => { setCr15ModeState(m); save(AUTO_KEYS.cr15Mode, m); }, []);
+  const cr15On = cr15Gate(serverFlags.cr15, cr15Mode).on;
+  const cr15Req = useMemo(() => crossDayRequest(journal, autoDate), [journal, autoDate]);
+  const cr15Feed = useBrokerSymbolHistory(cr15On && autoCfg.enabled, autoToken, cr15Req.symbols, cr15Req.from);
+  const cr15Evidence = useMemo<CrossDayEvidence | null>(
+    () => (cr15On && cr15Req.from ? { verified: crossDayEvidenceVerified(cr15Feed, cr15Req, clock), complete: cr15Feed.complete, from: cr15Req.from, symbols: cr15Req.symbols, orders: cr15Feed.orders, positions: cr15Feed.positions, asOfMs: cr15Feed.lastOkMs ?? 0 } : null),
+    [cr15On, cr15Req, cr15Feed, clock],
+  );
+  const cr15Plan = useMemo(() => (cr15On ? planCrossDay(journal, cr15Evidence) : null), [cr15On, journal, cr15Evidence]);
+  const cr15PlanRef = useRef<CrossDayPlan | null>(null);
+  cr15PlanRef.current = cr15Plan;
+  const serverFlagsRef = useRef<boolean | null>(null);
+  serverFlagsRef.current = serverFlags.cr15;
+  const cr15ModeRef = useRef<Cr15Mode>('OFF');
+  cr15ModeRef.current = cr15Mode;
+  const [cr15Message, setCr15Message] = useState<string | null>(null);
+  const [cr15Backup, setCr15Backup] = useState(() => readBackup(localStorage));
+  /** Backup (verified) → plan from the latest Journal → validate → write; any failure leaves the Journal untouched. */
+  const applyCr15 = useCallback((manual: boolean) => {
+    const b = ensurePreCr15Backup(localStorage, new Date().toISOString());
+    if (!b.ok) { setCr15Message(`Not applied: ${b.error}`); return; }
+    setCr15Backup(b.backup);
+    setJournal((j) => {
+      const plan = planCrossDay(j, cr15Evidence);
+      if (!plan.changed) return j;
+      const next = applyCrossDay(j, plan, new Date().toISOString());
+      const err = validateReconciledJournal(j, next);
+      if (err) { setCr15Message(`Not applied: ${err}`); return j; }
+      setCr15Message(`${manual ? 'Applied' : 'Auto-reconciled'}: ${plan.trades.filter((x) => x.patch).length} trade(s) updated, ${plan.supersede.length} row(s) superseded. Pre-CR-15 backup verified.`);
+      return next;
+    });
+  }, [cr15Evidence]);
+  useEffect(() => {
+    if (cr15Gate(serverFlags.cr15, cr15Mode).autoWrites && cr15Plan?.changed && cr15Backup) applyCr15(false);
+  }, [cr15Mode, cr15On, cr15Plan, cr15Backup, applyCr15]);
+  const restoreCr15 = () => {
+    if (!confirm('Restore the exact pre-CR-15 Journal? The current Journal is saved first (pre-restore backup) and CR-15 is switched OFF.')) return;
+    setCr15Mode('OFF');
+    const r = restorePreCr15(localStorage, new Date().toISOString());
+    if (!r.ok) { setCr15Message(`Restore failed: ${r.error}`); return; }
+    setJournal(r.journal);
+    setCr15Message(`Restored the pre-CR-15 Journal (${r.journal.length} rows). The Journal as it was is saved under the pre-restore key.`);
+  };
   // Current execution status of submitted / filled candidates (display only; candidate records are never rewritten).
   const executions = useMemo(
     () => Object.fromEntries(candidates.filter((c) => c.status === 'PENDING' || c.status === 'FILLED').map((c) => [c.id, executionStatus(c, brokerTrades, { verified: verification.verified, asOfMs: brokerFeed.lastOkMs })])),
@@ -668,6 +723,13 @@ export default function App() {
         )}
         {tab === 'journal' && (
           <JournalView
+            cr15={serverFlags.cr15 === true ? (
+              <Cr15Panel
+                mode={cr15Mode} setMode={setCr15Mode} plan={cr15Plan} journal={journal} feed={cr15Feed} request={cr15Req} backup={cr15Backup} message={cr15Message}
+                onApply={() => applyCr15(true)} onRestore={restoreCr15}
+                onDownloadBackup={() => cr15Backup && download(`rb-v1-journal-pre-cr15-${cr15Backup.createdIso.slice(0, 10)}.json`, JSON.stringify(JSON.parse(cr15Backup.journalJson), null, 2), 'application/json')}
+              />
+            ) : undefined}
             entries={journal}
             update={(id, patch) => setJournal((j) => j.map((e) => (e.id === id ? { ...e, ...patch } : e)))}
             remove={(id) => setJournal((j) => j.filter((e) => e.id !== id))}

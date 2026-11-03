@@ -54,6 +54,8 @@ export interface BrokerOrder {
   filledAt: number | null;
   orderClass: string;
   legs: BrokerOrder[];
+  /** Alpaca position_intent (buy_to_open / sell_to_close …) when the broker reports it; null otherwise. */
+  positionIntent?: string | null;
 }
 
 const num = (x: unknown): number | null => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
@@ -76,6 +78,7 @@ function toOrder(o: Record<string, unknown>): BrokerOrder | null {
     submittedAt: ms(o.submitted_at) ?? ms(o.created_at),
     filledAt: ms(o.filled_at),
     orderClass: String(o.order_class ?? ''),
+    positionIntent: typeof o.position_intent === 'string' ? o.position_intent : null,
     legs: Array.isArray(o.legs) ? o.legs.map((l) => toOrder(l as Record<string, unknown>)).filter((l): l is BrokerOrder => !!l) : [],
   };
 }
@@ -377,6 +380,7 @@ export function syncJournal(journal: JournalEntry[], trades: TradeSync[], ctx: (
     }
     const cur = next[idx];
     if (cur.source !== 'broker_sync') continue; // never touch a manual entry
+    if (cur.supersededBy) continue; // CR-15: an exit kept for audit is never re-synced as a trade of its own
     // One-way repair: an entry written while unlinked (NO_PRICE_MATCH) is linked when this reconciliation found exactly
     // one deterministic price match. MATCHED and AMBIGUOUS entries are never relinked; a zero match changes nothing.
     const repair = cur.alertLinkage === 'NO_PRICE_MATCH' && t.linkage === 'MATCHED' && t.recordId ? alertOwned(journalEntryFromSync(t, ctx(t))) : null;
