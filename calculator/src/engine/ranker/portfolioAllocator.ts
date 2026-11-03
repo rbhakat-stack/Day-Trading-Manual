@@ -63,7 +63,7 @@ export function buildPortfolio(
   const p = s.portfolio;
   const exposures: Exposure[] = [
     ...positions.filter((x) => x.status === 'OPEN').map<Exposure>((x) => ({
-      id: x.id, kind: 'POSITION', ticker: x.ticker, direction: x.direction, sector: x.sector, industry: x.industry,
+      id: x.id, kind: x.pending ? 'PENDING' : 'POSITION', ticker: x.ticker, direction: x.direction, sector: x.sector, industry: x.industry,
       theme: x.theme, positionValue: x.positionValue, plannedRisk: x.plannedRisk,
     })),
     ...candidates.filter((c) => !c.archived && c.id !== excludeId && c.status === 'FILLED').map((c) => candidateExposure(c, 'POSITION')),

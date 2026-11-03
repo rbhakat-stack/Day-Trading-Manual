@@ -27,6 +27,16 @@
  * Cross-day: "flat" means no position AND no open order from ANY day (`openOrders`: GTC entries, overnight bracket
  * legs) — never only today's submitted orders; an unknown open-order list releases nothing. An earlier-dated candidate's
  * entry order is identified in its entry day's VERIFIED order list (`history`); no verified list → no identification.
+ *
+ * Broker-only working entries: an open order that could OPEN exposure and that no active RB record represents is
+ * reserved conservatively (one PENDING exposure per ticker + direction; quantities, notional and risk summed).
+ *   • a contingent leg (a nested bracket / OTO leg, or status `held`) is never an entry;
+ *   • an order that reduces an existing broker position is an exit (only a quantity beyond the position counts);
+ *   • an order matching an active PENDING / FILLED RB candidate (ticker, direction, price within 2 ¢) is that candidate;
+ *   • potential notional is the real one (never capped at the RB single-position limit; flagged when above it);
+ *   • risk = quantity × distance to the verified bracket stop leg, else the per-trade risk limit (labelled estimate).
+ * The last VERIFIED list is kept while broker data is unavailable or stale: a cancellation is only accepted from a
+ * fresh verified response, never inferred from missing data.
  */
 import type { Candidate, LifecycleStatus, ManualPosition } from '../../ranker/opportunityTypes';
 import { etParts } from '../etTime';
@@ -49,6 +59,22 @@ export interface BrokerExposureInput {
 export interface ReleasedExposure { id: string; ticker: string; status: string; reason: string; atMs: number; fp: string; orderId?: string | null }
 export type ReleasedExposureMap = Record<string, ReleasedExposure>;
 
+/** A broker working entry no active RB record represents (orders aggregated per ticker + direction). */
+export interface BrokerWorkingEntry {
+  key: string;
+  ticker: string;
+  direction: 'LONG' | 'SHORT';
+  orderIds: string[];
+  /** Unfilled quantity that could still open exposure. */
+  qty: number;
+  /** Potential notional at the order price(s); estimated (flagged) when an order has no price or quantity. */
+  notional: number;
+  plannedRisk: number;
+  riskBasis: 'BRACKET_STOP' | 'ESTIMATE';
+  flags: string[];
+  submittedAt: number | null;
+}
+
 export interface ExposureAdjustment {
   /** Exposure list (candidates minus `exclude`). Rankers keep ALL candidates and pass `exclude` instead. */
   candidates: Candidate[];
@@ -62,6 +88,10 @@ export interface ExposureAdjustment {
   voided: { id: string; ticker: string; reason: string }[];
   /** Open broker positions with no RB record, added conservatively. */
   added: { ticker: string; qty: number; plannedRisk: number }[];
+  /** Broker-only working entries reserved as PENDING exposure. */
+  entries: BrokerWorkingEntry[];
+  /** VERIFIED = from this response · LAST_KNOWN = the last verified list, kept while data is unverified · NONE. */
+  entriesSource: 'VERIFIED' | 'LAST_KNOWN' | 'NONE';
 }
 
 const num = (x: unknown) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? 0 : Number(x));
@@ -122,9 +152,77 @@ function entryOrderFor(c: Candidate, orders: BrokerOrder[], all: Candidate[]): B
   return claimants.length === 1 ? o : null;
 }
 
-export function reconcileExposure(candidates: Candidate[], positions: ManualPosition[], broker: BrokerExposureInput | null | undefined, opts: { classify: (s: string) => Classification | null; conservativeRisk: number; latched?: ReleasedExposureMap; now?: number }): ExposureAdjustment {
-  // Unverified — or open orders across all days unknown / unreadable: no releases at all (conservative), nothing added.
-  const unverified: ExposureAdjustment = { candidates, exclude: new Set(), positions, verified: false, released: [], voided: [], added: [] };
+const cents = (x: number) => Math.round(x * 100) / 100;
+
+/** Working entry orders no active RB record represents (see the module notes). Pure; records are never changed. */
+export function brokerWorkingEntries(open: BrokerOrder[], lists: BrokerOrder[], held: ReadonlyMap<string, number>, represented: Candidate[], o: { conservativeRisk: number; maxPositionValue?: number }): BrokerWorkingEntry[] {
+  const all = [...open, ...lists];
+  const legIds = new Set(all.flatMap((x) => x.legs.map((l) => l.id)));
+  // The verified protective stop of a bracket parent (any copy of it, open list or day list); ambiguous → none.
+  const stopLeg = (x: BrokerOrder): number | null => {
+    const stops = [...new Set(all.filter((p) => p.id === x.id).flatMap((p) => p.legs).filter((l) => l.side !== x.side && /stop/i.test(l.type) && l.stopPrice !== null).map((l) => l.stopPrice as number))];
+    return stops.length === 1 ? stops[0] : null;
+  };
+  const claimed = new Set<string>();
+  const seen = new Set<string>();
+  const byKey = new Map<string, BrokerWorkingEntry>();
+  for (const x of open) {
+    if (seen.has(x.id)) continue;
+    seen.add(x.id);
+    if (legIds.has(x.id) || x.status.trim().toLowerCase() === 'held') continue; // contingent leg, never an entry
+    let qty: number | null = x.qty === null ? null : Math.max(0, x.qty - x.filledQty);
+    if (qty === 0) continue;
+    const flags: string[] = [];
+    const pos = held.get(x.symbol.toUpperCase()) ?? 0;
+    if ((x.side === 'sell' && pos > 0) || (x.side === 'buy' && pos < 0)) {
+      if (qty === null || qty <= Math.abs(pos)) continue; // exit of an existing position
+      qty -= Math.abs(pos);
+      flags.push('EXCEEDS_POSITION');
+    }
+    const direction = x.side === 'buy' ? 'LONG' : 'SHORT';
+    const price = x.stopPrice ?? x.limitPrice;
+    const rep = represented.find((c) => !claimed.has(c.id) && T(c.ticker) === x.symbol.toUpperCase() && c.direction === direction && near(price, c.entry));
+    if (rep) {
+      claimed.add(rep.id);
+      continue;
+    }
+    if (represented.some((c) => T(c.ticker) === x.symbol.toUpperCase())) flags.push('SAME_TICKER_RB_CANDIDATE');
+    const stop = stopLeg(x);
+    const notional = qty !== null && price !== null ? qty * price : (o.maxPositionValue ?? o.conservativeRisk), estN = qty === null || price === null;
+    const risk = qty !== null && price !== null && stop !== null ? qty * Math.abs(price - stop) : o.conservativeRisk;
+    if (estN) flags.push('NOTIONAL_ESTIMATED');
+    const key = `${x.symbol.toUpperCase()}-${direction}`;
+    const cur = byKey.get(key);
+    const basis: BrokerWorkingEntry['riskBasis'] = stop !== null && !estN ? 'BRACKET_STOP' : 'ESTIMATE';
+    byKey.set(key, cur
+      ? { ...cur, orderIds: [...cur.orderIds, x.id], qty: cur.qty + (qty ?? 0), notional: cur.notional + notional, plannedRisk: cur.plannedRisk + risk, riskBasis: cur.riskBasis === 'ESTIMATE' || basis === 'ESTIMATE' ? 'ESTIMATE' : 'BRACKET_STOP', flags: [...new Set([...cur.flags, ...flags])], submittedAt: Math.min(cur.submittedAt ?? Infinity, x.submittedAt ?? Infinity) }
+      : { key, ticker: x.symbol.toUpperCase(), direction, orderIds: [x.id], qty: qty ?? 0, notional, plannedRisk: risk, riskBasis: basis, flags, submittedAt: x.submittedAt });
+  }
+  return [...byKey.values()].map((e) => {
+    const flags = [...e.flags];
+    if (e.riskBasis === 'ESTIMATE') flags.push('RISK_ESTIMATED');
+    if (o.maxPositionValue !== undefined && e.notional > o.maxPositionValue + 1e-9) flags.push('EXCEEDS_SINGLE_POSITION_LIMIT');
+    if (e.plannedRisk > o.conservativeRisk + 1e-9) flags.push('EXCEEDS_PER_TRADE_RISK');
+    return { ...e, notional: cents(e.notional), plannedRisk: cents(e.plannedRisk), flags: [...new Set(flags)] };
+  }).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/** A broker-only working entry as a PENDING portfolio exposure (reserved, not deployed). */
+function entryExposure(e: BrokerWorkingEntry, classify: (s: string) => Classification | null): ManualPosition {
+  const cls = classify(e.ticker);
+  return { id: `broker-entry-${e.key}`, ticker: e.ticker, direction: e.direction, sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: e.notional, plannedRisk: e.plannedRisk, entry: e.qty > 0 ? cents(e.notional / e.qty) : 0, stop: 0, target: 0, status: 'OPEN', pending: true };
+}
+
+const T = (t: string) => t.toUpperCase();
+
+export function reconcileExposure(candidates: Candidate[], positions: ManualPosition[], broker: BrokerExposureInput | null | undefined, opts: { classify: (s: string) => Classification | null; conservativeRisk: number; latched?: ReleasedExposureMap; now?: number; knownEntries?: BrokerWorkingEntry[]; maxPositionValue?: number }): ExposureAdjustment {
+  // Unverified — or open orders across all days unknown / unreadable: no releases at all (conservative), nothing added;
+  // broker-only working entries from the last verified response stay reserved (a cancellation is never inferred).
+  const known = opts.knownEntries ?? [];
+  const unverified: ExposureAdjustment = {
+    candidates, exclude: new Set(), positions: known.length ? [...positions, ...known.map((e) => entryExposure(e, opts.classify))] : positions,
+    verified: false, released: [], voided: [], added: [], entries: known, entriesSource: known.length ? 'LAST_KNOWN' : 'NONE',
+  };
   if (!broker?.verified || !Array.isArray(broker.openOrders)) return unverified;
   const open = brokerOrdersFrom(broker.openOrders);
   if (open.errors.length) return unverified;
@@ -138,7 +236,6 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
   const withLegs = (os: BrokerOrder[]) => os.flatMap((o) => [o, ...o.legs]);
   // Working = any open order from any day (incl. bracket legs), plus any working order / leg in the fetched lists.
   const working = new Set([...withLegs(open.orders), ...withLegs(orders).filter((o) => WORKING.includes(mapBrokerStatus(o.status)))].map((o) => o.symbol.toUpperCase()));
-  const T = (t: string) => t.toUpperCase();
   const flat = (t: string) => !held.has(T(t)) && !working.has(T(t));
   const active = (c: Candidate) => !c.archived && ACTIVE.includes(c.status);
 
@@ -204,7 +301,9 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
     extra.push({ id: `broker-position-${t}`, ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: Math.round(value * 100) / 100, plannedRisk: opts.conservativeRisk, entry: num(p.avg_entry_price), stop: 0, target: 0, status: 'OPEN' });
     added.push({ ticker: t, qty, plannedRisk: opts.conservativeRisk });
   }
-  return { candidates: keep, exclude: out, positions: extra.length ? [...positions, ...extra] : positions, verified: true, released, voided, added };
+  const entries = brokerWorkingEntries(open.orders, orders, held, keep.filter(active), { conservativeRisk: opts.conservativeRisk, maxPositionValue: opts.maxPositionValue });
+  for (const e of entries) extra.push(entryExposure(e, opts.classify));
+  return { candidates: keep, exclude: out, positions: extra.length ? [...positions, ...extra] : positions, verified: true, released, voided, added, entries, entriesSource: 'VERIFIED' };
 }
 
 /** Write-once latch of releases (existing records never change; same object returned when nothing is new). A record

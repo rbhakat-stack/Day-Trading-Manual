@@ -220,6 +220,8 @@ export interface ManualPosition {
   stop: number;
   target: number;
   status: 'OPEN' | 'CLOSED';
+  /** A working broker entry order (not yet a position): counted as PENDING (reserved), not deployed. */
+  pending?: boolean;
 }
 
 export interface ComponentScore {

@@ -717,6 +717,19 @@ Punch-list follow-up (shadow-validation gate):
   - Beyond the lookback, or with no verified entry-day list, the candidate keeps reserving.
 - *Not changed.* Scoring, thresholds, Entry/Stop/Target/Qty, limits, qualification, frozen snapshots, terminal SETUP FAILED, freshness, Journal/Dashboard sync (still reads today's `orders` only) and the CR-15 Journal rows.
 
+**Broker-only working entries (CTVA, 3 Nov).**
+- *Gap.* A GTC bracket from 29 Oct was still working in the PAPER account with no CTVA position and no RB record: entry SELL STOP 5,000 @ 11.33 (new), with legs BUY LIMIT 11.23 and BUY STOP 11.38 (held). That is a potential $56,650 short. The allocator counted only positions with no RB record, never working orders. The user canceled the bracket on 3 Nov; the pre-cancellation orders are kept as test fixtures.
+- *Classification* (`brokerWorkingEntries`, from the verified `openOrders`, which rb-broker now requests with `nested=true`):
+  - A contingent leg is never an entry: an order nested under a parent in any fetched list, or with status `held`.
+  - An order that reduces an existing broker position is an exit. Only a quantity beyond the position counts, flagged `EXCEEDS_POSITION`.
+  - An order matching an active PENDING/FILLED RB candidate (ticker, direction, price within 2¢) belongs to that candidate.
+  - Everything else is a broker-only working entry.
+  - Entries are aggregated per ticker and direction into one PENDING exposure (reserved, not deployed), with quantity, notional and risk summed.
+- *Sizing.* Notional is the real potential value, never capped. Risk is the unfilled quantity × distance to the one verified bracket stop leg. With no stop leg, or an ambiguous one, risk uses the per-trade risk limit and is flagged `RISK_ESTIMATED`. Further flags: `EXCEEDS_SINGLE_POSITION_LIMIT`, `EXCEEDS_PER_TRADE_RISK`, `NOTIONAL_ESTIMATED`, `SAME_TICKER_RB_CANDIDATE`.
+- *Outages.* The entries from the last VERIFIED evaluation are persisted (`rbv1.v12.brokerWorkingEntries.v1`). They stay reserved while broker data is unavailable, stale, truncated or unreadable. Only a fresh verified response replaces them, so a cancellation is never inferred from missing data.
+- *Allocator.* `ManualPosition.pending` classifies an exposure as PENDING (reserved) instead of POSITION (deployed). Slots, heat and available capital are identical either way.
+- *Shared.* The Opportunity Ranker, score freezing and the Live Alert Queue get the same entries through `reconcileExposure`. The Live Alert Queue exposure note lists each entry, its risk basis and its policy flags.
+
 *Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.

@@ -23,7 +23,7 @@ import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
 import type { TerminalEventMap } from './lifecycle/terminalEvents';
-import { reconcileExposure, type BrokerExposureInput, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
+import { reconcileExposure, type BrokerExposureInput, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
 export interface QueueInput {
@@ -47,6 +47,8 @@ export interface QueueInput {
   broker?: BrokerExposureInput;
   /** Releases already proven by earlier verified broker responses (write-once; persisted by the app). */
   releasedExposure?: ReleasedExposureMap;
+  /** Broker-only working entries from the last verified broker response (kept while data is unverified). */
+  knownBrokerEntries?: BrokerWorkingEntry[];
 }
 
 export interface QueueRow {
@@ -70,7 +72,7 @@ export interface QueueOutput {
   suggestions: ReplacementSuggestion[];
   changed: boolean;
   /** Broker-verified exposure adjustments used by the allocator (records are unchanged). */
-  exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'voided' | 'added'>;
+  exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'voided' | 'added' | 'entries' | 'entriesSource'>;
 }
 
 const LIVE_STATUSES = ['NEW', 'WATCHLIST'];
@@ -140,7 +142,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
       .map((c) => c.id),
   );
   // Portfolio exposure seen by the allocator: broker-verified closes release capacity; uncertain data releases nothing.
-  const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now });
+  const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now, knownEntries: q.knownBrokerEntries, maxPositionValue: q.rk.portfolio.maxPositionValue });
   const ranking = rankCandidates(candidates.filter((c) => !dataBlocked.has(c.id)), exp.positions, q.rk, today, window, exp.exclude);
   const display = dataBlocked.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
@@ -211,7 +213,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     return row;
   });
 
-  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added } };
+  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added, entries: exp.entries, entriesSource: exp.entriesSource } };
 }
 
 const SECTION_ORDER = ['ACTION_NOW', 'HIGH_PRIORITY', 'DATA_REVIEW', 'SCORING', 'ACTIVE', 'WATCHLIST', 'IGNORE', 'CLOSED'];

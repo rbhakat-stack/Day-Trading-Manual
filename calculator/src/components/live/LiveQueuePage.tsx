@@ -59,6 +59,24 @@ interface Props {
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
+const ENTRY_FLAG_LABELS: Record<string, string> = {
+  EXCEEDS_SINGLE_POSITION_LIMIT: 'exceeds the RB single-position limit',
+  EXCEEDS_PER_TRADE_RISK: 'exceeds the RB per-trade risk limit',
+  RISK_ESTIMATED: 'no verified bracket stop — risk estimated at the per-trade limit',
+  NOTIONAL_ESTIMATED: 'order price or quantity unknown — notional estimated',
+  EXCEEDS_POSITION: 'quantity beyond the open position',
+  SAME_TICKER_RB_CANDIDATE: 'an RB candidate in this ticker does not match it',
+};
+
+/** One broker-only working entry, as shown in the exposure note. */
+export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], source: NonNullable<Props['exposure']>['entriesSource']): string {
+  const usd = (x: number) => `$${x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const flags = e.flags.map((f) => ENTRY_FLAG_LABELS[f] ?? f);
+  return `${e.ticker} broker-only working ${e.direction} entry (${e.qty.toLocaleString('en-US')} sh, ${usd(e.notional)} potential) not in RB — reserved, ${usd(e.plannedRisk)} risk${e.riskBasis === 'BRACKET_STOP' ? ' to its bracket stop' : ' (estimate)'}`
+    + (flags.length ? ` · ⚠ ${flags.join(' · ')}` : '')
+    + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
+}
+
 export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
@@ -97,12 +115,14 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
         hasShadow={layout.some((c) => c.role === 'SHADOW')} logCount={shadow.logCount} onExport={shadow.onExportLog}
       />
       {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
-      {exposure && (exposure.released.length > 0 || exposure.added.length > 0) && (
+      {exposure && (exposure.released.length > 0 || exposure.added.length > 0 || exposure.entries.length > 0) && (
         <p className="rounded-lg border border-ink-600 bg-ink-850 px-4 py-2 text-[12.5px] text-ink-200" data-section="exposure">
           <b>Portfolio reconciled with Alpaca PAPER (read-only):</b>{' '}
-          {exposure.released.map((x) => `${x.ticker} ${x.status} not reserving — ${x.reason}`).join('; ')}
-          {exposure.released.length > 0 && exposure.added.length > 0 ? '; ' : ''}
-          {exposure.added.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`).join('; ')}
+          {[
+            ...exposure.released.map((x) => `${x.ticker} ${x.status} not reserving — ${x.reason}`),
+            ...exposure.added.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`),
+            ...exposure.entries.map((e) => entryNote(e, exposure.entriesSource)),
+          ].join('; ')}
           . Records are unchanged; update the candidate in the Opportunity Ranker when convenient.
         </p>
       )}

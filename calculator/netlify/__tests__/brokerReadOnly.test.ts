@@ -63,7 +63,7 @@ describe('broker client: every network call is a body-less GET to an allowed URL
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     const openUrl = new URL((fetchImpl.mock.calls as unknown as [string][])[1][0]);
     expect(openUrl.pathname).toBe('/v2/orders');
-    expect(Object.fromEntries(openUrl.searchParams)).toEqual({ status: 'open', nested: 'false', direction: 'asc', limit: '500' });
+    expect(Object.fromEntries(openUrl.searchParams)).toEqual({ status: 'open', nested: 'true', direction: 'asc', limit: '500' });
     for (const [url, init] of fetchImpl.mock.calls as unknown as [string, RequestInit][]) {
       expect(init.method).toBe('GET');
       expect(init.body).toBeUndefined();
