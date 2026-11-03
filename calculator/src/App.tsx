@@ -31,6 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
+import { brokerVerified, latchReleases, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
@@ -283,6 +284,7 @@ export default function App() {
   // RB v1.2 (CR-03): write-once alert-time snapshots, read by the execution layer only. Older than 90 days are pruned.
   const [alertSnaps, setAlertSnaps] = usePersistent<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, () => pruneAlertSnapshots(load<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, {}), Date.now()));
   // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
+  const [releasedExposure, setReleasedExposure] = usePersistent<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, () => load<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, {}));
   const [terminalEvents, setTerminalEvents] = usePersistent<TerminalEventMap>(AUTO_KEYS.terminalEvents, () => pruneTerminalEvents(load<TerminalEventMap>(AUTO_KEYS.terminalEvents, {}), Date.now()));
   const queue = useMemo(() => {
     if (!autoCfg.enabled) return null;
@@ -300,8 +302,14 @@ export default function App() {
       strategyVersion: version.name,
       frozen: alertSnaps,
       terminal: terminalEvents,
+      // Portfolio exposure from read-only broker facts; only a live, today, fresh response may release capacity.
+      broker: { verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions },
+      releasedExposure,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerFeed, autoDate, releasedExposure]);
+  useEffect(() => {
+    if (queue?.exposure.released.length) setReleasedExposure((prev) => latchReleases(prev, queue.exposure.released).map);
+  }, [queue, setReleasedExposure]);
   useEffect(() => {
     if (queue) setTerminalEvents((prev) => latchTerminalEvents(prev, queue.rows, clock, autoCfg).map);
   }, [queue, clock, autoCfg, setTerminalEvents]);
@@ -559,6 +567,7 @@ export default function App() {
                 onOpenSettings={() => setLiveSub('automation')}
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
                 broker={brokerFeed}
+                exposure={queue?.exposure}
                 brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}

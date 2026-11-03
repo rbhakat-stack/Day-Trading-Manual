@@ -672,7 +672,23 @@ Punch-list follow-up (shadow-validation gate):
   - an unrelated SHORT entry in the same ticker after the position is flat;
   - no linkage from a different alert.
 
-**Portfolio capacity after broker closes (diagnosis; not implemented).**
+**Portfolio capacity after broker closes — IMPLEMENTED** (`lifecycle/portfolioExposure.ts`; the allocator and its limits are unchanged; only the exposure inputs differ).
+- **Verified broker response required:** live, loaded for today's ET date, and less than 2 minutes old. Otherwise nothing new is released and nothing is added.
+- **FILLED candidate:** released only when Alpaca shows no position and no working order in the ticker. With nothing open, no trades can be conflated by ticker.
+- **PENDING candidate:** released only if its entry order is identified deterministically (exactly one order at the planned entry within 2¢, same ticker/side/ET day, at or after the alert, claimed by no other candidate) **and** that order is either:
+  - canceled, expired or rejected with no fill; or
+  - filled, with the account now flat.
+
+  Unlinked pending entries keep reserving.
+- **Not released:** partial fills and partial exits (a position remains) keep their full planned risk. Manual positions are always kept.
+- **Broker positions with no RB record:** added conservatively (a slot, market value, and the per-trade risk limit as heat).
+- **Release latch:** releases are latched write-once per candidate id under `rbv1.v12.releasedExposure.v1`. They survive reloads and broker outages, and a later new position in the same ticker counts once.
+- **Records:** candidate and position records are never rewritten.
+- **FIS 2026-11-03:** 1/4 slots and $99.80 heat become 0/4 and $0.
+- **Effect on scores:** only the portfolio-fit points change. In the test fixture, GS and BAC correlation goes from 4 to 7 when the stale Financials exposure is released.
+- **Journal:** this does not read it, so it doesn't depend on the inaccurate cross-day rows (CR-15).
+
+*Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.
 - **Independent of CR-15:** the broker sync never touched candidate statuses, so even same-day closes don't free capacity.

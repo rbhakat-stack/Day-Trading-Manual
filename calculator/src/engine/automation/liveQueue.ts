@@ -23,6 +23,7 @@ import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
 import type { TerminalEventMap } from './lifecycle/terminalEvents';
+import { reconcileExposure, type BrokerExposureInput, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
 export interface QueueInput {
@@ -42,6 +43,10 @@ export interface QueueInput {
   frozen?: AlertSnapshotMap;
   /** Latched terminal events (SETUP FAILED), read only — execution layer only. */
   terminal?: TerminalEventMap;
+  /** Read-only broker facts for portfolio exposure (released only when verified; absent = previous behaviour). */
+  broker?: BrokerExposureInput;
+  /** Releases already proven by earlier verified broker responses (write-once; persisted by the app). */
+  releasedExposure?: ReleasedExposureMap;
 }
 
 export interface QueueRow {
@@ -64,6 +69,8 @@ export interface QueueOutput {
   /** Pending-order replacement prompts from the existing ranker (never acted on automatically). */
   suggestions: ReplacementSuggestion[];
   changed: boolean;
+  /** Broker-verified exposure adjustments used by the allocator (records are unchanged). */
+  exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'added'>;
 }
 
 const LIVE_STATUSES = ['NEW', 'WATCHLIST'];
@@ -132,8 +139,10 @@ export function buildQueue(q: QueueInput): QueueOutput {
       })
       .map((c) => c.id),
   );
-  const ranking = rankCandidates(candidates.filter((c) => !dataBlocked.has(c.id)), q.positions, q.rk, today, window);
-  const display = dataBlocked.size ? rankCandidates(candidates, q.positions, q.rk, today, window) : ranking;
+  // Portfolio exposure seen by the allocator: broker-verified closes release capacity; uncertain data releases nothing.
+  const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now });
+  const ranking = rankCandidates(exp.candidates.filter((c) => !dataBlocked.has(c.id)), exp.positions, q.rk, today, window);
+  const display = dataBlocked.size ? rankCandidates(exp.candidates, exp.positions, q.rk, today, window) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
   for (const r of display.ranked) if (dataBlocked.has(r.candidate.id)) rankedById.set(r.candidate.id, { ...r, rank: null });
 
@@ -174,7 +183,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     audits.set(rec.id, rec.v12);
     if (decideAlertV12({ ...v12Base(rec), record: rec, mode: 'SHADOW', ranked: null }).scoring === 'PENDING_V12_RANKING') v12Pool.add(rec.id);
   }
-  const v12Rank = v12Pool.size ? shadowRanking({ candidates: [...candidates, ...v12Only], poolIds: v12Pool, lives: v12Lives, audits, positions: q.positions, rk: q.rk, today, window }).byId : new Map();
+  const v12Rank = v12Pool.size ? shadowRanking({ candidates: [...exp.candidates, ...v12Only], poolIds: v12Pool, lives: v12Lives, audits, positions: exp.positions, rk: q.rk, today, window }).byId : new Map();
 
   const eod = eodStatus(q.now, candidates, q.positions);
   const rows: QueueRow[] = q.records.map((rec) => {
@@ -202,7 +211,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     return row;
   });
 
-  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed };
+  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, added: exp.added } };
 }
 
 const SECTION_ORDER = ['ACTION_NOW', 'HIGH_PRIORITY', 'DATA_REVIEW', 'SCORING', 'ACTIVE', 'WATCHLIST', 'IGNORE', 'CLOSED'];

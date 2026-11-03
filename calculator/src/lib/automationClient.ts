@@ -24,6 +24,8 @@ export const AUTO_KEYS = {
   alertSnapshots: 'rbv1.v12.alertSnapshots.v1',
   /** Terminal SETUP FAILED events (write-once per alert, retained 90 days). */
   terminalEvents: 'rbv1.v12.terminalEvents.v1',
+  /** Broker-confirmed released portfolio reservations (write-once per candidate id). */
+  releasedExposure: 'rbv1.v12.releasedExposure.v1',
   /** CR-12 — Alpaca order JSON pasted by the user for read-only reconciliation (no broker connection). */
   brokerOrders: 'rbv1.v12.brokerOrders.v1',
 } as const;

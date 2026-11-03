@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ticketString, type FreshnessBand, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
-import type { QueueRow } from '../../engine/automation/liveQueue';
+import type { QueueOutput, QueueRow } from '../../engine/automation/liveQueue';
 import type { Classification } from '../../engine/automation/autoCandidate';
 import { fmtEt, mmss } from '../../engine/automation/etTime';
 const etTime = (ms: number) => fmtEt(ms).replace(' ET', '');
@@ -52,12 +52,14 @@ interface Props {
   broker?: BrokerFeed;
   /** Shared read-only reconciliation result (the same one the Journal sync uses); null when the feed is not live. */
   brokerTrades?: TradeSync[] | null;
+  /** Broker-verified portfolio exposure adjustments (capacity released for confirmed closes / added for unrecorded positions). */
+  exposure?: QueueOutput['exposure'];
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
@@ -95,6 +97,15 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
         hasShadow={layout.some((c) => c.role === 'SHADOW')} logCount={shadow.logCount} onExport={shadow.onExportLog}
       />
       {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
+      {exposure && (exposure.released.length > 0 || exposure.added.length > 0) && (
+        <p className="rounded-lg border border-ink-600 bg-ink-850 px-4 py-2 text-[12.5px] text-ink-200" data-section="exposure">
+          <b>Portfolio reconciled with Alpaca PAPER (read-only):</b>{' '}
+          {exposure.released.map((x) => `${x.ticker} ${x.status} not reserving — ${x.reason}`).join('; ')}
+          {exposure.released.length > 0 && exposure.added.length > 0 ? '; ' : ''}
+          {exposure.added.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`).join('; ')}
+          . Records are unchanged; update the candidate in the Opportunity Ranker when convenient.
+        </p>
+      )}
       {eod && eod.phase !== 'OPEN' && (
         <p role="status" className={`rounded-lg border px-4 py-2 text-[13px] font-semibold ${eod.actionRequired ? 'border-short bg-short-dim/30 text-[#ffc0c8]' : 'border-warn/40 bg-warn-dim/20 text-[#ffe2a8]'}`}>
           {eod.phase}: {eod.message}{eod.openTickers.length || eod.pendingTickers.length ? ` (${[...eod.openTickers.map((t) => `${t} open`), ...eod.pendingTickers.map((t) => `${t} pending`)].join(', ')})` : ''} <span className="font-normal">Flag only — RB never places, cancels or closes broker orders.</span>
