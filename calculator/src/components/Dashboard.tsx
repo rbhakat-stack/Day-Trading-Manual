@@ -1,16 +1,39 @@
-import { computeMetrics, type GroupStats, type JournalEntry } from '../engine/journal';
+import { useState } from 'react';
+import { computeMetrics, isClosedTrade, journalScope, tradeR, type GroupStats, type JournalEntry, type JournalScope } from '../engine/journal';
 import { pct, signedR, signedUsd, usd } from '../lib/format';
 import { Panel, Stat } from './ui';
 
-export function Dashboard({ entries, failLabels }: { entries: JournalEntry[]; failLabels: Record<string, string> }) {
+const SCOPES: [JournalScope, string][] = [['ALL', 'All trades'], ['RB_STRATEGY', 'RB strategy trades'], ['MANUAL_OVERRIDE', 'Manual overrides']];
+
+export function Dashboard({ entries: allEntries, failLabels }: { entries: JournalEntry[]; failLabels: Record<string, string> }) {
+  // Scope filter: manual overrides (trades taken although RB did not ticket them) never mix into strategy-only metrics.
+  const [scope, setScope] = useState<JournalScope>('ALL');
+  const entries = journalScope(allEntries, scope);
+  const dupes = entries.filter((e) => e.possibleDuplicateOf).length;
+  const scopeBar = (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Dashboard scope">
+      {SCOPES.map(([s, label]) => (
+        <button key={s} type="button" aria-pressed={scope === s} onClick={() => setScope(s)} className={`rounded-lg border px-3 py-1.5 text-[13px] font-semibold ${scope === s ? 'border-[#3d7bff] bg-[#2563eb] text-white' : 'border-ink-600 bg-ink-900 text-ink-200 hover:bg-ink-800'}`}>
+          {label} ({journalScope(allEntries, s).length})
+        </button>
+      ))}
+      <span className="text-[12px] text-ink-400">Journal data is stored only in this browser. Use Backup JSON regularly.</span>
+    </div>
+  );
   const m = computeMetrics(entries);
+  // R needs a planned risk; when no closed trade in this view has one, R figures are unavailable (never shown as 0R).
+  const hasR = entries.some((e) => isClosedTrade(e) && tradeR(e) !== null);
+  const r = (x: number) => (hasR ? signedR(x) : '— (no planned risk)');
   const reasons = new Map<string, number>();
   for (const e of entries) for (const code of e.hardFailCodes ?? []) reasons.set(code, (reasons.get(code) ?? 0) + 1);
   if (m.totalEntries === 0) {
     return (
-      <Panel title="Performance dashboard">
-        <p className="py-10 text-center text-sm text-ink-400">No journal entries yet.</p>
-      </Panel>
+      <div className="space-y-4">
+        {allEntries.length > 0 && scopeBar}
+        <Panel title="Performance dashboard">
+          <p className="py-10 text-center text-sm text-ink-400">{allEntries.length ? 'No journal entries in this view.' : 'No journal entries yet.'}</p>
+        </Panel>
+      </div>
     );
   }
   const sample =
@@ -20,6 +43,8 @@ export function Dashboard({ entries, failLabels }: { entries: JournalEntry[]; fa
           : '100+ closed trades: more useful evidence. Paper results still differ from live results.';
   return (
     <div className="space-y-4">
+      {scopeBar}
+      {dupes > 0 && <p className="rounded-lg border border-short/60 bg-short-dim/20 px-4 py-2 text-sm text-[#ffc0c8]">{dupes} broker-synced entr{dupes === 1 ? 'y looks' : 'ies look'} like a trade you also logged manually — it may be counted twice. Resolve it in the Journal.</p>}
       <p className="rounded-lg border border-ink-700 bg-ink-850 px-4 py-2.5 text-sm text-ink-300">{sample}</p>
       <Panel title="Summary">
         <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4 lg:grid-cols-6">
@@ -30,13 +55,13 @@ export function Dashboard({ entries, failLabels }: { entries: JournalEntry[]; fa
           <Stat label="Skipped" value={m.skipped} />
           <Stat label="Never triggered" value={m.neverTriggered} />
           <Stat label="Win rate" value={pct(m.winRate, 1)} big />
-          <Stat label="Average R" value={signedR(m.averageR)} big tone={m.averageR > 0 ? 'long' : m.averageR < 0 ? 'short' : undefined} />
-          <Stat label="Total R" value={signedR(m.totalR)} big tone={m.totalR > 0 ? 'long' : m.totalR < 0 ? 'short' : undefined} />
+          <Stat label="Average R" value={r(m.averageR)} big tone={m.averageR > 0 ? 'long' : m.averageR < 0 ? 'short' : undefined} />
+          <Stat label="Total R" value={r(m.totalR)} big tone={m.totalR > 0 ? 'long' : m.totalR < 0 ? 'short' : undefined} />
           <Stat label="Total P/L" value={signedUsd(m.totalPnl)} big tone={m.totalPnl > 0 ? 'long' : m.totalPnl < 0 ? 'short' : undefined} />
           <Stat label="Profit factor" value={m.profitFactor === null ? '— (no losses)' : m.profitFactor.toFixed(2)} big />
-          <Stat label="Max drawdown" value={usd(m.maxDrawdown)} sub={`${m.maxDrawdownR.toFixed(2)}R`} big tone="short" />
-          <Stat label="Average winner" value={m.wins ? signedUsd(m.averageWinner) : '—'} sub={m.wins ? signedR(m.averageWinnerR) : undefined} tone="long" />
-          <Stat label="Average loser" value={m.losses ? signedUsd(m.averageLoser) : '—'} sub={m.losses ? signedR(m.averageLoserR) : undefined} tone="short" />
+          <Stat label="Max drawdown" value={usd(m.maxDrawdown)} sub={hasR ? `${m.maxDrawdownR.toFixed(2)}R` : undefined} big tone="short" />
+          <Stat label="Average winner" value={m.wins ? signedUsd(m.averageWinner) : '—'} sub={m.wins && hasR ? signedR(m.averageWinnerR) : undefined} tone="long" />
+          <Stat label="Average loser" value={m.losses ? signedUsd(m.averageLoser) : '—'} sub={m.losses && hasR ? signedR(m.averageLoserR) : undefined} tone="short" />
           <Stat label="Avg planned risk" value={usd(m.averagePlannedRisk)} />
           <Stat label="Avg actual loss" value={usd(m.averageActualLoss)} />
           <Stat label="Open / pending" value={m.open} />
@@ -56,15 +81,15 @@ export function Dashboard({ entries, failLabels }: { entries: JournalEntry[]; fa
         </Panel>
       )}
       <div className="grid gap-4 lg:grid-cols-3">
-        <GroupTable title="LONG vs SHORT" rows={m.byDirection} />
-        <GroupTable title="By time of day (ET)" rows={m.byTimeOfDay} />
-        <GroupTable title="By ticker" rows={m.byTicker} />
+        <GroupTable title="LONG vs SHORT" rows={m.byDirection} hasR={hasR} />
+        <GroupTable title="By time of day (ET)" rows={m.byTimeOfDay} hasR={hasR} />
+        <GroupTable title="By ticker" rows={m.byTicker} hasR={hasR} />
       </div>
     </div>
   );
 }
 
-function GroupTable({ title, rows }: { title: string; rows: GroupStats[] }) {
+function GroupTable({ title, rows, hasR = true }: { title: string; rows: GroupStats[]; hasR?: boolean }) {
   return (
     <Panel title={title}>
       {rows.length === 0 ? (
@@ -86,7 +111,7 @@ function GroupTable({ title, rows }: { title: string; rows: GroupStats[] }) {
                 <td className="py-1 font-sans text-ink-200">{g.key}</td>
                 <td className="py-1 text-right">{g.trades}</td>
                 <td className="py-1 text-right">{pct(g.winRate, 0)}</td>
-                <td className={`py-1 text-right ${g.totalR > 0 ? 'text-long' : g.totalR < 0 ? 'text-short' : ''}`}>{signedR(g.totalR)}</td>
+                <td className={`py-1 text-right ${g.totalR > 0 ? 'text-long' : g.totalR < 0 ? 'text-short' : ''}`}>{hasR ? signedR(g.totalR) : '—'}</td>
                 <td className={`py-1 text-right ${g.totalPnl > 0 ? 'text-long' : g.totalPnl < 0 ? 'text-short' : ''}`}>{signedUsd(g.totalPnl)}</td>
               </tr>
             ))}

@@ -31,6 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
+import { brokerOrdersFrom, reconcileBroker, syncJournal, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
@@ -300,6 +301,23 @@ export default function App() {
   useEffect(() => {
     if (queue) setAlertSnaps((prev) => freezeAlertSnapshots(prev, queue.rows, clock, v12MaxScore(rankerSettings)).map);
   }, [queue, clock, rankerSettings, setAlertSnaps]);
+  // Read-only broker reconciliation, computed ONCE and shared by the Broker panel and the Journal sync. The strategy
+  // decision comes from the frozen alert-time snapshot when available (never from what was actually traded).
+  const brokerTrades = useMemo(
+    () => (brokerFeed.status === 'LIVE' && queue ? withAlertTimeDecision(reconcileBroker(brokerOrdersFrom(brokerFeed.orders).orders, queue.rows, brokerFeed.positions), alertSnaps) : null),
+    [brokerFeed, queue, alertSnaps],
+  );
+  // Journal sync: upsert broker-confirmed trades into the browser-local journal (deterministic id = broker order id).
+  useEffect(() => {
+    if (!brokerTrades?.length) return;
+    const recs = new Map(feed.records.map((r) => [r.id, r]));
+    const ctx = (t: TradeSync): SyncContext => ({
+      snap: t.recordId ? alertSnaps[t.recordId] ?? null : null,
+      candidate: t.recordId ? candidates.find((c) => c.id === t.recordId) ?? null : null,
+      record: t.recordId ? recs.get(t.recordId) ?? null : null,
+    });
+    setJournal((j) => syncJournal(j, brokerTrades, ctx).journal);
+  }, [brokerTrades]);
   useEffect(() => {
     if (queue?.changed) setCandidates(queue.candidates);
   }, [queue]);
@@ -533,6 +551,7 @@ export default function App() {
                 onOpenSettings={() => setLiveSub('automation')}
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
                 broker={brokerFeed}
+                brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
               />

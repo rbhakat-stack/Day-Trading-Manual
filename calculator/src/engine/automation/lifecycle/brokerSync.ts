@@ -15,6 +15,10 @@
  */
 import { etParts } from '../etTime';
 import type { QueueRow } from '../liveQueue';
+import type { AutoAlertRecord } from '../alertDecision';
+import type { Candidate } from '../../ranker/opportunityTypes';
+import type { JournalEntry, Outcome } from '../../journal';
+import type { AlertTimeSnapshot } from './alertTimeSnapshot';
 
 export type BrokerStatus = 'PENDING' | 'PARTIAL' | 'FILLED' | 'CANCELED' | 'EXPIRED' | 'REJECTED' | 'UNKNOWN';
 export type PositionStatus = 'NONE' | 'OPEN' | 'CLOSED';
@@ -118,6 +122,10 @@ export interface TradeSync {
   /** Realized P/L on the closed quantity (fills only; fees not included). */
   realizedPL: number | null;
   notes: string[];
+  /** Broker timestamps (epoch ms): entry order submitted / entry filled / last exit filled. */
+  submittedAt?: number | null;
+  entryFilledAt?: number | null;
+  exitFilledAt?: number | null;
 }
 
 const EOD_EXIT_FROM = 15 * 60 + 50;
@@ -186,6 +194,7 @@ export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[], positio
       entryQty: o.filledQty, entryAvg: o.filledAvgPrice, exitQty, exitAvg,
       exitReason: positionStatus === 'CLOSED' ? (exits[exits.length - 1]?.reason ?? null) : null,
       realizedPL, notes,
+      submittedAt: o.submittedAt, entryFilledAt: o.filledAt, exitFilledAt: exits.length ? exits[exits.length - 1].o.filledAt : null,
     });
   }
   return out;
@@ -198,4 +207,154 @@ export function brokerEodFacts(feed: { orders: unknown[]; positions: { symbol: s
     openTickers: feed.positions.filter((p) => Number(p.qty ?? 0) !== 0).map((p) => p.symbol.toUpperCase()),
     pendingTickers: orders.filter((o) => ['PENDING', 'PARTIAL'].includes(mapBrokerStatus(o.status)) && o.filledQty < (o.qty ?? Infinity)).map((o) => o.symbol),
   };
+}
+
+/* ───────────────────────── Journal sync (browser-local ledger) ───────────────────────── */
+
+const TICKET_DECISIONS = ['TRADE NOW — ELITE', 'HIGH PRIORITY — TRADE CONSIDERATION'];
+
+/**
+ * The strategy decision of a reconciled trade, taken from the FROZEN alert-time snapshot when one exists: what RB
+ * decided when the alert arrived (a ticket → READY; NOT ELIGIBLE / SKIP → NO TRADE; otherwise NO TICKET). The live
+ * derivation changes over time (an RB trade marked submitted reads NO TICKET, an expired one NO TRADE), so it is only
+ * the fallback when no snapshot was captured. Broker facts are never touched.
+ */
+export function withAlertTimeDecision(trades: TradeSync[], snaps: Record<string, AlertTimeSnapshot>): TradeSync[] {
+  return trades.map((t) => {
+    const s = t.recordId ? snaps[t.recordId] : undefined;
+    if (!s) return t;
+    const d: TradeSync['strategyDecision'] = TICKET_DECISIONS.includes(s.v11.decision) ? 'READY' : ['NOT ELIGIBLE', 'SKIP'].includes(s.v11.decision) ? 'NO TRADE' : 'NO TICKET';
+    return { ...t, strategyDecision: d, manualOverride: t.entryQty > 0 && d !== 'READY' };
+  });
+}
+
+/** What the journal knows about the RB alert behind a trade (all frozen values; null when there is no RB alert). */
+export interface SyncContext {
+  snap: AlertTimeSnapshot | null;
+  candidate: Candidate | null;
+  record: AutoAlertRecord | null;
+}
+
+const EXIT_REASON: Record<ExitReason, NonNullable<JournalEntry['exitReason']>> = {
+  'TARGET HIT': 'TARGET_HIT', 'STOPPED OUT': 'STOP_HIT', 'MANUAL EXIT': 'MANUAL_EXIT', 'CLOSED — EOD': 'CLOSED_EOD',
+};
+const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
+
+/** Broker-owned journal fields: the only fields a later poll may update on an existing broker-synced entry. */
+function brokerFacts(t: TradeSync, strategyDecision: TradeSync['strategyDecision']): Partial<JournalEntry> {
+  const filled = t.entryQty > 0;
+  const closed = t.positionStatus === 'CLOSED';
+  const unfilledEnd = !filled && ['CANCELED', 'EXPIRED', 'REJECTED'].includes(t.brokerStatus);
+  const reason = closed && t.exitReason ? EXIT_REASON[t.exitReason] : unfilledEnd ? 'CANCELED' : null;
+  const outcome: Outcome = closed ? (reason === 'TARGET_HIT' ? 'TARGET_HIT' : reason === 'STOP_HIT' ? 'STOP_HIT' : 'MANUAL_EXIT') : unfilledEnd ? 'CANCELED' : 'OPEN';
+  return {
+    actualFill: filled ? t.entryAvg : null,
+    quantity: t.entryQty,
+    positionValue: filled && t.entryAvg !== null ? Math.round(t.entryQty * t.entryAvg * 100) / 100 : 0,
+    outcome,
+    exitPrice: closed ? t.exitAvg : null,
+    brokerStatus: t.brokerStatus,
+    positionStatus: t.positionStatus,
+    exitReason: reason,
+    entryFilledIso: iso(t.entryFilledAt),
+    exitFilledIso: closed ? iso(t.exitFilledAt) : null,
+    manualOverride: filled && strategyDecision !== 'READY',
+  };
+}
+
+/**
+ * A journal entry for one reconciled broker trade. Fills, quantities, times and the exit come from the broker; the
+ * plan (entry/stop/target/planned qty/planned risk) and scores come only from the frozen RB alert snapshot — never
+ * recomputed. With no RB alert those fields stay blank/0 and no planned risk or R is invented.
+ */
+export function journalEntryFromSync(t: TradeSync, ctx: SyncContext): JournalEntry {
+  const { snap, candidate, record } = ctx;
+  const when = t.entryFilledAt ?? t.submittedAt ?? record?.alert.alertTimeMs ?? 0;
+  const et = etParts(when);
+  const v = record?.snapshot?.values ?? null;
+  const plan = snap?.trade ?? (candidate ? { entry: candidate.entry, stop: candidate.stop, target: candidate.target, shares: candidate.shares, plannedRisk: candidate.plannedRisk, expectedReward: candidate.expectedReward, orderType: candidate.orderType } : null);
+  return {
+    id: `broker-${t.entryOrderId}`,
+    ticker: t.symbol,
+    date: et.date,
+    time: et.hhmm,
+    direction: t.direction,
+    open: snap?.ohlc?.open ?? v?.open ?? 0,
+    high: snap?.ohlc?.high ?? v?.high ?? 0,
+    low: snap?.ohlc?.low ?? v?.low ?? 0,
+    close: snap?.ohlc?.close ?? v?.close ?? 0,
+    atr: snap?.ohlc?.atr ?? v?.atr ?? 0,
+    alertPrice: record?.initialQuote?.price ?? 0,
+    decision: record?.calcAtAlert?.action ?? 'NOT_ELIGIBLE',
+    orderType: plan?.orderType ?? `${t.direction === 'LONG' ? 'BUY' : 'SELL'} (broker)`,
+    plannedEntry: plan?.entry ?? 0,
+    stop: plan?.stop ?? 0,
+    target: plan?.target ?? 0,
+    expectedRisk: plan?.plannedRisk ?? 0,
+    expectedReward: plan?.expectedReward ?? 0,
+    notes: '',
+    rulesVersion: snap?.provenance.rulesVersion ?? record?.versions.rules,
+    source: 'broker_sync',
+    brokerOrderId: t.entryOrderId,
+    alertRecordId: t.recordId,
+    strategyDecision: t.strategyDecision,
+    plannedQty: plan?.shares ?? null,
+    alertTimeIso: record ? new Date(record.alert.alertTimeMs).toISOString() : null,
+    ruleSet: snap?.ruleSet ?? null,
+    v11Score: snap?.v11.total ?? candidate?.initialScore?.total ?? null,
+    v11Tier: snap?.v11.tier ?? candidate?.initialScore?.tier ?? null,
+    v12Score: snap?.v12?.total ?? null,
+    v12OptionA: snap?.v12?.tierOptionA ?? null,
+    v12OptionB: snap?.v12?.tierOptionB ?? null,
+    possibleDuplicateOf: null,
+    ...brokerFacts(t, t.strategyDecision),
+  } as JournalEntry;
+}
+
+export interface JournalSyncResult {
+  journal: JournalEntry[];
+  changed: boolean;
+  added: string[];
+  updated: string[];
+  /** Broker entries added next to a manually logged entry that looks like the same trade (never merged). */
+  flagged: string[];
+}
+
+const near = (a: number | null | undefined, b: number | null | undefined) => a !== null && a !== undefined && b !== null && b !== undefined && a > 0 && Math.abs(a - b) <= 0.02 + 1e-9;
+
+/**
+ * Upsert reconciled trades into the journal, keyed by the broker entry order id (deterministic, so repeated polls
+ * never duplicate). An existing broker-synced entry gets ONLY broker-owned fields updated (fills, quantity, exit,
+ * statuses); its strategy decision, frozen plan/scores, notes and any field you edited stay as they are. Manual
+ * entries are never modified; a manual entry that looks like the same trade is flagged on the new broker entry.
+ * Returns the same array object when nothing changed.
+ */
+export function syncJournal(journal: JournalEntry[], trades: TradeSync[], ctx: (t: TradeSync) => SyncContext): JournalSyncResult {
+  let next = journal;
+  const added: string[] = [];
+  const updated: string[] = [];
+  const flagged: string[] = [];
+  for (const t of trades) {
+    if (!t.entryOrderId) continue;
+    const idx = next.findIndex((e) => e.brokerOrderId === t.entryOrderId);
+    if (idx < 0) {
+      const fresh = journalEntryFromSync(t, ctx(t));
+      const dup = next.find((e) => e.source !== 'broker_sync' && e.ticker.toUpperCase() === t.symbol && e.direction === t.direction && e.date === fresh.date && (near(e.actualFill, t.entryAvg) || near(e.plannedEntry, fresh.plannedEntry)));
+      if (dup) {
+        fresh.possibleDuplicateOf = dup.id;
+        flagged.push(fresh.id);
+      }
+      next = [...next, fresh];
+      added.push(fresh.id);
+      continue;
+    }
+    const cur = next[idx];
+    if (cur.source !== 'broker_sync') continue; // never touch a manual entry
+    const patch = brokerFacts(t, cur.strategyDecision ?? t.strategyDecision);
+    const changed = (Object.keys(patch) as (keyof JournalEntry)[]).some((k) => cur[k] !== patch[k]);
+    if (!changed) continue;
+    next = next.map((e, k) => (k === idx ? { ...e, ...patch } : e));
+    updated.push(cur.id);
+  }
+  return { journal: next, changed: next !== journal, added, updated, flagged };
 }

@@ -42,7 +42,8 @@ export function JournalView({ entries, update, remove, replaceAll }: Props) {
       }
     >
       <p className="mb-3 text-xs text-ink-400">
-        Stored only in this browser (localStorage). Back up regularly with “Backup JSON”. P/L uses the actual fill when entered, otherwise the planned entry. R = P/L ÷ planned max loss.
+        Journal data is stored only in this browser. Use Backup JSON regularly. P/L uses the actual fill when entered, otherwise the planned entry. R = P/L ÷ planned max loss.
+        Rows marked BROKER are written automatically from the read-only Alpaca PAPER reconciliation (fills, exits and statuses come from the broker; notes stay yours).
       </p>
       {sorted.length === 0 ? (
         <p className="py-10 text-center text-sm text-ink-400">No trades yet. Calculate a trade and press “Save trade to journal”.</p>
@@ -60,27 +61,36 @@ export function JournalView({ entries, update, remove, replaceAll }: Props) {
               {sorted.map((e) => {
                 const pnl = tradePnl(e);
                 const r = tradeR(e);
+                // Broker-synced rows: fill, outcome and exit are broker-owned (read-only here; the next poll would reset them).
+                const broker = e.source === 'broker_sync';
                 return (
                   <tr key={e.id} className="hover:bg-ink-800/60">
                     <td className={cell}><input type="date" value={e.date} onChange={(v) => update(e.id, { date: v.target.value })} className={`${inp} w-32`} /></td>
                     <td className={cell}><input type="time" value={e.time} onChange={(v) => update(e.id, { time: v.target.value })} className={`${inp} w-24`} /></td>
-                    <td className={`${cell} num font-semibold`}>{e.ticker || '—'}</td>
+                    <td className={`${cell} num font-semibold`}>
+                      {e.ticker || '—'}
+                      {broker && <BrokerBadges e={e} />}
+                    </td>
                     <td className={`${cell} font-semibold ${e.direction === 'LONG' ? 'text-long' : 'text-short'}`}>{e.direction}</td>
                     <td className={`${cell} text-ink-300`}>{e.orderType}</td>
                     <td className={`${cell} num`}>{price(e.plannedEntry)}</td>
                     <td className={cell}>
-                      <NumInput value={e.actualFill} onChange={(v) => update(e.id, { actualFill: v })} />
+                      {broker ? <span className="num">{e.actualFill === null ? '—' : price(e.actualFill)}</span> : <NumInput value={e.actualFill} onChange={(v) => update(e.id, { actualFill: v })} />}
                     </td>
                     <td className={`${cell} num text-short`}>{price(e.stop)}</td>
                     <td className={`${cell} num text-long`}>{price(e.target)}</td>
                     <td className={`${cell} num`}>{e.quantity}</td>
                     <td className={`${cell} num`}>{usd(e.expectedRisk)}</td>
                     <td className={cell}>
-                      <select value={e.outcome} onChange={(v) => update(e.id, { outcome: v.target.value as Outcome })} className="rounded border border-ink-600 bg-ink-900 px-1 py-1 text-[13px]">
-                        {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((o) => <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>)}
-                      </select>
+                      {broker ? (
+                        <span>{OUTCOME_LABELS[e.outcome]}{e.exitReason === 'CLOSED_EOD' ? ' (EOD)' : ''}</span>
+                      ) : (
+                        <select value={e.outcome} onChange={(v) => update(e.id, { outcome: v.target.value as Outcome })} className="rounded border border-ink-600 bg-ink-900 px-1 py-1 text-[13px]">
+                          {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((o) => <option key={o} value={o}>{OUTCOME_LABELS[o]}</option>)}
+                        </select>
+                      )}
                     </td>
-                    <td className={cell}><NumInput value={e.exitPrice} onChange={(v) => update(e.id, { exitPrice: v })} /></td>
+                    <td className={cell}>{broker ? <span className="num">{e.exitPrice === null ? '—' : price(e.exitPrice)}</span> : <NumInput value={e.exitPrice} onChange={(v) => update(e.id, { exitPrice: v })} />}</td>
                     <td className={`${cell} num ${pnl === null ? 'text-ink-500' : pnl > 0 ? 'text-long' : pnl < 0 ? 'text-short' : ''}`}>{pnl === null ? '—' : signedUsd(pnl)}</td>
                     <td className={`${cell} num ${r === null ? 'text-ink-500' : r > 0 ? 'text-long' : r < 0 ? 'text-short' : ''}`}>{r === null ? '—' : signedR(r)}</td>
                     <td className={cell}><input value={e.notes} onChange={(v) => update(e.id, { notes: v.target.value })} className={`${inp} w-48 font-sans`} placeholder="notes" /></td>
@@ -95,6 +105,17 @@ export function JournalView({ entries, update, remove, replaceAll }: Props) {
         </div>
       )}
     </Panel>
+  );
+}
+
+/** The four independent states of a broker-synced entry, plus a possible-duplicate warning. */
+function BrokerBadges({ e }: { e: JournalEntry }) {
+  return (
+    <span className="mt-0.5 block font-sans text-[10px] font-normal leading-snug text-ink-400" data-broker-entry={e.brokerOrderId}>
+      <b className="text-[#9db8ff]">BROKER</b> · Strategy {e.strategyDecision ?? '—'} · Override {e.manualOverride ? <b className="text-warn">YES</b> : 'NO'}
+      <br />Broker {e.brokerStatus ?? '—'} · Position {e.positionStatus ?? '—'}{e.exitReason ? ` · ${e.exitReason.replace(/_/g, ' ')}` : ''}
+      {e.possibleDuplicateOf && <><br /><b className="text-short">Possible duplicate of a manual entry — delete one</b></>}
+    </span>
   );
 }
 

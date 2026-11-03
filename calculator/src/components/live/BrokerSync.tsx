@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { QueueRow } from '../../engine/automation/liveQueue';
-import { brokerOrdersFrom, parseBrokerOrders, reconcileBroker } from '../../engine/automation/lifecycle/brokerSync';
+import { brokerOrdersFrom, parseBrokerOrders, reconcileBroker, type TradeSync } from '../../engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, usePersistent, type BrokerFeed } from '../../lib/automationClient';
 import { load } from '../../lib/storage';
 
@@ -13,12 +13,13 @@ const n = (x: string | undefined) => (x === undefined || x === '' || !Number.isF
  * when broker sync is enabled on the server; otherwise pasted Alpaca order JSON. RB never sends, changes or cancels
  * an order; the manual "Mark order submitted" lifecycle in the queue is unchanged.
  */
-export function BrokerSyncPanel({ rows, feed, now }: { rows: QueueRow[]; feed?: BrokerFeed; now: number }) {
+export function BrokerSyncPanel({ rows, feed, now, liveTrades }: { rows: QueueRow[]; feed?: BrokerFeed; now: number; liveTrades?: TradeSync[] | null }) {
   const [text, setText] = usePersistent<string>(AUTO_KEYS.brokerOrders, () => load<string>(AUTO_KEYS.brokerOrders, ''));
   const [draft, setDraft] = useState('');
   const live = feed?.status === 'LIVE';
   const parsed = useMemo(() => (live ? brokerOrdersFrom(feed!.orders) : text.trim() ? parseBrokerOrders(text) : { orders: [], errors: [] }), [live, feed, text]);
-  const trades = useMemo(() => reconcileBroker(parsed.orders, rows, live ? feed!.positions : undefined), [parsed.orders, rows, live, feed]);
+  // Live: the shared result computed once in App (also synced into the Journal). Pasted orders: reconciled here, display only.
+  const trades = useMemo(() => (live && liveTrades ? liveTrades : reconcileBroker(parsed.orders, rows, live ? feed!.positions : undefined)), [live, liveTrades, parsed.orders, rows, feed]);
   const source = live
     ? `LIVE · Alpaca PAPER account · read-only · updated ${feed!.lastOkMs ? Math.max(0, Math.round((now - feed!.lastOkMs) / 1000)) : '—'} s ago`
     : feed?.status === 'OFF' ? 'Broker sync is OFF on the server (RB_BROKER_SYNC_ENABLED) — using pasted orders'

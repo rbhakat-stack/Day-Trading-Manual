@@ -47,6 +47,45 @@ export interface JournalEntry {
   hardFailCodes?: string[];
   /** Rules version that produced the decision (never re-evaluated later). */
   rulesVersion?: string;
+
+  /* ── Broker sync (optional; absent on manual entries — older journals stay valid) ── */
+  /** 'broker_sync' = written automatically from read-only Alpaca reconciliation; absent/'manual' = entered by you. */
+  source?: 'manual' | 'broker_sync';
+  /** Deterministic identity of a broker-synced entry: the Alpaca entry order id. */
+  brokerOrderId?: string;
+  /** RB alert record the order was matched to (null = no RB alert, a manual trade). */
+  alertRecordId?: string | null;
+  /** The four independent states. Strategy decision is written once and never rewritten. */
+  strategyDecision?: 'READY' | 'NO TICKET' | 'NO TRADE' | 'NO ALERT';
+  manualOverride?: boolean;
+  brokerStatus?: string;
+  positionStatus?: 'NONE' | 'OPEN' | 'CLOSED';
+  /** Exit classification from broker evidence only (never guessed). */
+  exitReason?: 'TARGET_HIT' | 'STOP_HIT' | 'MANUAL_EXIT' | 'CLOSED_EOD' | 'CANCELED' | null;
+  entryFilledIso?: string | null;
+  exitFilledIso?: string | null;
+  /** Frozen alert-time plan and scores (from the RB alert snapshot; never recomputed). */
+  plannedQty?: number | null;
+  alertTimeIso?: string | null;
+  ruleSet?: string | null;
+  v11Score?: number | null;
+  v11Tier?: string | null;
+  v12Score?: number | null;
+  v12OptionA?: string | null;
+  v12OptionB?: string | null;
+  /** Set when a manually logged entry looks like the same trade — flagged for you to resolve, never merged. */
+  possibleDuplicateOf?: string | null;
+}
+
+/** Dashboard scope: all trades, trades RB recommended, or trades taken despite RB (manual overrides). */
+export type JournalScope = 'ALL' | 'RB_STRATEGY' | 'MANUAL_OVERRIDE';
+
+/** Manual entries and broker trades RB ticketed are strategy trades; broker trades RB did not ticket are overrides. */
+export const isManualOverride = (e: JournalEntry) => e.manualOverride === true;
+
+export function journalScope(entries: JournalEntry[], scope: JournalScope): JournalEntry[] {
+  if (scope === 'ALL') return entries;
+  return entries.filter((e) => (scope === 'MANUAL_OVERRIDE' ? isManualOverride(e) : !isManualOverride(e)));
 }
 
 /** Outcomes that represent a filled and closed trade. */
@@ -148,7 +187,11 @@ export function computeMetrics(entries: JournalEntry[]): DashboardMetrics {
   const chronological = [...entries].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   const closed = chronological.filter(isClosedTrade);
   const pnls = closed.map((e) => tradePnl(e) as number);
-  const rs = closed.map((e) => tradeR(e) ?? 0);
+  // R needs a planned risk. A trade without one (e.g. a manual trade with no RB alert) has no R: it is excluded from
+  // R averages instead of counting as 0 R. With planned risk on every closed trade this is identical to before.
+  const rN = closed.map((e) => tradeR(e));
+  const rs = rN.map((r) => r ?? 0);
+  const withR = (ks: number[]) => ks.filter((k) => rN[k] !== null).map((k) => rs[k]);
   const winsIdx = pnls.map((p, k) => (p > 0 ? k : -1)).filter((k) => k >= 0);
   const lossIdx = pnls.map((p, k) => (p < 0 ? k : -1)).filter((k) => k >= 0);
   const grossWin = winsIdx.reduce((a, k) => a + pnls[k], 0);
@@ -178,9 +221,9 @@ export function computeMetrics(entries: JournalEntry[]): DashboardMetrics {
     winRate: closed.length ? winsIdx.length / closed.length : 0,
     averageWinner: clean(mean(winsIdx.map((k) => pnls[k]))),
     averageLoser: clean(mean(lossIdx.map((k) => pnls[k]))),
-    averageWinnerR: clean(mean(winsIdx.map((k) => rs[k]))),
-    averageLoserR: clean(mean(lossIdx.map((k) => rs[k]))),
-    averageR: clean(mean(rs)),
+    averageWinnerR: clean(mean(withR(winsIdx))),
+    averageLoserR: clean(mean(withR(lossIdx))),
+    averageR: clean(mean(withR(closed.map((_, k) => k)))),
     totalR: clean(rs.reduce((a, b) => a + b, 0)),
     profitFactor: grossLoss < 0 ? clean(grossWin / Math.abs(grossLoss)) : null,
     totalPnl: clean(pnls.reduce((a, b) => a + b, 0)),

@@ -11,7 +11,7 @@ import { usd } from '../../lib/format';
 import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { BrokerSyncPanel } from './BrokerSync';
 import { eodStatus, withBrokerFacts } from '../../engine/automation/lifecycle/executionState';
-import { brokerEodFacts } from '../../engine/automation/lifecycle/brokerSync';
+import { brokerEodFacts, type TradeSync } from '../../engine/automation/lifecycle/brokerSync';
 import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
@@ -50,12 +50,14 @@ interface Props {
   history?: { count: number; onExport: () => void };
   /** CR-12 — read-only broker feed (paper account), when enabled on the server. */
   broker?: BrokerFeed;
+  /** Shared read-only reconciliation result (the same one the Journal sync uses); null when the feed is not live. */
+  brokerTrades?: TradeSync[] | null;
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
@@ -120,7 +122,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
         </p>
       )}
 
-      <BrokerSyncPanel rows={allRows} feed={broker} now={now} />
+      <BrokerSyncPanel rows={allRows} feed={broker} now={now} liveTrades={brokerTrades} />
 
       {stronger.length > 0 && <div className="grid gap-3 lg:grid-cols-2">{stronger.map((sg) => <SuggestionCard key={`${sg.pendingId}-${sg.candidateId}`} sg={sg} onKeep={actions.keep} onReplace={actions.replace} />)}</div>}
 
