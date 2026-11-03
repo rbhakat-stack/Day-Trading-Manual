@@ -31,7 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
-import { brokerVerified, executionRevPatch, historyDatesFor, latchReleases, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerWorkingEntry, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
+import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
@@ -284,8 +284,15 @@ export default function App() {
   const [alertSnaps, setAlertSnaps] = usePersistent<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, () => pruneAlertSnapshots(load<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, {}), Date.now()));
   // Broker-confirmed released portfolio reservations (write-once per candidate execution; audit trail).
   const [releasedExposure, setReleasedExposure] = usePersistent<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, () => load<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, {}));
-  // Broker-only working entries last seen in a VERIFIED response; kept (reserved) while broker data is unverified.
-  const [knownBrokerEntries, setKnownBrokerEntries] = usePersistent<BrokerWorkingEntry[]>(AUTO_KEYS.brokerEntries, () => load<BrokerWorkingEntry[]>(AUTO_KEYS.brokerEntries, []));
+  // Last VERIFIED broker-only exposure (positions + working entries); kept (reserved) while broker data is unverified.
+  const [brokerSnapshot, setBrokerSnapshot] = usePersistent<BrokerExposureSnapshot | null>(AUTO_KEYS.brokerSnapshot, () => load<BrokerExposureSnapshot | null>(AUTO_KEYS.brokerSnapshot, null));
+  const knownBrokerEntries = brokerSnapshot?.entries;
+  const knownBrokerPositions = brokerSnapshot?.positions;
+  // Portfolio verification of THIS evaluation (warning + execution gate). OFF on the server = RB-records-only mode.
+  const verification = useMemo(
+    () => (autoCfg.enabled && autoToken ? portfolioVerification(brokerFeed, autoDate, clock, brokerSnapshot) : brokerSyncOff(autoCfg.enabled ? 'no app access token in this browser' : 'automation is OFF in this browser')),
+    [autoCfg.enabled, autoToken, brokerFeed, autoDate, clock, brokerSnapshot],
+  );
   // ONE portfolio exposure model for every decision surface (Live Alert Queue, Opportunity Ranker, score freezing):
   // candidate records + manual positions + VERIFIED read-only Alpaca PAPER facts + safe release records.
   // Entry-day order lists for earlier-dated PENDING / FILLED candidates (bounded; verified responses only).
@@ -293,7 +300,7 @@ export default function App() {
   const brokerHistory = useBrokerHistory(autoCfg.enabled, autoToken, historyDates);
   const brokerExposure = useMemo<BrokerExposureInput>(
     () => ({
-      verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions,
+      verified: portfolioVerification(brokerFeed, autoDate, clock).verified, orders: brokerFeed.orders, positions: brokerFeed.positions,
       openOrders: brokerFeed.openOrders ?? null, history: verifiedHistory(brokerHistory, historyDates, clock),
     }),
     [brokerFeed, autoDate, clock, brokerHistory, historyDates],
@@ -301,9 +308,9 @@ export default function App() {
   const exposureFor = useCallback(
     (cs: Candidate[]) => reconcileExposure(cs, positions, brokerExposure, {
       classify: (s) => classes[s] ?? null, conservativeRisk: rankerSettings.portfolio.accountEquity * rankerSettings.portfolio.riskPerTradePct, latched: releasedExposure, now: clock,
-      knownEntries: knownBrokerEntries, maxPositionValue: rankerSettings.portfolio.maxPositionValue,
+      knownEntries: knownBrokerEntries, knownPositions: knownBrokerPositions, maxPositionValue: rankerSettings.portfolio.maxPositionValue,
     }),
-    [positions, brokerExposure, classes, rankerSettings, releasedExposure, clock, knownBrokerEntries],
+    [positions, brokerExposure, classes, rankerSettings, releasedExposure, clock, knownBrokerEntries, knownBrokerPositions],
   );
   const rankerExposure = useMemo(() => exposureFor(candidates), [exposureFor, candidates]);
   const ranking = useMemo(
@@ -332,16 +339,19 @@ export default function App() {
       broker: brokerExposure,
       releasedExposure,
       knownBrokerEntries,
+      knownBrokerPositions,
+      portfolioGate: verification.gated ? verification.reason : null,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification]);
   useEffect(() => {
     const found = [...rankerExposure.released, ...(queue?.exposure.released ?? [])];
     if (found.length) setReleasedExposure((prev) => latchReleases(prev, found).map);
   }, [queue, rankerExposure, setReleasedExposure]);
-  // Only a VERIFIED response replaces the known broker-only working entries (a cancellation is never inferred).
+  // Only a VERIFIED response replaces the last verified broker-only exposure (a close / cancellation is never inferred).
   useEffect(() => {
-    if (rankerExposure.entriesSource === 'VERIFIED' && JSON.stringify(rankerExposure.entries) !== JSON.stringify(knownBrokerEntries)) setKnownBrokerEntries(rankerExposure.entries);
-  }, [rankerExposure, knownBrokerEntries, setKnownBrokerEntries]);
+    const next = brokerExposureSnapshot(rankerExposure, brokerFeed.lastOkMs ?? clock, autoDate);
+    if (next && (next.atMs !== brokerSnapshot?.atMs || JSON.stringify([next.date, next.positions, next.entries]) !== JSON.stringify([brokerSnapshot?.date, brokerSnapshot?.positions, brokerSnapshot?.entries]))) setBrokerSnapshot(next);
+  }, [rankerExposure, brokerFeed.lastOkMs, clock, autoDate, brokerSnapshot, setBrokerSnapshot]);
   useEffect(() => {
     if (queue) setTerminalEvents((prev) => latchTerminalEvents(prev, queue.rows, clock, autoCfg).map);
   }, [queue, clock, autoCfg, setTerminalEvents]);
@@ -603,6 +613,7 @@ export default function App() {
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
                 broker={brokerFeed}
                 exposure={queue?.exposure}
+                verification={verification}
                 brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
@@ -645,6 +656,7 @@ export default function App() {
             selectedId={selectedId ?? ranking.ranked[0]?.candidate.id ?? null}
             today={today}
             actions={rankerActions}
+            verification={verification}
           />
         )}
         {tab === 'journal' && (

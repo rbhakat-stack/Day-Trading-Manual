@@ -8,6 +8,7 @@
  * show "RB v1.1 ACTIVE + RB v1.2 SHADOW" today, "RB v1.2 ACTIVE + RB v1.1 COMPARISON" after an approved promotion, and
  * "RB v1.2 ACTIVE" alone once v1.1 is retired. The layout follows ACTIVE_LOGIC_VERSION; it never changes it.
  */
+import { PORTFOLIO_UNVERIFIED } from '../../engine/automation/lifecycle/portfolioExposure';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
@@ -206,6 +207,7 @@ export function decisionBadge(r: QueueRow): Status {
   if (d.ticket && r.lifecycle?.setupFailed) return { label: 'v1.1 TICKET — SETUP FAILED', tone: 'bad', detail: r.lifecycle.reason };
   // CR-13 — after the 15:30 cutoff the v1.1 ticket is historical: never labelled as ready to trade.
   if (d.ticket && r.lifecycle?.entryWindowClosed) return { label: 'v1.1 TICKET — AFTER CUTOFF', tone: 'bad', detail: r.lifecycle.reason };
+  if (d.ticket && r.lifecycle?.portfolioUnverified) return { label: 'v1.1 TICKET — PORTFOLIO UNVERIFIED', tone: 'bad', detail: r.lifecycle.reason };
   if (d.ticket) return { label: 'TRADE READY', tone: 'ok', detail: d.decision };
   // CR-05 / CR-07 — a late or expired setup is named by its execution state, never WATCHLIST.
   const ex = r.lifecycle?.executionState;
@@ -230,6 +232,7 @@ export function finalBadge(r: QueueRow): Status {
   // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
   if (lc?.setupFailed) return { label: 'NO TRADE — SETUP FAILED', tone: 'bad', detail: lc.reason };
   if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
+  if (lc?.portfolioUnverified) return { label: PORTFOLIO_UNVERIFIED, tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
   if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
   if (lc?.terminal && !['CLOSED'].includes(lc.executionState)) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason };

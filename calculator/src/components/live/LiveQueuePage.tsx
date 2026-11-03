@@ -12,6 +12,8 @@ import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnaps
 import { BrokerSyncPanel } from './BrokerSync';
 import { eodStatus, withBrokerFacts } from '../../engine/automation/lifecycle/executionState';
 import { brokerEodFacts, type TradeSync } from '../../engine/automation/lifecycle/brokerSync';
+import type { PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
+import { PortfolioVerificationBanner } from '../PortfolioVerificationBanner';
 import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
@@ -54,6 +56,8 @@ interface Props {
   brokerTrades?: TradeSync[] | null;
   /** Broker-verified portfolio exposure adjustments (capacity released for confirmed closes / added for unrecorded positions). */
   exposure?: QueueOutput['exposure'];
+  /** Broker portfolio verification state (warning + ticket gate). */
+  verification?: PortfolioVerification;
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
@@ -77,7 +81,7 @@ export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], 
     + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
 }
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
@@ -86,7 +90,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const [open, setOpen] = useState<Set<string>>(new Set());
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
   // Tickets the execution layer withholds (15:30 cutoff, terminal SETUP FAILED) are never shown as orders to place.
-  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed);
+  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && !r.lifecycle?.portfolioUnverified);
   // CR-13 — v1.1 tickets past the 15:30 entry cutoff: shown as historical, never as an order to place.
   const cutoff = rows.filter((r) => r.lifecycle?.entryWindowClosed);
   if (!enabled) {
@@ -115,12 +119,14 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
         hasShadow={layout.some((c) => c.role === 'SHADOW')} logCount={shadow.logCount} onExport={shadow.onExportLog}
       />
       {quoteError && <p className="text-sm text-short">Prices: {quoteError}</p>}
-      {exposure && (exposure.released.length > 0 || exposure.added.length > 0 || exposure.entries.length > 0) && (
+      <PortfolioVerificationBanner v={verification} />
+      {exposure && (exposure.released.length > 0 || exposure.added.length > 0 || exposure.entries.length > 0 || exposure.brokerPositions.length > 0) && (
         <p className="rounded-lg border border-ink-600 bg-ink-850 px-4 py-2 text-[12.5px] text-ink-200" data-section="exposure">
           <b>Portfolio reconciled with Alpaca PAPER (read-only):</b>{' '}
           {[
             ...exposure.released.map((x) => `${x.ticker} ${x.status} not reserving — ${x.reason}`),
             ...exposure.added.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`),
+            ...(exposure.entriesSource === 'LAST_KNOWN' ? exposure.brokerPositions.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — kept from the last verified broker response ($${x.plannedRisk} risk)`) : []),
             ...exposure.entries.map((e) => entryNote(e, exposure.entriesSource)),
           ].join('; ')}
           . Records are unchanged; update the candidate in the Opportunity Ranker when convenient.

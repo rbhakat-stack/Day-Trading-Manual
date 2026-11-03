@@ -11,6 +11,9 @@ import { PortfolioPanel } from './PortfolioPanel';
 import { RankerSettingsPanel } from './RankerSettingsPanel';
 import { BreakdownCard, DecisionCard } from './ScoreCard';
 import { StrategyVersionBar, type VersionControls } from '../StrategyVersionBar';
+import type { PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
+import { PortfolioVerificationBanner } from '../PortfolioVerificationBanner';
+import { gateRankingDisplay } from '../portfolioGate';
 
 export interface RankerActions {
   select: (id: string) => void;
@@ -42,9 +45,12 @@ interface Props {
   selectedId: string | null;
   today: string;
   actions: RankerActions;
+  /** Broker portfolio verification state (warning; TRADE NOW is shown as withheld while unverified). */
+  verification?: PortfolioVerification;
 }
 
-export function RankerPage({ result, candidates, positions, settings, version, settingsEpoch, selectedId, today, actions }: Props) {
+export function RankerPage({ result: raw, candidates, positions, settings, version, settingsEpoch, selectedId, today, actions, verification }: Props) {
+  const result = verification ? gateRankingDisplay(raw, verification) : raw;
   const [sub, setSub] = useState<Sub>('rank');
   const selected = result.ranked.find((r) => r.candidate.id === selectedId) ?? null;
   const stronger = result.suggestions.filter((s) => s.kind === 'STRONGER');
@@ -69,6 +75,7 @@ export function RankerPage({ result, candidates, positions, settings, version, s
         </div>
       </div>
 
+      {(sub === 'rank' || sub === 'portfolio') && <PortfolioVerificationBanner v={verification} />}
       {sub === 'rank' && (
         <>
           <div className="hidden lg:block"><PortfolioBar pf={result.portfolio} reservePct={settings.portfolio.liquidityReservePct} /></div>

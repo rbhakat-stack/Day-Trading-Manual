@@ -2,6 +2,7 @@
  * RB v1.2 SHADOW presentation (Step 7). Display only: nothing here offers a ticket, an order or an action. The active
  * production decision is always the RB v1.1 one shown elsewhere in the queue.
  */
+import { PORTFOLIO_UNVERIFIED } from '../../engine/automation/lifecycle/portfolioExposure';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { V12Decision } from '../../engine/automation/v12/decideAlertV12';
@@ -76,7 +77,7 @@ export function ShadowCell({ r }: { r: QueueRow }) {
       <div className="mt-0.5 flex flex-wrap gap-1">
         {d.dataReview.length > 0 && <Badge tone="review">DATA REVIEW</Badge>}
         {warn && <Badge tone="warn" title={parityWarnings(d).join(', ')}>WARNING</Badge>}
-        {s?.total != null && d.dataReview.length === 0 && !warn && <span className="text-[10px] text-ink-400">{d.decision === 'SKIP' ? 'skip' : d.section === 'ACTION_NOW' || d.section === 'HIGH_PRIORITY' ? 'trade tier (shadow)' : d.decision.toLowerCase()}</span>}
+        {s?.total != null && d.dataReview.length === 0 && !warn && <span className="text-[10px] text-ink-400">{d.decision === 'SKIP' ? 'skip' : (d.section === 'ACTION_NOW' || d.section === 'HIGH_PRIORITY') && r.lifecycle?.portfolioGate ? 'no ticket — portfolio unverified' : d.section === 'ACTION_NOW' || d.section === 'HIGH_PRIORITY' ? 'trade tier (shadow)' : d.decision.toLowerCase()}</span>}
       </div>
     </div>
   );
@@ -156,7 +157,7 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
             {d.dataReview.length ? <span className="text-short">{d.dataReview.join(', ')}</span> : <span className="text-ink-300">none</span>}
           </div>
           {reasons.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-ink-300">{reasons.slice(0, 4).map((x, i) => <li key={i}>{x}</li>)}</ul>}
-          <div className="mt-1.5 text-[11px] text-ink-400">Ticket: {d.ticket ? 'valid — same RB calculator plan (not offered: shadow only)' : 'none'}</div>
+          <div className="mt-1.5 text-[11px] text-ink-400">Ticket: {d.ticket ? (r.lifecycle?.portfolioGate ? `${PORTFOLIO_UNVERIFIED} (shadow) — ${r.lifecycle.portfolioGate}` : 'valid — same RB calculator plan (not offered: shadow only)') : 'none'}</div>
         </div>
       </div>
     </Section>

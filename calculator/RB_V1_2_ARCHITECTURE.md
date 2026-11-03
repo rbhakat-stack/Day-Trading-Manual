@@ -730,6 +730,20 @@ Punch-list follow-up (shadow-validation gate):
 - *Allocator.* `ManualPosition.pending` classifies an exposure as PENDING (reserved) instead of POSITION (deployed). Slots, heat and available capital are identical either way.
 - *Shared.* The Opportunity Ranker, score freezing and the Live Alert Queue get the same entries through `reconcileExposure`. The Live Alert Queue exposure note lists each entry, its risk basis and its policy flags.
 
+**Portfolio verification gate (pre-deployment safety gate).**
+- *Last verified broker exposure.* `BrokerExposureSnapshot` is persisted in `rbv1.v12.brokerExposureSnapshot.v1`. It holds the time and ET date of the verified response, its source, the broker-only positions and the broker-only working entries.
+  - While unverified, all of it stays counted, minus anything an active RB record or an open manual position now represents (no double count).
+  - Only a fresh verified response updates or releases it. A close or cancellation is never inferred from missing data.
+  - With no snapshot, the account is reported as unverified, never as empty.
+- *States* (`portfolioVerification`): VERIFIED, LOADING, ERROR, STALE (broker data more than 2 min old, separate from the 5 s / 60 s market-data limits), WRONG_DATE, INCOMPLETE (`openOrders` missing or truncated), UNREADABLE, and OFF. OFF covers broker sync disabled on the server, automation off, or no token in this browser; that is RB-records-only mode, labelled "not independently verified" and not gated.
+- *Execution gate.* When broker sync is enabled and the portfolio is not verified, `deriveLifecycle` withholds a still-valid ticket with `NO TICKET — PORTFOLIO UNVERIFIED`.
+  - This happens in the single ticket branch, after the user lifecycle and every terminal, expired, chased, late and cutoff state, so nothing revives.
+  - The v1.1 decision, ticket numbers, scores, the v1.2 shadow evaluation and frozen snapshots are byte-identical to the verified evaluation.
+  - `portfolioGate` carries the same reason to the v1.2 shadow display.
+  - The Opportunity Ranker shows TRADE NOW as withheld, at the display layer only (`gateRankingDisplay`); the ranking is unchanged.
+  - When fresh verified data returns, only alerts that are still valid become READY again.
+- *Warning.* `PortfolioVerificationBanner` shows the same message on the Live Alert Queue and the Opportunity Ranker. It names the state, the last verified time, whether earlier verified exposure is still reserved, and that new tickets are withheld. Nothing is shown when the portfolio is verified.
+
 *Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.

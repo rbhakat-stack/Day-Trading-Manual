@@ -16,6 +16,7 @@ import type { QueueRow } from '../liveQueue';
 import type { AlertTimeSnapshot } from './alertTimeSnapshot';
 import type { AutoAlertRecordV12 } from '../v12/audit';
 import type { TerminalEvent } from './terminalEvents';
+import { PORTFOLIO_UNVERIFIED } from './portfolioExposure';
 
 export type ExecutionState =
   | 'SCORING'
@@ -63,6 +64,10 @@ export interface Lifecycle {
    * the ticket must NOT be executed. The v1.1 output itself is unchanged.
    */
   entryWindowClosed: boolean;
+  /** The RB v1.1 ticket is withheld because broker sync is enabled and the portfolio is not verified (flag only). */
+  portfolioUnverified: boolean;
+  /** Portfolio verification gate in force for this evaluation (null = none); also applies to v1.2 shadow actionability. */
+  portfolioGate: string | null;
   /** Terminal SETUP FAILED latched from an observed stop breach (null = none). Any RB v1.1 ticket is withheld. */
   setupFailed: { observedAtMs: number; price: number; stop: number } | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
@@ -186,7 +191,7 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
   return null;
 }
 
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null): Lifecycle {
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null): Lifecycle {
   const d = row.decision;
   const st = row.candidate?.status;
   const action = row.live?.action ?? null;
@@ -203,7 +208,7 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
     : frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const frozenScore: ScoreDisplay = frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const L = (executionState: ExecutionState, finalActionability: FinalActionability, reason: string, terminal = false, score = liveScore): Lifecycle =>
-    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, setupFailed: null, frozenV12, gates, score, eod });
+    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, portfolioUnverified: false, portfolioGate, setupFailed: null, frozenV12, gates, score, eod });
 
   // User-controlled lifecycle always wins: an order or position is governed by the broker, not by the alert clock.
   if (st === 'PENDING') return L('SUBMITTED', 'NO TICKET', 'Order marked submitted — manage it at the broker.', false, frozenScore);
@@ -240,6 +245,9 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
   if (d.decision === 'SKIP') return L('BELOW THRESHOLD', 'NO TRADE', d.detail, true);
   if (d.ticket) {
     if (eod.noNewEntries) return { ...L('ACTIVE', 'NO TICKET', ENTRY_WINDOW_CLOSED), entryWindowClosed: true };
+    // Broker sync enabled but the portfolio is not verified: the capacity behind this ticket is unconfirmed → withheld.
+    // Reached only by a still-valid, unsubmitted setup (terminal, expired, chased, late and user states returned above).
+    if (portfolioGate) return { ...L('ACTIVE', 'NO TICKET', `${PORTFOLIO_UNVERIFIED} — ${portfolioGate}. The ticket returns only when fresh broker data verifies the portfolio.`), portfolioUnverified: true };
     return L('ACTIVE', 'READY', d.detail);
   }
   if (gates.portfolio.startsWith('BLOCKED') || gates.capital.startsWith('BLOCKED')) return L('PORTFOLIO BLOCKED', 'NO TICKET', gates.portfolio.startsWith('BLOCKED') ? gates.portfolio : gates.capital);

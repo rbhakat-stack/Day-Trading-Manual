@@ -26,8 +26,8 @@ export const AUTO_KEYS = {
   terminalEvents: 'rbv1.v12.terminalEvents.v1',
   /** Broker-confirmed released portfolio reservations (write-once per candidate id). */
   releasedExposure: 'rbv1.v12.releasedExposure.v1',
-  /** Broker-only working entries from the last VERIFIED broker response (replaced only by a verified response). */
-  brokerEntries: 'rbv1.v12.brokerWorkingEntries.v1',
+  /** Last VERIFIED broker-only exposure (positions + working entries; replaced only by a verified response). */
+  brokerSnapshot: 'rbv1.v12.brokerExposureSnapshot.v1',
   /** CR-12 — Alpaca order JSON pasted by the user for read-only reconciliation (no broker connection). */
   brokerOrders: 'rbv1.v12.brokerOrders.v1',
 } as const;

@@ -37,6 +37,11 @@
  *   • risk = quantity × distance to the verified bracket stop leg, else the per-trade risk limit (labelled estimate).
  * The last VERIFIED list is kept while broker data is unavailable or stale: a cancellation is only accepted from a
  * fresh verified response, never inferred from missing data.
+ *
+ * Last verified broker exposure (BrokerExposureSnapshot): broker-only positions + broker-only working entries from the
+ * last verified response. While unverified they stay counted (minus anything an active RB record now represents); only
+ * a fresh verified response updates or releases them. `portfolioVerification` names the feed state; when broker sync is
+ * enabled and the portfolio is not verified, the execution layer withholds new tickets (NO TICKET — PORTFOLIO UNVERIFIED).
  */
 import type { Candidate, LifecycleStatus, ManualPosition } from '../../ranker/opportunityTypes';
 import { etParts } from '../etTime';
@@ -58,6 +63,27 @@ export interface BrokerExposureInput {
 /** A release record. `fp` binds it to one execution of the candidate; `orderId` is the broker order behind it, if known. */
 export interface ReleasedExposure { id: string; ticker: string; status: string; reason: string; atMs: number; fp: string; orderId?: string | null }
 export type ReleasedExposureMap = Record<string, ReleasedExposure>;
+
+/** An open broker position no active RB record represents (counted conservatively at the per-trade risk limit). */
+export interface BrokerOnlyPosition {
+  ticker: string;
+  direction: 'LONG' | 'SHORT';
+  qty: number;
+  positionValue: number;
+  plannedRisk: number;
+  entry: number;
+}
+
+/** The broker-only exposure of the last VERIFIED broker response (persisted; replaced only by a verified response). */
+export interface BrokerExposureSnapshot {
+  /** When that verified response was received, and its ET date. */
+  atMs: number;
+  date: string;
+  source: 'rb-broker · Alpaca PAPER · read-only';
+  verification: 'VERIFIED';
+  positions: BrokerOnlyPosition[];
+  entries: BrokerWorkingEntry[];
+}
 
 /** A broker working entry no active RB record represents (orders aggregated per ticker + direction). */
 export interface BrokerWorkingEntry {
@@ -90,7 +116,9 @@ export interface ExposureAdjustment {
   added: { ticker: string; qty: number; plannedRisk: number }[];
   /** Broker-only working entries reserved as PENDING exposure. */
   entries: BrokerWorkingEntry[];
-  /** VERIFIED = from this response · LAST_KNOWN = the last verified list, kept while data is unverified · NONE. */
+  /** Broker-only open positions counted (verified now, or kept from the last verified response). */
+  brokerPositions: BrokerOnlyPosition[];
+  /** VERIFIED = from this response · LAST_KNOWN = the last verified broker-only exposure, kept while unverified · NONE. */
   entriesSource: 'VERIFIED' | 'LAST_KNOWN' | 'NONE';
 }
 
@@ -215,15 +243,29 @@ function entryExposure(e: BrokerWorkingEntry, classify: (s: string) => Classific
 
 const T = (t: string) => t.toUpperCase();
 
-export function reconcileExposure(candidates: Candidate[], positions: ManualPosition[], broker: BrokerExposureInput | null | undefined, opts: { classify: (s: string) => Classification | null; conservativeRisk: number; latched?: ReleasedExposureMap; now?: number; knownEntries?: BrokerWorkingEntry[]; maxPositionValue?: number }): ExposureAdjustment {
-  // Unverified — or open orders across all days unknown / unreadable: no releases at all (conservative), nothing added;
-  // broker-only working entries from the last verified response stay reserved (a cancellation is never inferred).
-  const known = opts.knownEntries ?? [];
+function positionExposure(p: BrokerOnlyPosition, classify: (s: string) => Classification | null): ManualPosition {
+  const cls = classify(p.ticker);
+  return { id: `broker-position-${p.ticker}`, ticker: p.ticker, direction: p.direction, sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: p.positionValue, plannedRisk: p.plannedRisk, entry: p.entry, stop: 0, target: 0, status: 'OPEN' };
+}
+
+/** A positions list the reconciliation can read (every row has a symbol). */
+const readablePositions = (ps: unknown): ps is BrokerExposureInput['positions'] => Array.isArray(ps) && ps.every((p) => !!p && typeof (p as { symbol?: unknown }).symbol === 'string');
+
+export function reconcileExposure(candidates: Candidate[], positions: ManualPosition[], broker: BrokerExposureInput | null | undefined, opts: { classify: (s: string) => Classification | null; conservativeRisk: number; latched?: ReleasedExposureMap; now?: number; knownEntries?: BrokerWorkingEntry[]; knownPositions?: BrokerOnlyPosition[]; maxPositionValue?: number }): ExposureAdjustment {
+  // Unverified — or open orders across all days unknown / unreadable: no releases at all (conservative). The broker-only
+  // exposure of the last verified response stays counted (a close or cancellation is never inferred from missing data),
+  // except what an active RB record now represents (no double count).
+  const active = (c: Candidate) => !c.archived && ACTIVE.includes(c.status);
+  const repTickers = new Set([...candidates.filter(active).map((c) => T(c.ticker)), ...positions.filter((p) => p.status === 'OPEN').map((p) => T(p.ticker))]);
+  const keptPositions = (opts.knownPositions ?? []).filter((p) => !repTickers.has(T(p.ticker)));
+  const keptEntries = (opts.knownEntries ?? []).filter((e) => !(e.orderIds.length === 1 && e.qty > 0
+    && candidates.some((c) => active(c) && T(c.ticker) === e.ticker && c.direction === e.direction && near(e.notional / e.qty, c.entry))));
+  const kept = [...keptPositions.map((p) => positionExposure(p, opts.classify)), ...keptEntries.map((e) => entryExposure(e, opts.classify))];
   const unverified: ExposureAdjustment = {
-    candidates, exclude: new Set(), positions: known.length ? [...positions, ...known.map((e) => entryExposure(e, opts.classify))] : positions,
-    verified: false, released: [], voided: [], added: [], entries: known, entriesSource: known.length ? 'LAST_KNOWN' : 'NONE',
+    candidates, exclude: new Set(), positions: kept.length ? [...positions, ...kept] : positions,
+    verified: false, released: [], voided: [], added: [], entries: keptEntries, brokerPositions: keptPositions, entriesSource: kept.length ? 'LAST_KNOWN' : 'NONE',
   };
-  if (!broker?.verified || !Array.isArray(broker.openOrders)) return unverified;
+  if (!broker?.verified || !Array.isArray(broker.openOrders) || !Array.isArray(broker.orders) || !readablePositions(broker.positions)) return unverified;
   const open = brokerOrdersFrom(broker.openOrders);
   if (open.errors.length) return unverified;
   const latched = opts.latched ?? {};
@@ -237,7 +279,6 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
   // Working = any open order from any day (incl. bracket legs), plus any working order / leg in the fetched lists.
   const working = new Set([...withLegs(open.orders), ...withLegs(orders).filter((o) => WORKING.includes(mapBrokerStatus(o.status)))].map((o) => o.symbol.toUpperCase()));
   const flat = (t: string) => !held.has(T(t)) && !working.has(T(t));
-  const active = (c: Candidate) => !c.archived && ACTIVE.includes(c.status);
 
   const released: ReleasedExposure[] = [];
   const voided: ExposureAdjustment['voided'] = [];
@@ -292,6 +333,7 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
     ...positions.filter((p) => p.status === 'OPEN').map((p) => T(p.ticker)),
   ]);
   const added: ExposureAdjustment['added'] = [];
+  const brokerPositions: BrokerOnlyPosition[] = [];
   const extra: ManualPosition[] = [];
   for (const [t, qty] of held) {
     if (represented.has(t)) continue;
@@ -300,10 +342,68 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
     const value = Math.abs(num(p.market_value)) || Math.abs(qty) * num(p.avg_entry_price);
     extra.push({ id: `broker-position-${t}`, ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: Math.round(value * 100) / 100, plannedRisk: opts.conservativeRisk, entry: num(p.avg_entry_price), stop: 0, target: 0, status: 'OPEN' });
     added.push({ ticker: t, qty, plannedRisk: opts.conservativeRisk });
+    brokerPositions.push({ ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', qty, positionValue: Math.round(value * 100) / 100, plannedRisk: opts.conservativeRisk, entry: num(p.avg_entry_price) });
   }
   const entries = brokerWorkingEntries(open.orders, orders, held, keep.filter(active), { conservativeRisk: opts.conservativeRisk, maxPositionValue: opts.maxPositionValue });
   for (const e of entries) extra.push(entryExposure(e, opts.classify));
-  return { candidates: keep, exclude: out, positions: extra.length ? [...positions, ...extra] : positions, verified: true, released, voided, added, entries, entriesSource: 'VERIFIED' };
+  return { candidates: keep, exclude: out, positions: extra.length ? [...positions, ...extra] : positions, verified: true, released, voided, added, entries, brokerPositions, entriesSource: 'VERIFIED' };
+}
+
+/** The persisted last verified broker-only exposure, from a VERIFIED evaluation (null otherwise). */
+export function brokerExposureSnapshot(x: ExposureAdjustment, atMs: number, date: string): BrokerExposureSnapshot | null {
+  if (x.entriesSource !== 'VERIFIED') return null;
+  return { atMs, date, source: 'rb-broker · Alpaca PAPER · read-only', verification: 'VERIFIED', positions: x.brokerPositions, entries: x.entries };
+}
+
+/* ───────────────────────── portfolio verification (feed state → execution gate + warning) ───────────────────────── */
+
+export type VerificationState = 'VERIFIED' | 'LOADING' | 'ERROR' | 'STALE' | 'WRONG_DATE' | 'INCOMPLETE' | 'UNREADABLE' | 'OFF';
+
+export interface PortfolioVerification {
+  state: VerificationState;
+  /** A fresh, complete, readable broker response for the current ET date. */
+  verified: boolean;
+  /** Broker sync is enabled and the portfolio is not verified → new actionable tickets are withheld. */
+  gated: boolean;
+  /** Short reason (the warning distinguishes loading / error / stale / incomplete / disabled). */
+  reason: string;
+  /** Last verified broker response (feed, else the persisted snapshot); null = none in this browser. */
+  lastVerifiedMs: number | null;
+  /** The broker-only exposure still reserved from the last verified response (none = not assumed empty). */
+  keptFromSnapshot: boolean;
+  message: string;
+}
+
+export const PORTFOLIO_UNVERIFIED = 'NO TICKET — PORTFOLIO UNVERIFIED';
+
+/** Broker sync not running in this browser (server OFF, or automation / token not configured): RB-records-only mode. */
+export function brokerSyncOff(reason: string): PortfolioVerification {
+  return { state: 'OFF', verified: false, gated: false, reason, lastVerifiedMs: null, keptFromSnapshot: false, message: `BROKER SYNC OFF — ${reason}. Portfolio capacity comes from RB records only; broker exposure is not independently verified.` };
+}
+
+export function portfolioVerification(
+  feed: { status: string; loadedDate?: string | null; lastOkMs: number | null; error?: string | null; orders?: unknown; positions?: unknown; openOrders?: unknown } | null | undefined,
+  date: string, now: number, snapshot: BrokerExposureSnapshot | null = null, maxAgeMs = 120_000,
+): PortfolioVerification {
+  const last = feed?.lastOkMs ?? snapshot?.atMs ?? null;
+  const kept = !!snapshot && (snapshot.positions.length > 0 || snapshot.entries.length > 0);
+  const at = (ms: number) => `${etParts(ms).hhmmss} ET${etParts(ms).date !== date ? ` on ${etParts(ms).date}` : ''}`;
+  const out = (state: VerificationState, reason: string): PortfolioVerification => {
+    if (state === 'VERIFIED') return { state, verified: true, gated: false, reason, lastVerifiedMs: feed?.lastOkMs ?? null, keptFromSnapshot: false, message: `Portfolio verified with Alpaca PAPER (read-only) at ${at(feed!.lastOkMs!)}.` };
+    if (state === 'OFF') return brokerSyncOff(reason);
+    const lastTxt = last !== null ? `Last verified at ${at(last)}.` : 'No verified broker snapshot in this browser — the broker account is NOT assumed empty.';
+    const keptTxt = kept ? ' Previously verified broker exposure remains reserved.' : '';
+    return { state, verified: false, gated: true, reason, lastVerifiedMs: last, keptFromSnapshot: kept, message: `PORTFOLIO VERIFICATION UNAVAILABLE — ${reason}. ${lastTxt}${keptTxt} New tickets are withheld.` };
+  };
+  if (!feed) return out('LOADING', 'Broker feed loading — no broker response yet');
+  if (feed.status === 'OFF') return out('OFF', 'Broker sync is disabled on the server');
+  if (feed.status === 'ERROR') return out('ERROR', `Broker feed error${feed.error ? ` (${feed.error})` : ''}`);
+  if (feed.status !== 'LIVE' || feed.lastOkMs === null) return out('LOADING', 'Broker feed loading — no broker response yet');
+  if (feed.loadedDate !== date) return out('WRONG_DATE', `Broker data is for ${feed.loadedDate ?? 'an unknown date'}, not ${date}`);
+  if (now - feed.lastOkMs > maxAgeMs) return out('STALE', `Broker data is stale (${Math.round((now - feed.lastOkMs) / 1000)} s old; limit ${maxAgeMs / 1000} s)`);
+  if (!Array.isArray(feed.openOrders)) return out('INCOMPLETE', 'Incomplete open-order response (open orders missing or truncated)');
+  if (!Array.isArray(feed.orders) || !readablePositions(feed.positions) || brokerOrdersFrom(feed.openOrders).errors.length || brokerOrdersFrom(feed.orders).errors.length) return out('UNREADABLE', 'Broker response unreadable');
+  return out('VERIFIED', 'Verified');
 }
 
 /** Write-once latch of releases (existing records never change; same object returned when nothing is new). A record
