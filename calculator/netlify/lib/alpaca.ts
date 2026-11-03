@@ -170,10 +170,15 @@ export function assertReadOnlyBrokerRequest(url: string, method: string): void {
   for (const k of u.searchParams.keys()) if (!allowed.includes(k)) throw new Error(`Blocked: query parameter "${k}" is not allowed.`);
 }
 
+/** Page size of the open-order list; a full page may be truncated (the caller treats it as unknown). */
+export const OPEN_ORDERS_LIMIT = 500;
+
 export interface BrokerReadClient {
   readonly host: string;
   /** Raw Alpaca order objects (with bracket legs when nested=true), oldest first. */
   listOrders(o: { afterIso: string; untilIso?: string; limit?: number }): Promise<unknown[]>;
+  /** Raw Alpaca order objects that are open NOW, whatever day they were submitted (legs as separate rows). */
+  listOpenOrders(): Promise<unknown[]>;
   /** Raw Alpaca position objects. */
   listPositions(): Promise<unknown[]>;
 }
@@ -204,6 +209,7 @@ export function createAlpacaBrokerRead(o: { keyId: string; secretKey: string; ba
   return {
     host: new URL(base).hostname,
     listOrders: ({ afterIso, untilIso, limit = 500 }) => read('/v2/orders', { status: 'all', nested: 'true', direction: 'asc', limit: String(Math.min(500, Math.max(1, limit))), after: afterIso, ...(untilIso ? { until: untilIso } : {}) }),
+    listOpenOrders: () => read('/v2/orders', { status: 'open', nested: 'false', direction: 'asc', limit: String(OPEN_ORDERS_LIMIT) }),
     listPositions: () => read('/v2/positions', {}),
   };
 }

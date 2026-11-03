@@ -203,6 +203,8 @@ export interface BrokerFeed {
   error: string | null;
   /** ET date whose orders/positions were last loaded successfully (null = not loaded yet). */
   loadedDate?: string | null;
+  /** Orders open now, whatever day they were submitted; null = not returned by the server (unknown). */
+  openOrders?: unknown[] | null;
 }
 
 /** CR-12 — polls the READ-ONLY rb-broker endpoint (paper account orders + positions). It never sends an order. */
@@ -213,8 +215,8 @@ export function useBrokerFeed(enabled: boolean, token: string, date: string, pol
     let stop = false;
     const tick = async () => {
       try {
-        const j = await call<{ orders: unknown[]; positions: BrokerPosition[] }>(`rb-broker?date=${date}`, token);
-        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, lastOkMs: Date.now(), error: null, loadedDate: date });
+        const j = await call<{ orders: unknown[]; positions: BrokerPosition[]; openOrders?: unknown[] | null }>(`rb-broker?date=${date}`, token);
+        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, lastOkMs: Date.now(), error: null, loadedDate: date, openOrders: Array.isArray(j.openOrders) ? j.openOrders : null });
       } catch (e) {
         const msg = (e as Error).message;
         if (!stop) setS((x) => ({ ...x, status: /HTTP 503/.test(msg) ? 'OFF' : 'ERROR', error: msg }));
@@ -227,6 +229,39 @@ export function useBrokerFeed(enabled: boolean, token: string, date: string, pol
       clearInterval(h);
     };
   }, [enabled, token, date, pollMs]);
+  return s;
+}
+
+/**
+ * Cross-day exposure — the READ-ONLY rb-broker order lists for the entry days of earlier-dated active candidates.
+ * `dates` is already bounded (historyDatesFor). One request per date per poll, sequential; a failed date is marked
+ * ERROR (its last orders are no longer evidence) and is retried on the next poll. It never sends an order.
+ */
+export function useBrokerHistory(enabled: boolean, token: string, dates: string[], pollMs = 60_000): Record<string, BrokerFeed> {
+  const [s, setS] = useState<Record<string, BrokerFeed>>({});
+  const key = dates.join(',');
+  useEffect(() => {
+    if (!enabled || !token || !key) return;
+    let stop = false;
+    const tick = async () => {
+      for (const date of key.split(',')) {
+        if (stop) return;
+        try {
+          const j = await call<{ orders: unknown[] }>(`rb-broker?date=${date}`, token);
+          if (!stop) setS((x) => ({ ...x, [date]: { status: 'LIVE', orders: j.orders, positions: [], lastOkMs: Date.now(), error: null, loadedDate: date } }));
+        } catch (e) {
+          const msg = (e as Error).message;
+          if (!stop) setS((x) => ({ ...x, [date]: { ...(x[date] ?? { orders: [], positions: [], lastOkMs: null, loadedDate: null }), status: /HTTP 503/.test(msg) ? 'OFF' : 'ERROR', error: msg } }));
+        }
+      }
+    };
+    void tick();
+    const h = setInterval(tick, Math.max(30_000, pollMs));
+    return () => {
+      stop = true;
+      clearInterval(h);
+    };
+  }, [enabled, token, key, pollMs]);
   return s;
 }
 

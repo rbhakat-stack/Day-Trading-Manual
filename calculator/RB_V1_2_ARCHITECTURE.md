@@ -703,6 +703,20 @@ Punch-list follow-up (shadow-validation gate):
 
   `rankCandidates` gained an optional `exposureExclude` set. Excluded candidates are still ranked, listed and scored; only their portfolio exposure is omitted. Without the set the ranker is unchanged (golden tests).
 
+**Cross-day exposure (FIS, 3 Nov).**
+- *Defect.* The FIS 2 Nov candidate was still PENDING; it was never marked FILLED. Its entry order (`7d5f0b6f`, filled 2 Nov) was invisible, because the app read only the current ET day's orders. Alpaca's `after`/`until` filters by submission time. The PENDING release could therefore never identify the order, and the candidate kept 1 slot, $19,979.96 reserved and $99.80 heat.
+
+  The same filter hid open orders submitted on earlier days (GTC entries, overnight bracket legs) from the "flat" check.
+- *rb-broker (still GET-only).* The response adds `openOrders`: every order open now, whatever day it was submitted. It comes from `GET /v2/orders?status=open&nested=false`, so bracket legs are separate rows. `openOrders` is `null` (unknown) when a full page of 500 is returned. A failed open-order read fails the whole response.
+- *Client.* `historyDatesFor` selects the ET dates of active PENDING/FILLED candidates dated before today: at most 5 dates within 10 calendar days. `useBrokerHistory` polls `rb-broker?date=<d>` for each date, sequentially, every 60 s. `verifiedHistory` keeps only responses that are LIVE, for that date and under 2 minutes old.
+- *Engine.*
+  - "Flat" means no position and no open order from any day, plus no working order or leg in the fetched lists.
+  - `openOrders` missing, `null` or unreadable releases nothing.
+  - Entry-order identification is unchanged (side, ET day, at or after the alert, entry within 2¢, unique order, unique claimant). It now searches today's orders together with the verified entry-day lists.
+  - A new execution stamps `executionStartedMs`. An order submitted more than 15 minutes before it is never evidence for that execution, so a candidate reused on a later day cannot be released by its old order.
+  - Beyond the lookback, or with no verified entry-day list, the candidate keeps reserving.
+- *Not changed.* Scoring, thresholds, Entry/Stop/Target/Qty, limits, qualification, frozen snapshots, terminal SETUP FAILED, freshness, Journal/Dashboard sync (still reads today's `orders` only) and the CR-15 Journal rows.
+
 *Original diagnosis:*
 - **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
 - **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.

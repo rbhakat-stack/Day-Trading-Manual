@@ -24,8 +24,8 @@ const cand = (o: Partial<Candidate>): Candidate => ({
   orderType: 'BUY STOP', calcAction: 'BUY_STOP', calcReady: true, chaseDistanceAtr: 0, minutesSinceAlert: 1, scored: true, status: 'FILLED', initialScore: null, entryScore: null, actualFill: 40.05, exitPrice: null,
   notes: 'keep', archived: false, keptAgainst: [], inputs: { rvol: 2, rsi: 60, vwap: 40, ema9: 40, ema20: 39.9, close15m: 40, ema20_15m: 39.9, sector: 'Financials', industry: 'I-FIS', theme: '' }, ...o,
 } as Candidate);
-const FLAT: BrokerExposureInput = { verified: true, positions: [], orders: [{ id: '505618ca', symbol: 'FIS', side: 'sell', type: 'stop', status: 'filled', qty: '499', filled_qty: '499', filled_avg_price: '39.82', stop_price: '39.84', submitted_at: '2026-11-03T14:34:29Z', legs: [] }] };
-const HELD = (sym: string, qty: string): BrokerExposureInput => ({ verified: true, orders: [], positions: [{ symbol: sym, qty, avg_entry_price: '40', market_value: String(Math.abs(Number(qty)) * 40) }] });
+const FLAT: BrokerExposureInput = { verified: true, openOrders: [], positions: [], orders: [{ id: '505618ca', symbol: 'FIS', side: 'sell', type: 'stop', status: 'filled', qty: '499', filled_qty: '499', filled_avg_price: '39.82', stop_price: '39.84', submitted_at: '2026-11-03T14:34:29Z', legs: [] }] };
+const HELD = (sym: string, qty: string): BrokerExposureInput => ({ verified: true, openOrders: [], orders: [], positions: [{ symbol: sym, qty, avg_entry_price: '40', market_value: String(Math.abs(Number(qty)) * 40) }] });
 const ex = (cs: Candidate[], b: BrokerExposureInput | null, latched?: ReleasedExposureMap, ps: ManualPosition[] = []) => reconcileExposure(cs, ps, b, { ...OPTS, latched, now: Date.parse('2026-11-03T17:30:00Z') });
 const usage = (cs: Candidate[], b: BrokerExposureInput | null, latched?: ReleasedExposureMap, ps: ManualPosition[] = []) => { const x = ex(cs, b, latched, ps); return buildPortfolio(x.positions, x.candidates, RK); };
 const latch = (cs: Candidate[], b: BrokerExposureInput, prev: ReleasedExposureMap = {}) => latchReleases(prev, ex(cs, b, prev).released).map;
@@ -57,10 +57,10 @@ describe('6.1 safe release lifecycle', () => {
   });
   it('(2) PENDING → canceled → PENDING with the same candidate: new reservation counted', () => {
     const p0 = gm();
-    const L = latch([p0], { verified: true, orders: [gmOrder({})], positions: [] });
+    const L = latch([p0], { verified: true, openOrders: [], orders: [gmOrder({})], positions: [] });
     expect(L.gm1).toMatchObject({ orderId: 'o1', status: 'PENDING' });
     const again = setStatus(setStatus(p0, 'CANCELED'), 'PENDING');
-    expect(usage([again], { verified: true, orders: [gmOrder({})], positions: [] }, L)).toMatchObject({ slotsUsed: 1, heatCommitted: 55 });
+    expect(usage([again], { verified: true, openOrders: [], orders: [gmOrder({})], positions: [] }, L)).toMatchObject({ slotsUsed: 1, heatCommitted: 55 });
     expect(usage([again], null, L)).toMatchObject({ slotsUsed: 1, heatCommitted: 55 });
   });
   it('(3) same candidate reused with no visible change: new broker exposure in the ticker voids the release', () => {
@@ -71,8 +71,8 @@ describe('6.1 safe release lifecycle', () => {
   });
   it('(4) a new order id after an earlier closed order (same candidate): the reservation returns', () => {
     const p0 = gm();
-    const L = latch([p0], { verified: true, orders: [gmOrder({})], positions: [] });
-    const twoOrders = { verified: true, orders: [gmOrder({}), gmOrder({ id: 'o2', status: 'accepted', submitted_at: '2026-11-03T15:20:00Z' })], positions: [] };
+    const L = latch([p0], { verified: true, openOrders: [], orders: [gmOrder({})], positions: [] });
+    const twoOrders = { verified: true, openOrders: [], orders: [gmOrder({}), gmOrder({ id: 'o2', status: 'accepted', submitted_at: '2026-11-03T15:20:00Z' })], positions: [] };
     expect(usage([p0], twoOrders, L).slotsUsed).toBe(1);
   });
   it('(5) broker unavailable after reuse → counted (no release applies without a verified response)', () => {
@@ -104,18 +104,18 @@ describe('6.1 safe release lifecycle', () => {
     expect(L3.f8.reason).toMatch(/superseded/); // the earlier release is referenced, not lost
   });
   it('(9) partial fills and partial exits keep the full reservation', () => {
-    expect(usage([gm()], { verified: true, orders: [gmOrder({ status: 'partially_filled', filled_qty: '100' })], positions: [{ symbol: 'GM', qty: '100' }] }).heatCommitted).toBe(55);
+    expect(usage([gm()], { verified: true, openOrders: [], orders: [gmOrder({ status: 'partially_filled', filled_qty: '100' })], positions: [{ symbol: 'GM', qty: '100' }] }).heatCommitted).toBe(55);
     expect(usage([cand({})], HELD('FIS', '200')).heatCommitted).toBe(99.8);
   });
   it('(10) unknown / ambiguous lifecycle identity → kept', () => {
-    expect(usage([gm()], { verified: true, orders: [gmOrder({ stop_price: '90.00' })], positions: [] }).slotsUsed).toBe(1);
-    expect(usage([gm()], { verified: true, orders: [gmOrder({ id: 'a' }), gmOrder({ id: 'b' })], positions: [] }).slotsUsed).toBe(1);
-    expect(usage([gm({ id: 'x' }), gm({ id: 'y' })], { verified: true, orders: [gmOrder({})], positions: [] }).slotsUsed).toBe(2);
-    expect(usage([gm()], { verified: true, orders: [], positions: [] }).slotsUsed).toBe(1); // not at the broker yet
+    expect(usage([gm()], { verified: true, openOrders: [], orders: [gmOrder({ stop_price: '90.00' })], positions: [] }).slotsUsed).toBe(1);
+    expect(usage([gm()], { verified: true, openOrders: [], orders: [gmOrder({ id: 'a' }), gmOrder({ id: 'b' })], positions: [] }).slotsUsed).toBe(1);
+    expect(usage([gm({ id: 'x' }), gm({ id: 'y' })], { verified: true, openOrders: [], orders: [gmOrder({})], positions: [] }).slotsUsed).toBe(2);
+    expect(usage([gm()], { verified: true, openOrders: [], orders: [], positions: [] }).slotsUsed).toBe(1); // not at the broker yet
   });
   it('manual positions outside Alpaca and broker-only positions are counted', () => {
     const m: ManualPosition = { id: 'm', ticker: 'XYZ', direction: 'LONG', sector: 'S', industry: 'I', theme: '', positionValue: 1000, plannedRisk: 20, entry: 1, stop: 1, target: 1, status: 'OPEN' };
-    expect(usage([], { verified: true, orders: [], positions: [] }, {}, [m]).slotsUsed).toBe(1);
+    expect(usage([], { verified: true, openOrders: [], orders: [], positions: [] }, {}, [m]).slotsUsed).toBe(1);
     expect(usage([], HELD('NVDA', '10'))).toMatchObject({ slotsUsed: 1, heatCommitted: 250 });
     expect(usage([], HELD('NVDA', '-10')).exposures[0].direction).toBe('SHORT');
   });

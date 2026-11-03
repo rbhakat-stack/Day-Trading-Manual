@@ -1,10 +1,11 @@
 /**
  * GET /.netlify/functions/rb-broker?date=YYYY-MM-DD → READ-ONLY broker facts for the paper account: that ET day's
- * orders (with bracket legs) and the current positions, reduced to the fields RB reconciles. Authenticated with
+ * orders (with bracket legs), every order open now whatever day it was submitted (`openOrders`; null when the list may
+ * be truncated) and the current positions, reduced to the fields RB reconciles. Authenticated with
  * RB_APP_ACCESS_TOKEN; OFF unless RB_BROKER_SYNC_ENABLED=true. GET only — this endpoint cannot change anything.
  */
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
-import type { BrokerReadClient } from '../lib/alpaca';
+import { OPEN_ORDERS_LIMIT, type BrokerReadClient } from '../lib/alpaca';
 import { brokerReadClient, env, json } from '../lib/env';
 import { log } from '../lib/log';
 import { etToEpoch } from '../../src/engine/automation/etTime';
@@ -28,12 +29,18 @@ export async function handleBroker(req: Request, client: BrokerReadClient | null
   const date = new URL(req.url).searchParams.get('date') ?? '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json(400, { error: 'date=YYYY-MM-DD required' });
   try {
-    const [orders, positions] = await Promise.all([
+    const [orders, openOrders, positions] = await Promise.all([
       client.listOrders({ afterIso: new Date(etToEpoch(date, '04:00')).toISOString(), untilIso: new Date(etToEpoch(date, '20:00')).toISOString() }),
+      client.listOpenOrders(),
       client.listPositions(),
     ]);
-    log('broker_read', { orders: orders.length, positions: positions.length });
-    return json(200, { serverTime: new Date().toISOString(), host: client.host, account: 'PAPER', readOnly: true, orders: orders.map(sanitizeOrder), positions: positions.map(sanitizePosition) });
+    log('broker_read', { orders: orders.length, openOrders: openOrders.length, positions: positions.length });
+    return json(200, {
+      serverTime: new Date().toISOString(), host: client.host, account: 'PAPER', readOnly: true,
+      orders: orders.map(sanitizeOrder),
+      openOrders: openOrders.length >= OPEN_ORDERS_LIMIT ? null : openOrders.map(sanitizeOrder),
+      positions: positions.map(sanitizePosition),
+    });
   } catch (e) {
     log('broker_read_failed', { error: (e as Error).message });
     return json(502, { error: (e as Error).message });

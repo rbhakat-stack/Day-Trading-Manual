@@ -26,7 +26,7 @@ const cand = (o: Partial<Candidate>): Candidate => ({
 } as Candidate);
 /** Alpaca facts exactly as rb-broker returned them on 2026-11-03: no positions; the FIS stop leg filled at 39.82. */
 const NOV3: BrokerExposureInput = {
-  verified: true, positions: [],
+  verified: true, openOrders: [], positions: [],
   orders: [{ id: '505618ca-4522-47ef-8765-977b4808d7bf', symbol: 'FIS', side: 'sell', type: 'stop', order_class: 'bracket', status: 'filled', qty: '499', filled_qty: '499', filled_avg_price: '39.82', stop_price: '39.84', submitted_at: '2026-11-03T14:34:29Z', filled_at: '2026-11-03T14:35:01Z', legs: [] }],
 };
 const pf = (cs: Candidate[], ps: ManualPosition[]) => buildPortfolio(ps, cs, RK);
@@ -56,49 +56,49 @@ describe('FIS overnight protective stop (2026-11-02 entry, 2026-11-03 stop fill)
 
 describe('verified releases / keeps', () => {
   it('open broker position → FILLED candidate keeps its slot and heat (counted once, not twice)', () => {
-    const { p, x } = apply([cand({})], [], { verified: true, orders: [], positions: [{ symbol: 'FIS', qty: '499', avg_entry_price: '40.05', market_value: '20000' }] });
+    const { p, x } = apply([cand({})], [], { verified: true, openOrders: [], orders: [], positions: [{ symbol: 'FIS', qty: '499', avg_entry_price: '40.05', market_value: '20000' }] });
     expect([p.slotsUsed, p.heatCommitted, x.added]).toEqual([1, 99.8, []]);
   });
   it('pending entry not yet at the broker → keeps its reservation', () => {
-    const { p } = apply([pendingGM()], [], { verified: true, orders: [], positions: [] });
+    const { p } = apply([pendingGM()], [], { verified: true, openOrders: [], orders: [], positions: [] });
     expect([p.slotsUsed, p.heatCommitted]).toEqual([1, 55.75]);
   });
   it('canceled / expired / rejected entry without fill → released', () => {
     for (const status of ['canceled', 'expired', 'rejected']) {
-      const { p, x } = apply([pendingGM()], [], { verified: true, orders: [entryOrder({ status })], positions: [] });
+      const { p, x } = apply([pendingGM()], [], { verified: true, openOrders: [], orders: [entryOrder({ status })], positions: [] });
       expect([p.slotsUsed, x.released.length]).toEqual([0, 1]);
     }
   });
   it('partially filled entry (working order, partial position) → kept, at full planned risk', () => {
-    const { p } = apply([pendingGM()], [], { verified: true, orders: [entryOrder({ status: 'partially_filled', filled_qty: '100', filled_avg_price: '89.48' })], positions: [{ symbol: 'GM', qty: '100' }] });
+    const { p } = apply([pendingGM()], [], { verified: true, openOrders: [], orders: [entryOrder({ status: 'partially_filled', filled_qty: '100', filled_avg_price: '89.48' })], positions: [{ symbol: 'GM', qty: '100' }] });
     expect([p.slotsUsed, p.heatCommitted]).toEqual([1, 55.75]);
   });
   it('partial exit (position remains) → kept at full planned risk', () => {
-    const { p } = apply([cand({})], [], { verified: true, orders: [], positions: [{ symbol: 'FIS', qty: '200' }] });
+    const { p } = apply([cand({})], [], { verified: true, openOrders: [], orders: [], positions: [{ symbol: 'FIS', qty: '200' }] });
     expect([p.slotsUsed, p.heatCommitted]).toEqual([1, 99.8]);
   });
   it('a working order in the ticker (e.g. a protective leg or new entry) → not treated as flat', () => {
-    const { p } = apply([cand({})], [], { verified: true, orders: [{ id: 'w', symbol: 'FIS', side: 'sell', type: 'stop', status: 'held', qty: '499', filled_qty: '0', legs: [] }], positions: [] });
+    const { p } = apply([cand({})], [], { verified: true, openOrders: [], orders: [{ id: 'w', symbol: 'FIS', side: 'sell', type: 'stop', status: 'held', qty: '499', filled_qty: '0', legs: [] }], positions: [] });
     expect(p.slotsUsed).toBe(1);
   });
   it('PENDING entry that filled and is now flat (same-day round trip) → released', () => {
-    const { x } = apply([pendingGM()], [], { verified: true, orders: [entryOrder({ status: 'filled', filled_qty: '223', filled_avg_price: '89.49' })], positions: [] });
+    const { x } = apply([pendingGM()], [], { verified: true, openOrders: [], orders: [entryOrder({ status: 'filled', filled_qty: '223', filled_avg_price: '89.49' })], positions: [] });
     expect(x.released[0].reason).toMatch(/filled and the position is closed/);
   });
   it('missing or ambiguous order linkage → PENDING kept (never released by ticker alone)', () => {
     const other = entryOrder({ status: 'canceled', stop_price: '90.00' }); // different price → not this candidate
-    expect(apply([pendingGM()], [], { verified: true, orders: [other], positions: [] }).p.slotsUsed).toBe(1);
+    expect(apply([pendingGM()], [], { verified: true, openOrders: [], orders: [other], positions: [] }).p.slotsUsed).toBe(1);
     const two = [entryOrder({ id: 'a', status: 'canceled' }), entryOrder({ id: 'b', status: 'canceled' })];
-    expect(apply([pendingGM()], [], { verified: true, orders: two, positions: [] }).p.slotsUsed).toBe(1);
+    expect(apply([pendingGM()], [], { verified: true, openOrders: [], orders: two, positions: [] }).p.slotsUsed).toBe(1);
     const twin = [pendingGM(), pendingGM()]; // one order claimed by two candidates
-    expect(apply(twin, [], { verified: true, orders: [entryOrder({ status: 'canceled' })], positions: [] }).p.slotsUsed).toBe(2);
+    expect(apply(twin, [], { verified: true, openOrders: [], orders: [entryOrder({ status: 'canceled' })], positions: [] }).p.slotsUsed).toBe(2);
   });
   it('manual position not represented in Alpaca → still counted (may be held elsewhere)', () => {
     const manual: ManualPosition = { id: 'm', ticker: 'XYZ', direction: 'LONG', sector: 'S', industry: 'I', theme: '', positionValue: 5000, plannedRisk: 50, entry: 10, stop: 9, target: 12, status: 'OPEN' };
-    expect(apply([], [manual], { verified: true, orders: [], positions: [] }).p).toMatchObject({ slotsUsed: 1, heatCommitted: 50 });
+    expect(apply([], [manual], { verified: true, openOrders: [], orders: [], positions: [] }).p).toMatchObject({ slotsUsed: 1, heatCommitted: 50 });
   });
   it('open broker position with no RB record → added conservatively (slot, value, $250 risk)', () => {
-    const { p, x } = apply([], [], { verified: true, orders: [], positions: [{ symbol: 'NVDA', qty: '10', avg_entry_price: '200', market_value: '2050' }] });
+    const { p, x } = apply([], [], { verified: true, openOrders: [], orders: [], positions: [{ symbol: 'NVDA', qty: '10', avg_entry_price: '200', market_value: '2050' }] });
     expect(x.added).toEqual([{ ticker: 'NVDA', qty: 10, plannedRisk: RISK }]);
     expect(p).toMatchObject({ slotsUsed: 1, heatCommitted: RISK, deployed: 2050 });
   });
@@ -134,7 +134,7 @@ describe('latched releases (reload, outage, new trade in the same ticker)', () =
   });
   it('genuine new FIS trade later: the new position counts once, the closed one stays released', () => {
     const fresh = cand({ id: 'new-fis', date: '2026-11-04', alertMs: Date.parse('2026-11-04T15:00:00Z'), plannedRisk: 80 });
-    const { p, x } = apply([old, fresh], [], { verified: true, orders: [], positions: [{ symbol: 'FIS', qty: '400' }] }, latched);
+    const { p, x } = apply([old, fresh], [], { verified: true, openOrders: [], orders: [], positions: [{ symbol: 'FIS', qty: '400' }] }, latched);
     expect([p.slotsUsed, p.heatCommitted, x.added]).toEqual([1, 80, []]);
   });
 });

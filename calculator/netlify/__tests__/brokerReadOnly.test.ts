@@ -53,13 +53,17 @@ describe('broker guard: every mutation and every other target is impossible', ()
 });
 
 describe('broker client: every network call is a body-less GET to an allowed URL', () => {
-  it('listOrders / listPositions', async () => {
+  it('listOrders / listOpenOrders / listPositions', async () => {
     const fetchImpl = vi.fn(async () => ok([{ id: 'o1' }]));
     const c = createAlpacaBrokerRead({ keyId: 'k', secretKey: 's', fetchImpl: fetchImpl as never });
-    expect(Object.keys(c).sort()).toEqual(['host', 'listOrders', 'listPositions']);
+    expect(Object.keys(c).sort()).toEqual(['host', 'listOpenOrders', 'listOrders', 'listPositions']);
     await c.listOrders({ afterIso: '2026-10-30T08:00:00.000Z', untilIso: '2026-10-31T00:00:00.000Z' });
+    await c.listOpenOrders();
     await c.listPositions();
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const openUrl = new URL((fetchImpl.mock.calls as unknown as [string][])[1][0]);
+    expect(openUrl.pathname).toBe('/v2/orders');
+    expect(Object.fromEntries(openUrl.searchParams)).toEqual({ status: 'open', nested: 'false', direction: 'asc', limit: '500' });
     for (const [url, init] of fetchImpl.mock.calls as unknown as [string, RequestInit][]) {
       expect(init.method).toBe('GET');
       expect(init.body).toBeUndefined();
@@ -91,6 +95,7 @@ describe('rb-broker endpoint', () => {
   const client: BrokerReadClient = {
     host: 'paper-api.alpaca.markets',
     listOrders: async () => [{ id: 'o1', symbol: 'GM', side: 'buy', status: 'filled', filled_qty: '10', account_id: 'SECRET-ACCOUNT', legs: [{ id: 'l1', symbol: 'GM', side: 'sell', status: 'held', extra: 'x' }] }],
+    listOpenOrders: async () => [{ id: 'g1', symbol: 'FIS', side: 'buy', status: 'new', submitted_at: '2026-10-28T15:00:00Z', account_id: 'SECRET-ACCOUNT', legs: null }],
     listPositions: async () => [{ symbol: 'GM', qty: '10', avg_entry_price: '85.5', account_number: 'PA123' }],
   };
   const req = (method = 'GET', auth = 'Bearer tok', q = '?date=2026-10-30') => new Request(`https://x/.netlify/functions/rb-broker${q}`, { method, headers: { authorization: auth } });
@@ -106,5 +111,17 @@ describe('rb-broker endpoint', () => {
     expect(j).toMatchObject({ account: 'PAPER', readOnly: true, orders: [{ id: 'o1', symbol: 'GM', legs: [{ id: 'l1' }] }], positions: [{ symbol: 'GM', qty: '10' }] });
     expect(JSON.stringify(j)).not.toMatch(/SECRET-ACCOUNT|PA123|extra/);
     expect(sanitizeOrder(null)).toEqual({ legs: [] });
+  });
+  it('openOrders: every order open now, whatever day it was submitted, sanitized', async () => {
+    const j = await (await handleBroker(req(), client, 'tok')).json();
+    expect(j.openOrders).toEqual([{ id: 'g1', symbol: 'FIS', side: 'buy', status: 'new', submitted_at: '2026-10-28T15:00:00Z', legs: [] }]);
+  });
+  it('openOrders is null (unknown) when the list may be truncated', async () => {
+    const full = { ...client, listOpenOrders: async () => Array.from({ length: 500 }, (_, i) => ({ id: `o${i}`, symbol: 'X', side: 'buy', status: 'new' })) };
+    expect((await (await handleBroker(req(), full, 'tok')).json()).openOrders).toBeNull();
+  });
+  it('a failed open-order read fails the whole response (never a partial "flat" answer)', async () => {
+    const broken = { ...client, listOpenOrders: async () => { throw new Error('Alpaca broker 500'); } };
+    expect((await handleBroker(req(), broken, 'tok')).status).toBe(502);
   });
 });

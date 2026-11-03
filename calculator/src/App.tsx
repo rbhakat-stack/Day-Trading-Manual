@@ -31,10 +31,10 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
-import { brokerVerified, executionRevPatch, latchReleases, reconcileExposure, type BrokerExposureInput, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
+import { brokerVerified, executionRevPatch, historyDatesFor, latchReleases, reconcileExposure, verifiedHistory, type BrokerExposureInput, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
-import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
+import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
   coreChanged,
@@ -286,9 +286,15 @@ export default function App() {
   const [releasedExposure, setReleasedExposure] = usePersistent<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, () => load<ReleasedExposureMap>(AUTO_KEYS.releasedExposure, {}));
   // ONE portfolio exposure model for every decision surface (Live Alert Queue, Opportunity Ranker, score freezing):
   // candidate records + manual positions + VERIFIED read-only Alpaca PAPER facts + safe release records.
+  // Entry-day order lists for earlier-dated PENDING / FILLED candidates (bounded; verified responses only).
+  const historyDates = useMemo(() => historyDatesFor(candidates, autoDate), [candidates, autoDate]);
+  const brokerHistory = useBrokerHistory(autoCfg.enabled, autoToken, historyDates);
   const brokerExposure = useMemo<BrokerExposureInput>(
-    () => ({ verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions }),
-    [brokerFeed, autoDate, clock],
+    () => ({
+      verified: brokerVerified(brokerFeed, autoDate, clock), orders: brokerFeed.orders, positions: brokerFeed.positions,
+      openOrders: brokerFeed.openOrders ?? null, history: verifiedHistory(brokerHistory, historyDates, clock),
+    }),
+    [brokerFeed, autoDate, clock, brokerHistory, historyDates],
   );
   const exposureFor = useCallback(
     (cs: Candidate[]) => reconcileExposure(cs, positions, brokerExposure, { classify: (s) => classes[s] ?? null, conservativeRisk: rankerSettings.portfolio.accountEquity * rankerSettings.portfolio.riskPerTradePct, latched: releasedExposure, now: clock }),
@@ -396,7 +402,7 @@ export default function App() {
 
   // Any status change made through a generic patch also gets its execution revision (never downgraded).
   const patchCandidate = (id: string, patch: Partial<Candidate>) =>
-    setCandidates((cs) => cs.map((c) => (c.id === id ? { ...c, ...(patch.status && patch.executionRev === undefined ? executionRevPatch(c, patch.status) : {}), ...patch } : c)));
+    setCandidates((cs) => cs.map((c) => (c.id === id ? { ...c, ...(patch.status && patch.executionRev === undefined ? executionRevPatch(c, patch.status, Date.now()) : {}), ...patch } : c)));
 
   const rankerActions: RankerActions = {
     select: setSelectedId,
@@ -418,7 +424,7 @@ export default function App() {
       if ((status === 'PENDING' || status === 'FILLED') && ['NEW', 'WATCHLIST'].includes(rc.candidate.status) && !rc.recommendation?.startsWith('TRADE')) {
         if (!confirm(`${rc.candidate.ticker} is "${rc.displayStatus}". Mark it as ${status === 'PENDING' ? 'a pending order' : 'filled'} anyway?`)) return;
       }
-      const patch: Partial<Candidate> = { status, ...executionRevPatch(rc.candidate, status) };
+      const patch: Partial<Candidate> = { status, ...executionRevPatch(rc.candidate, status, Date.now()) };
       if (status === 'FILLED' && !rc.candidate.entryScore) patch.entryScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
       const terminal: LifecycleStatus[] = ['TARGET_HIT', 'STOPPED_OUT', 'MANUAL_EXIT', 'SKIPPED', 'STALE', 'CANCELED', 'EXPIRED'];
       if (terminal.includes(status) && !rc.candidate.finalScore) patch.finalScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
@@ -428,7 +434,7 @@ export default function App() {
     keep: (sg) => setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, keptAgainst: [...c.keptAgainst, sg.candidateId] } : c))),
     replace: (sg) => {
       if (!confirm(`Cancel the pending ${sg.pendingTicker} order and reserve its capital for ${sg.candidateTicker}?\n\nThis only updates the ranker. You must cancel the ${sg.pendingTicker} stop order in TrendSpider/Alpaca yourself, and place the ${sg.candidateTicker} order yourself.`)) return;
-      setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, status: 'CANCELED' } : c.id === sg.candidateId ? { ...c, status: 'PENDING', ...executionRevPatch(c, 'PENDING') } : c)));
+      setCandidates((cs) => cs.map((c) => (c.id === sg.pendingId ? { ...c, status: 'CANCELED' } : c.id === sg.candidateId ? { ...c, status: 'PENDING', ...executionRevPatch(c, 'PENDING', Date.now()) } : c)));
       setSelectedId(sg.candidateId);
     },
     logJournal: (id) => {

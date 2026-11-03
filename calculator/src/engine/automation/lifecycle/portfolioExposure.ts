@@ -23,6 +23,10 @@
  *   2. the candidate's fingerprint is unchanged (a new execution — new revision, new fill, new status — voids it), and
  *   3. any current exposure in that ticker (position / working order) is represented by ANOTHER active RB record;
  *      otherwise the current exposure may be this candidate reused → the release is ignored and the candidate counts.
+ *
+ * Cross-day: "flat" means no position AND no open order from ANY day (`openOrders`: GTC entries, overnight bracket
+ * legs) — never only today's submitted orders; an unknown open-order list releases nothing. An earlier-dated candidate's
+ * entry order is identified in its entry day's VERIFIED order list (`history`); no verified list → no identification.
  */
 import type { Candidate, LifecycleStatus, ManualPosition } from '../../ranker/opportunityTypes';
 import { etParts } from '../etTime';
@@ -32,8 +36,13 @@ import type { Classification } from '../autoCandidate';
 export interface BrokerExposureInput {
   /** Live, loaded for the current ET date and fresh. Anything else → no reconciliation at all. */
   verified: boolean;
+  /** Orders submitted on the current ET date (bracket legs nested). */
   orders: unknown[];
   positions: { symbol: string; qty?: string | number; side?: string; avg_entry_price?: string | number; market_value?: string | number }[];
+  /** Every order open NOW, whatever day it was submitted. null = unknown (not returned, truncated) → no release at all. */
+  openOrders: unknown[] | null;
+  /** Entry-day order lists for earlier-dated candidates, keyed by ET date — VERIFIED responses only (see verifiedHistory). */
+  history?: Record<string, unknown[]>;
 }
 
 /** A release record. `fp` binds it to one execution of the candidate; `orderId` is the broker order behind it, if known. */
@@ -68,18 +77,44 @@ export function executionFingerprint(c: Candidate): string {
 
 /**
  * Execution revision for a status change: a NEW execution starts when a candidate enters PENDING from any other status,
- * or enters FILLED other than from PENDING (PENDING → FILLED is the same execution). Returns the patch to apply.
+ * or enters FILLED other than from PENDING (PENDING → FILLED is the same execution). Returns the patch to apply;
+ * `nowMs` also stamps when the execution started (an older broker order is never evidence for it).
  */
-export function executionRevPatch(prev: Candidate, next: LifecycleStatus): Partial<Candidate> {
+export function executionRevPatch(prev: Candidate, next: LifecycleStatus, nowMs?: number): Partial<Candidate> {
   const fresh = (next === 'PENDING' && prev.status !== 'PENDING') || (next === 'FILLED' && prev.status !== 'PENDING' && prev.status !== 'FILLED');
-  return fresh ? { executionRev: (prev.executionRev ?? 0) + 1 } : {};
+  if (!fresh) return {};
+  return { executionRev: (prev.executionRev ?? 0) + 1, ...(nowMs !== undefined ? { executionStartedMs: nowMs } : {}) };
+}
+
+/** An entry order may be placed shortly before the candidate is marked PENDING / FILLED. */
+const ORDER_BEFORE_MARK_MS = 15 * 60_000;
+/** Earliest submission time of an order that can belong to the candidate's current execution. */
+const orderSince = (x: Candidate) => Math.max((x.alertMs ?? 0) - 60_000, x.executionStartedMs !== undefined ? x.executionStartedMs - ORDER_BEFORE_MARK_MS : -Infinity);
+
+/** Cross-day lookback: entry-day order lists fetched for at most this many ET dates, within this many calendar days. */
+export const HISTORY_MAX_DATES = 5;
+export const HISTORY_LOOKBACK_DAYS = 10;
+
+/** ET dates (before today, newest first, bounded) whose orders are needed to identify earlier-dated active candidates. */
+export function historyDatesFor(candidates: Candidate[], today: string, maxDates = HISTORY_MAX_DATES, lookbackDays = HISTORY_LOOKBACK_DAYS): string[] {
+  const day = (d: string) => Date.parse(`${d}T00:00:00Z`);
+  const oldest = day(today) - lookbackDays * 86_400_000;
+  const dates = new Set(candidates.filter((c) => !c.archived && ACTIVE.includes(c.status) && /^\d{4}-\d{2}-\d{2}$/.test(c.date) && c.date < today && day(c.date) >= oldest).map((c) => c.date));
+  return [...dates].sort().reverse().slice(0, maxDates);
+}
+
+/** Only entry-day responses that are live, for that date and fresh count as evidence; failed / stale ones are dropped. */
+export function verifiedHistory(feeds: Record<string, { status: string; loadedDate?: string | null; lastOkMs: number | null; orders: unknown[] }>, dates: string[], now: number): Record<string, unknown[]> {
+  const out: Record<string, unknown[]> = {};
+  for (const d of dates) if (feeds[d] && brokerVerified(feeds[d], d, now)) out[d] = feeds[d].orders;
+  return out;
 }
 
 /** The one broker entry order a candidate was placed as (deterministic), or null. */
 function entryOrderFor(c: Candidate, orders: BrokerOrder[], all: Candidate[]): BrokerOrder | null {
   const side = c.direction === 'LONG' ? 'buy' : 'sell';
   const eligible = (o: BrokerOrder, x: Candidate) => o.symbol === x.ticker && o.side === (x.direction === 'LONG' ? 'buy' : 'sell') && o.submittedAt !== null
-    && etParts(o.submittedAt).date === x.date && o.submittedAt >= (x.alertMs ?? 0) - 60_000 && near(o.stopPrice, x.entry);
+    && etParts(o.submittedAt).date === x.date && o.submittedAt >= orderSince(x) && near(o.stopPrice, x.entry);
   const mine = orders.filter((o) => o.side === side && eligible(o, c));
   if (mine.length !== 1) return null;
   const o = mine[0];
@@ -88,14 +123,21 @@ function entryOrderFor(c: Candidate, orders: BrokerOrder[], all: Candidate[]): B
 }
 
 export function reconcileExposure(candidates: Candidate[], positions: ManualPosition[], broker: BrokerExposureInput | null | undefined, opts: { classify: (s: string) => Classification | null; conservativeRisk: number; latched?: ReleasedExposureMap; now?: number }): ExposureAdjustment {
-  // Unverified: no releases at all (conservative), nothing added.
-  if (!broker?.verified) return { candidates, exclude: new Set(), positions, verified: false, released: [], voided: [], added: [] };
+  // Unverified — or open orders across all days unknown / unreadable: no releases at all (conservative), nothing added.
+  const unverified: ExposureAdjustment = { candidates, exclude: new Set(), positions, verified: false, released: [], voided: [], added: [] };
+  if (!broker?.verified || !Array.isArray(broker.openOrders)) return unverified;
+  const open = brokerOrdersFrom(broker.openOrders);
+  if (open.errors.length) return unverified;
   const latched = opts.latched ?? {};
   const now = opts.now ?? Date.now();
-  const { orders } = brokerOrdersFrom(broker.orders);
+  // Today's orders plus the verified entry-day lists of earlier-dated candidates (one entry per order id).
+  const ids = new Set<string>();
+  const orders = [broker.orders, ...Object.values(broker.history ?? {})].flatMap((l) => brokerOrdersFrom(l).orders).filter((o) => !ids.has(o.id) && !!ids.add(o.id));
   const held = new Map<string, number>();
   for (const p of broker.positions) if (num(p.qty) !== 0) held.set(p.symbol.toUpperCase(), (held.get(p.symbol.toUpperCase()) ?? 0) + num(p.qty));
-  const working = new Set(orders.filter((o) => WORKING.includes(mapBrokerStatus(o.status))).map((o) => o.symbol.toUpperCase()));
+  const withLegs = (os: BrokerOrder[]) => os.flatMap((o) => [o, ...o.legs]);
+  // Working = any open order from any day (incl. bracket legs), plus any working order / leg in the fetched lists.
+  const working = new Set([...withLegs(open.orders), ...withLegs(orders).filter((o) => WORKING.includes(mapBrokerStatus(o.status)))].map((o) => o.symbol.toUpperCase()));
   const T = (t: string) => t.toUpperCase();
   const flat = (t: string) => !held.has(T(t)) && !working.has(T(t));
   const active = (c: Candidate) => !c.archived && ACTIVE.includes(c.status);
@@ -112,7 +154,7 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
   for (const c of candidates) {
     if (!active(c)) continue;
     if (c.status === 'FILLED') {
-      if (flat(c.ticker)) rel(c, `Alpaca shows no ${c.ticker} position and no working order — closed`);
+      if (flat(c.ticker)) rel(c, `Alpaca shows no ${c.ticker} position and no open order on any day — closed`, entryOrderFor(c, orders, candidates)?.id ?? null);
       continue;
     }
     const o = entryOrderFor(c, orders, candidates);

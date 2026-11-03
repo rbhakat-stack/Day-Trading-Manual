@@ -202,6 +202,8 @@ export interface Candidate {
   /** Execution revision: +1 each time the candidate starts a new execution (enters PENDING, or FILLED not from
    *  PENDING). Lets a broker-confirmed release apply to one execution only. Optional; absent on older records. */
   executionRev?: number;
+  /** When the current execution started (ms). An entry order submitted well before it belongs to an earlier execution. */
+  executionStartedMs?: number;
 }
 
 /** Manually maintained position (no broker API). */
