@@ -72,11 +72,19 @@ const PRESENTERS: Record<string, Presenter> = {
   'RB v1.2': {
     scoreLabel: (ctx) => `Score (${ctx.v12MaxScore})`,
     tierLabels: ['Option B', 'Option A'],
-    cell: (r, role) => ({
-      score: r.shadow?.score?.total ?? null,
-      tiers: [r.shadow?.score?.tierOptionB ?? null, r.shadow?.score?.tierOptionA ?? null],
-      decision: role === 'ACTIVE' ? r.decision.decision : null,
-    }),
+    // The v1.2 score shown is the FROZEN alert-time score and tiers (snapshot); it never changes during the alert's
+    // lifecycle. Before the snapshot is frozen (first pass) the alert-time evaluation itself is shown. A snapshot
+    // without a v1.2 score shows unavailable — never a later live score. "Frozen · not ranked" when the alert is no
+    // longer scored / terminally failed, so the frozen value is never mistaken for a current recommendation.
+    cell: (r, role) => {
+      const f = r.lifecycle?.frozenV12;
+      const decision = role === 'ACTIVE' ? r.decision.decision : null;
+      if (f) {
+        const notRanked = !!r.lifecycle.setupFailed || r.lifecycle.terminal || (r.shadow?.score?.total ?? null) === null;
+        return { score: f.total, tiers: [(f.tierOptionB as QualityTier | null) ?? null, (f.tierOptionA as QualityTier | null) ?? null], decision, frozen: f.total !== null && notRanked };
+      }
+      return { score: r.shadow?.score?.total ?? null, tiers: [r.shadow?.score?.tierOptionB ?? null, r.shadow?.score?.tierOptionA ?? null], decision };
+    },
   },
 };
 
@@ -194,6 +202,8 @@ export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataS
  */
 export function decisionBadge(r: QueueRow): Status {
   const d = r.decision;
+  // Terminal SETUP FAILED: any v1.1 ticket is withheld (the v1.1 decision itself is unchanged).
+  if (d.ticket && r.lifecycle?.setupFailed) return { label: 'v1.1 TICKET — SETUP FAILED', tone: 'bad', detail: r.lifecycle.reason };
   // CR-13 — after the 15:30 cutoff the v1.1 ticket is historical: never labelled as ready to trade.
   if (d.ticket && r.lifecycle?.entryWindowClosed) return { label: 'v1.1 TICKET — AFTER CUTOFF', tone: 'bad', detail: r.lifecycle.reason };
   if (d.ticket) return { label: 'TRADE READY', tone: 'ok', detail: d.decision };
@@ -218,6 +228,7 @@ export function finalBadge(r: QueueRow): Status {
   const d = r.decision;
   const lc = r.lifecycle;
   // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
+  if (lc?.setupFailed) return { label: 'NO TRADE — SETUP FAILED', tone: 'bad', detail: lc.reason };
   if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
   if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
@@ -229,7 +240,7 @@ export function finalBadge(r: QueueRow): Status {
 }
 
 const EXEC_TONE: Record<string, Tone> = {
-  ACTIVE: 'ok', 'ENTRY WINDOW CLOSED': 'bad', 'NOT CROSSED': 'info', SCORING: 'muted', 'LATE — REVIEW': 'warn', CHASED: 'bad', 'EXPIRED — STALE': 'bad', 'PORTFOLIO BLOCKED': 'warn',
+  ACTIVE: 'ok', 'ENTRY WINDOW CLOSED': 'bad', 'SETUP FAILED': 'bad', 'NOT CROSSED': 'info', SCORING: 'muted', 'LATE — REVIEW': 'warn', CHASED: 'bad', 'EXPIRED — STALE': 'bad', 'PORTFOLIO BLOCKED': 'warn',
   'BELOW THRESHOLD': 'muted', 'NOT ELIGIBLE': 'bad', 'DATA REVIEW': 'warn', SUBMITTED: 'info', 'IN POSITION': 'info', CLOSED: 'muted',
 };
 

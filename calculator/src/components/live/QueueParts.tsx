@@ -384,7 +384,8 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[#3ee08f]">{active?.version ?? ''} active actions</span>
         {r.decision.ticket && r.lifecycle?.entryWindowClosed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — after 3:30 PM entry cutoff</span>}
-        {r.decision.ticket && !r.lifecycle?.entryWindowClosed && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
+        {r.decision.ticket && r.lifecycle?.setupFailed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — setup failed (terminal)</span>}
+        {r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
         {canAct && <button type="button" onClick={() => actions.watch(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Watch</button>}
         {canAct && <button type="button" onClick={() => actions.skip(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Skip trade</button>}
         {v && <button type="button" onClick={() => actions.openInCalculator(r)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Open in manual Calculator</button>}

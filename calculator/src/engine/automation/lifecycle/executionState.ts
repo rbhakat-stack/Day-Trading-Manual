@@ -15,6 +15,7 @@ import { etParts } from '../etTime';
 import type { QueueRow } from '../liveQueue';
 import type { AlertTimeSnapshot } from './alertTimeSnapshot';
 import type { AutoAlertRecordV12 } from '../v12/audit';
+import type { TerminalEvent } from './terminalEvents';
 
 export type ExecutionState =
   | 'SCORING'
@@ -23,6 +24,7 @@ export type ExecutionState =
   | 'LATE — REVIEW'
   | 'CHASED'
   | 'EXPIRED — STALE'
+  | 'SETUP FAILED'
   | 'ENTRY WINDOW CLOSED'
   | 'PORTFOLIO BLOCKED'
   | 'BELOW THRESHOLD'
@@ -61,6 +63,10 @@ export interface Lifecycle {
    * the ticket must NOT be executed. The v1.1 output itself is unchanged.
    */
   entryWindowClosed: boolean;
+  /** Terminal SETUP FAILED latched from an observed stop breach (null = none). Any RB v1.1 ticket is withheld. */
+  setupFailed: { observedAtMs: number; price: number; stop: number } | null;
+  /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
+  frozenV12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null } | null;
   gates: GateSequence;
   score: ScoreDisplay;
   eod: EodStatus;
@@ -149,8 +155,9 @@ function eodFrom(now: number, pendingList: string[], openList: string[]): EodSta
 
 /* ───────────────────────── per-alert lifecycle ───────────────────────── */
 
-/** NOT ELIGIBLE reasons that are caused by the passage of time / price after the alert (the setup itself was valid). */
-const TIME_DRIVEN = ['STALE — DO NOT TRADE', 'DO NOT CHASE'];
+/** NOT ELIGIBLE reasons caused by time / price AFTER the alert (the setup itself was valid): stale, chased, and a
+ *  later stop breach (SETUP FAILED). An alert that failed this way was not "never eligible". */
+const TIME_DRIVEN = ['STALE — DO NOT TRADE', 'DO NOT CHASE', 'NOT ELIGIBLE — SETUP FAILED'];
 const TICKET_DECISIONS = ['TRADE NOW — ELITE', 'HIGH PRIORITY — TRADE CONSIDERATION'];
 
 /**
@@ -179,7 +186,7 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
   return null;
 }
 
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus): Lifecycle {
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null): Lifecycle {
   const d = row.decision;
   const st = row.candidate?.status;
   const action = row.live?.action ?? null;
@@ -190,17 +197,28 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
   const frozen = snap ? snap.v11.total : row.candidate?.initialScore?.total ?? first?.total ?? null;
   const alertTimeTier = snap ? snap.v11.tier : row.candidate?.initialScore?.tier ?? first?.tier ?? null;
   const expiresAt = snap?.expiresAtMs ?? row.record.alert.alertTimeMs + RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
+  const frozenV12 = snap?.v12 ? { total: snap.v12.total, max: snap.v12.max, tierOptionA: snap.v12.tierOptionA, tierOptionB: snap.v12.tierOptionB } : null;
   const liveScore: ScoreDisplay = row.ranked?.total !== null && row.ranked?.total !== undefined && row.ranked.strategyEligible
     ? { value: row.ranked.total, basis: 'LIVE', rank: row.ranked.rank ?? 'NOT RANKED' }
     : frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const frozenScore: ScoreDisplay = frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const L = (executionState: ExecutionState, finalActionability: FinalActionability, reason: string, terminal = false, score = liveScore): Lifecycle =>
-    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, gates, score, eod });
+    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, setupFailed: null, frozenV12, gates, score, eod });
 
   // User-controlled lifecycle always wins: an order or position is governed by the broker, not by the alert clock.
   if (st === 'PENDING') return L('SUBMITTED', 'NO TICKET', 'Order marked submitted — manage it at the broker.', false, frozenScore);
   if (st === 'FILLED') return L('IN POSITION', 'NO TICKET', 'Position open — governed by its stop and target.', false, frozenScore);
   if (st && CLOSED.includes(st)) return L('CLOSED', 'NO TRADE', st.replace(/_/g, ' '), true, frozenScore);
+
+  // Terminal SETUP FAILED: an observed breach of the planned stop ends this alert for good (no revival when price
+  // recovers, no ticket). A fresh setup needs a new authenticated TrendSpider alert.
+  if (terminal?.kind === 'SETUP_FAILED') {
+    const at = etParts(terminal.observedAtMs).hhmmss;
+    return {
+      ...L('SETUP FAILED', 'NO TRADE', `SETUP FAILED — price ${terminal.price} breached the planned stop ${terminal.stop} at ${at} ET. Terminal: no revival; a new TrendSpider alert is required.`, true, frozenScore),
+      setupFailed: { observedAtMs: terminal.observedAtMs, price: terminal.price, stop: terminal.stop },
+    };
+  }
 
   // CR-05 — terminal staleness: no revival, no READY, no rescoring after the alert window. Only an alert that was a
   // valid setup can expire; one that was never eligible keeps the reason it was never actionable (time never

@@ -64,7 +64,9 @@ export function ShadowCell({ r }: { r: QueueRow }) {
       </div>
     );
   }
-  const s = d.score;
+  const live = d.score;
+  // Frozen alert-time score/tiers when the snapshot exists (never a drifting live score).
+  const s: { total: number | null; tierOptionB: string | null } | null = r.lifecycle?.frozenV12 ?? (live ? { total: live.total, tierOptionB: live.tierOptionB } : null);
   const warn = parityWarnings(d).length > 0;
   return (
     <div className="font-sans">
@@ -91,6 +93,7 @@ const WARNING_TEXT: Record<string, string> = {
 
 /** Full-width details block for one row. */
 export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxScore: number; optionAGrades: Grades }) {
+  const fz = r.lifecycle?.frozenV12 ?? null;
   const d = r.shadow;
   const a = (r.record as AutoAlertRecordV12).v12;
   if (!d || !a) {
@@ -121,9 +124,10 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
         <div>
           <H>Shadow decision &amp; score</H>
           <Kv k="v1.2 shadow decision" v={d.detail.startsWith(d.decision) ? d.detail : `${d.decision} — ${d.detail}`} />
-          <Kv k="Raw v1.2 score" v={s?.total != null ? `${s.total} / ${maxScore}` : 'not scored'} />
-          <Kv k="Tier (experimental thresholds)" v={tierLong(s?.tierOptionB)} />
-          <Kv k="Option A comparison tier" v={tierLong(s?.tierOptionA)} dim />
+          <Kv k="Frozen alert-time v1.2 score" v={fz ? (fz.total !== null ? `${fz.total} / ${fz.max}` : 'unavailable (not scored at alert time)') : s?.total != null ? `${s.total} / ${maxScore}` : 'not scored'} />
+          <Kv k="Tier (experimental thresholds)" v={tierLong(fz ? fz.tierOptionB : s?.tierOptionB)} />
+          <Kv k="Option A comparison tier" v={tierLong(fz ? fz.tierOptionA : s?.tierOptionA)} dim />
+          {fz && <Kv k="Current v1.2 evaluation (live, not frozen)" v={r.lifecycle.setupFailed ? 'NOT RANKED — SETUP FAILED (terminal)' : s?.total != null ? `${s.total} / ${maxScore} · ${d.decision}` : `NOT RANKED — ${d.detail}`} dim />}
           <Kv k="RB v1.1 score" v={s ? `${s.v11Total ?? '—'}${s.deltaVsV11 !== null ? ` (Δ ${s.deltaVsV11 >= 0 ? '+' : ''}${s.deltaVsV11})` : ''}` : '—'} dim />
           <p className="mt-1.5 text-[11px] text-[#cdb3ff]">
             {`v1.2 experimental thresholds: Elite ${thresholds.shadow.elite} · High ${thresholds.shadow.high} · Watchlist ${thresholds.shadow.watchlist} · Low ${thresholds.shadow.low}`}

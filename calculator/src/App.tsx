@@ -31,6 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
+import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
@@ -281,6 +282,8 @@ export default function App() {
   const paritySum = useMemo(() => paritySummary(Object.values(parityEntries), parityRows, autoCfg.parityRequired), [parityEntries, parityRows, autoCfg.parityRequired]);
   // RB v1.2 (CR-03): write-once alert-time snapshots, read by the execution layer only. Older than 90 days are pruned.
   const [alertSnaps, setAlertSnaps] = usePersistent<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, () => pruneAlertSnapshots(load<AlertSnapshotMap>(AUTO_KEYS.alertSnapshots, {}), Date.now()));
+  // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
+  const [terminalEvents, setTerminalEvents] = usePersistent<TerminalEventMap>(AUTO_KEYS.terminalEvents, () => pruneTerminalEvents(load<TerminalEventMap>(AUTO_KEYS.terminalEvents, {}), Date.now()));
   const queue = useMemo(() => {
     if (!autoCfg.enabled) return null;
     return buildQueue({
@@ -296,8 +299,12 @@ export default function App() {
       parity: Object.fromEntries(Object.entries(parityRows).map(([id, rows]) => [id, mismatchMessages(rows)])),
       strategyVersion: version.name,
       frozen: alertSnaps,
+      terminal: terminalEvents,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents]);
+  useEffect(() => {
+    if (queue) setTerminalEvents((prev) => latchTerminalEvents(prev, queue.rows, clock, autoCfg).map);
+  }, [queue, clock, autoCfg, setTerminalEvents]);
   useEffect(() => {
     if (queue) setAlertSnaps((prev) => freezeAlertSnapshots(prev, queue.rows, clock, v12MaxScore(rankerSettings)).map);
   }, [queue, clock, rankerSettings, setAlertSnaps]);

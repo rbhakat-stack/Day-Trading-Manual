@@ -22,6 +22,8 @@ export const AUTO_KEYS = {
   v12ShadowLog: 'rbv1.v12.shadowLog.v1',
   /** RB v1.2 immutable alert-time snapshots (CR-03; write-once per alert, retained 90 days). */
   alertSnapshots: 'rbv1.v12.alertSnapshots.v1',
+  /** Terminal SETUP FAILED events (write-once per alert, retained 90 days). */
+  terminalEvents: 'rbv1.v12.terminalEvents.v1',
   /** CR-12 — Alpaca order JSON pasted by the user for read-only reconciliation (no broker connection). */
   brokerOrders: 'rbv1.v12.brokerOrders.v1',
 } as const;

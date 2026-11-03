@@ -22,6 +22,7 @@ import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
+import type { TerminalEventMap } from './lifecycle/terminalEvents';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
 export interface QueueInput {
@@ -39,6 +40,8 @@ export interface QueueInput {
   strategyVersion: string;
   /** Immutable alert-time snapshots (CR-03), read only — used for the separate execution layer. */
   frozen?: AlertSnapshotMap;
+  /** Latched terminal events (SETUP FAILED), read only — execution layer only. */
+  terminal?: TerminalEventMap;
 }
 
 export interface QueueRow {
@@ -195,7 +198,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null);
     return row;
   });
 

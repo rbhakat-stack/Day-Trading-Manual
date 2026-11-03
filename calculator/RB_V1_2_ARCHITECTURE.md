@@ -625,3 +625,64 @@ Punch-list follow-up (shadow-validation gate):
 - **Next-day closes:** a manual close entered the next day appears as a separate unlinked row.
 - **Older trades:** trades from earlier days can't be linked or repaired after midnight ET.
 - **Planned fix:** cross-day persistence and historical backfill are deferred to the Supabase persistence / historical-backfill CR.
+
+## 31. Nov 3 live-validation fixes (implemented) and designs (not implemented)
+
+**Terminal SETUP FAILED** (`lifecycle/terminalEvents.ts`).
+- **The latch:** the first *observed* breach of the planned stop (LONG ≤ stop, SHORT ≥ stop, via the calculator's own `SETUP_FAILED` rule) is recorded once, write-once, in browser storage under `rbv1.v12.terminalEvents.v1` (90-day retention).
+- **When it latches:** only on a fresh quote (data ≤ 5 s, last trade ≤ 60 s), inside the alert window, and before any order is submitted or filled.
+- **Effect:** the alert shows `SETUP FAILED` / NO TRADE with no revival. Any RB v1.1 ticket is withheld exactly like the 15:30 cutoff, and the v1.1 decision itself is unchanged.
+- **Not changed:** the snapshot, scores and plan.
+- **Related fix:** a stop breach after the alert counts as time/price-driven, not "never eligible".
+
+**Frozen v1.2 score.** The v1.2 queue column, expanded summary and shadow panel show the snapshot's alert-time v1.2 score and Option B/A tiers.
+- **Before the snapshot exists** (the first pass only), the alert-time evaluation itself is shown.
+- **A snapshot without a score** shows "unavailable".
+- **After a hard fail or terminal state:** the column reads "Frozen · not ranked". The live v1.2 evaluation is shown separately, labelled "live, not frozen".
+
+**CR-15 — cross-day broker reconciliation (design only).**
+- **Problem:**
+  - the feed only lists orders *submitted* on the requested ET day;
+  - bracket legs are nested in their parent, but Alpaca lists a leg that fills on a later day as a stand-alone order on that day;
+  - each top-level order is treated as an entry.
+- **FIS case:**
+  - 2 Nov: LONG 499 @ 40.05, stop 39.84, target 40.44.
+  - 3 Nov: the stop leg (`505618ca`, side sell) is listed alone, filled 499 @ 39.82.
+  - Result: the original row stays OPEN, a phantom SHORT row appears, and the −$114.77 loss is lost.
+- **Fix:**
+  1. **Trade identity = the entry order id** (already the Journal key). Every order carries `parent_order_id`/`legs`; index all *known* entry ids and their leg ids from the persisted Journal (`brokerOrderId` plus stored leg ids).
+  2. **Order window:** fetch the current day's orders **plus** every order still open or referenced by an OPEN/PENDING Journal entry. Use the existing GET list endpoint with the allowlisted `status`/`after`/`symbols` filters, e.g. `after` = the oldest open entry's submission time. No new endpoint and no mutation path.
+  3. **Classify each order before treating it as an entry:**
+     - (a) a leg of a known entry (by `parent_order_id` or a stored leg id) → an exit fill on that entry;
+     - (b) an opposite-side order for a ticker with an OPEN Journal entry and no RB alert, submitted after the entry → a manual close of that entry;
+     - (c) otherwise a new entry.
+     - Never create an opposite-side "entry" for a ticker with an open position (`positions` shows the net quantity).
+  4. **Fills are additive events keyed by order id:** exitQty = Σ exit fills; position CLOSED when exitQty ≥ entryQty **and** the broker shows no position; partial exits reduce `remainingQty`. Realized P/L = Σ(exit fills × (exit − entry)) × sign, using actual broker fill prices.
+  5. **Restart and cross-day:** reconciliation is a pure function of (persisted Journal entries + current broker facts), so it's idempotent across reloads and ET dates. Persist `legIds`, `fills[]` (order id, qty, price, time) and `remainingQty` on the entry.
+  6. **Separation:** strategy decision, manual override, broker status and position status stay independent. Only broker-owned fields change.
+  7. **Supabase v1.3:** the same entity (trade id = entry order id; fills table keyed by order id) maps directly to `trades` / `fills` tables. The browser Journal becomes a cache of it.
+- **Tests:**
+  - FIS overnight stop: the LONG closes at 39.82, P/L −114.77, no SHORT row;
+  - overnight target;
+  - manual next-day close;
+  - partial exit across days;
+  - entry canceled next day;
+  - reload mid-way;
+  - repeated polls with no duplicates;
+  - an unrelated SHORT entry in the same ticker after the position is flat;
+  - no linkage from a different alert.
+
+**Portfolio capacity after broker closes (diagnosis; not implemented).**
+- **What it counts:** `buildPortfolio` (`ranker/portfolioAllocator.ts`) uses only browser-local state: manual positions with status OPEN, plus Opportunity Ranker candidates with status FILLED or PENDING. It does not filter by date and does not read broker positions or the Journal.
+- **Why FIS still holds a slot:** a candidate marked submitted/filled stays FILLED until its status is changed by hand. The 3 Nov "Slots 1/4, heat $99.80" is the FIS 14:30 candidate (planned risk $99.80) still marked filled, although Alpaca shows no positions.
+- **Independent of CR-15:** the broker sync never touched candidate statuses, so even same-day closes don't free capacity.
+- **Impact:**
+  - stale slots and heat reduce the allocator's capacity (they can cause `NO_POSITION_SLOT`, the heat limit or a capital waitlist);
+  - they add a phantom correlation exposure;
+  - they change the portfolio-fit points in both the v1.1 and v1.2 rankings, so a valid alert can be scored lower or blocked.
+- **Minimal correction (needs approval):** when the read-only broker feed is LIVE for today, exclude from the portfolio exposure (not from the records):
+  - a FILLED candidate whose ticker has no broker position;
+  - a PENDING candidate whose matched entry order is canceled, expired or rejected with no fill and no position.
+
+  Legitimate open positions and pending entries (including a PENDING candidate whose order isn't at the broker yet) keep reserving. Candidate records are never rewritten; a banner explains any exclusion.
+- **Tests:** open position, pending entry, fully closed position, overnight stop exit, canceled entry, partial fill with a remaining position, and a reload after close.
