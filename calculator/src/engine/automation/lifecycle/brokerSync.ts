@@ -122,6 +122,8 @@ export interface TradeSync {
   /** Realized P/L on the closed quantity (fills only; fees not included). */
   realizedPL: number | null;
   notes: string[];
+  /** How the order was linked to an RB alert (only MATCHED has a recordId). */
+  linkage?: AlertLinkage;
   /** Broker timestamps (epoch ms): entry order submitted / entry filled / last exit filled. */
   submittedAt?: number | null;
   entryFilledAt?: number | null;
@@ -132,15 +134,23 @@ const EOD_EXIT_FROM = 15 * 60 + 50;
 const minutesEt = (t: number) => { const h = etParts(t).hhmm; return Number(h.slice(0, 2)) * 60 + Number(h.slice(3, 5)); };
 const isFilled = (o: BrokerOrder) => o.filledQty > 0;
 
-/** Find the RB alert this entry order belongs to: same ticker and side, same ET day, entry stop within 2 ¢ of RB's entry. */
-function matchRow(o: BrokerOrder, rows: QueueRow[]): QueueRow | null {
+/** How a broker entry order was linked to an RB alert. Only MATCHED carries an alert (and its strategy decision). */
+export type AlertLinkage = 'MATCHED' | 'NO_PRICE_MATCH' | 'AMBIGUOUS';
+
+/**
+ * Link an entry order to the RB alert it was placed from — deterministically or not at all. Candidates: same ticker,
+ * same direction, same ET day, alert no later than 60 s after the order was submitted. The order is linked only when
+ * EXACTLY ONE candidate's planned entry is within 2 ¢ of the order's stop price. No price match → unlinked (never the
+ * "most recent" alert); two or more → AMBIGUOUS, unlinked, and no candidate's decision is used.
+ */
+function matchRow(o: BrokerOrder, rows: QueueRow[]): { row: QueueRow | null; linkage: AlertLinkage; matches: number } {
   const dir = o.side === 'buy' ? 'LONG' : 'SHORT';
   const t = o.submittedAt;
   const cands = rows.filter((r) => r.record.alert.symbol === o.symbol && r.record.alert.direction === dir && (t === null || (etParts(t).date === etParts(r.record.alert.alertTimeMs).date && t >= r.record.alert.alertTimeMs - 60_000)));
   const entry = (r: QueueRow) => r.candidate?.entry ?? null;
   const priced = cands.filter((r) => o.stopPrice !== null && entry(r) !== null && Math.abs((entry(r) as number) - (o.stopPrice as number)) <= 0.02 + 1e-9);
-  const pool = priced.length ? priced : cands;
-  return pool.sort((a, b) => b.record.alert.alertTimeMs - a.record.alert.alertTimeMs)[0] ?? null;
+  if (priced.length === 1) return { row: priced[0], linkage: 'MATCHED', matches: 1 };
+  return { row: null, linkage: priced.length ? 'AMBIGUOUS' : 'NO_PRICE_MATCH', matches: priced.length };
 }
 
 /**
@@ -159,7 +169,7 @@ export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[], positio
     used.add(o.id);
     o.legs.forEach((l) => used.add(l.id));
     const direction = o.side === 'buy' ? 'LONG' : 'SHORT';
-    const row = matchRow(o, rows);
+    const { row, linkage, matches } = matchRow(o, rows);
     const lc = row?.lifecycle;
     const strategyDecision: TradeSync['strategyDecision'] = !row ? 'NO ALERT' : row.decision.ticket ? 'READY' : lc?.finalActionability === 'NO TRADE' ? 'NO TRADE' : 'NO TICKET';
     // Exits: bracket legs first, then later opposite-side orders in the same ticker (manual / EOD closes).
@@ -184,11 +194,12 @@ export function reconcileBroker(orders: BrokerOrder[], rows: QueueRow[], positio
     const fromFills: PositionStatus = o.filledQty <= 0 ? 'NONE' : exitQty >= o.filledQty ? 'CLOSED' : 'OPEN';
     const positionStatus: PositionStatus = held && fromFills === 'OPEN' && !held.has(o.symbol) ? 'CLOSED' : held && fromFills === 'CLOSED' && held.has(o.symbol) ? 'OPEN' : fromFills;
     const notes: string[] = [];
-    if (!row) notes.push('No RB alert matched this order (manual trade).');
+    if (linkage === 'NO_PRICE_MATCH') notes.push('No RB alert matched this order price (manual trade).');
+    if (linkage === 'AMBIGUOUS') notes.push(`AMBIGUOUS — ${matches} RB alerts match this order price; not linked to any of them.`);
     if (positionStatus !== fromFills) notes.push(`Position status from broker positions (fills in the window say ${fromFills}).`);
     if (exits.length > 1 && new Set(exits.map((e) => e.reason)).size > 1) notes.push(`Mixed exits: ${exits.map((e) => `${e.o.filledQty} ${e.reason}`).join(', ')}`);
     out.push({
-      recordId: row?.record.id ?? null, symbol: o.symbol, direction, entryOrderId: o.id,
+      recordId: row?.record.id ?? null, linkage, symbol: o.symbol, direction, entryOrderId: o.id,
       strategyDecision, manualOverride: o.filledQty > 0 && strategyDecision !== 'READY',
       brokerStatus: mapBrokerStatus(o.status), positionStatus,
       entryQty: o.filledQty, entryAvg: o.filledAvgPrice, exitQty, exitAvg,
@@ -297,6 +308,7 @@ export function journalEntryFromSync(t: TradeSync, ctx: SyncContext): JournalEnt
     source: 'broker_sync',
     brokerOrderId: t.entryOrderId,
     alertRecordId: t.recordId,
+    alertLinkage: t.linkage,
     strategyDecision: t.strategyDecision,
     plannedQty: plan?.shares ?? null,
     alertTimeIso: record ? new Date(record.alert.alertTimeMs).toISOString() : null,

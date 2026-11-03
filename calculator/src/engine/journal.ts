@@ -55,6 +55,8 @@ export interface JournalEntry {
   brokerOrderId?: string;
   /** RB alert record the order was matched to (null = no RB alert, a manual trade). */
   alertRecordId?: string | null;
+  /** MATCHED = exactly one RB alert at this order's price; NO_PRICE_MATCH / AMBIGUOUS = unlinked (no RB decision used). */
+  alertLinkage?: 'MATCHED' | 'NO_PRICE_MATCH' | 'AMBIGUOUS';
   /** The four independent states. Strategy decision is written once and never rewritten. */
   strategyDecision?: 'READY' | 'NO TICKET' | 'NO TRADE' | 'NO ALERT';
   manualOverride?: boolean;

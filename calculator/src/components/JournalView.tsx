@@ -114,6 +114,8 @@ function BrokerBadges({ e }: { e: JournalEntry }) {
     <span className="mt-0.5 block font-sans text-[10px] font-normal leading-snug text-ink-400" data-broker-entry={e.brokerOrderId}>
       <b className="text-[#9db8ff]">BROKER</b> · Strategy {e.strategyDecision ?? '—'} · Override {e.manualOverride ? <b className="text-warn">YES</b> : 'NO'}
       <br />Broker {e.brokerStatus ?? '—'} · Position {e.positionStatus ?? '—'}{e.exitReason ? ` · ${e.exitReason.replace(/_/g, ' ')}` : ''}
+      {e.alertLinkage === 'NO_PRICE_MATCH' && <><br />No RB alert matched this order price</>}
+      {e.alertLinkage === 'AMBIGUOUS' && <><br /><b className="text-warn">AMBIGUOUS — several RB alerts match this price; not linked</b></>}
       {e.possibleDuplicateOf && <><br /><b className="text-short">Possible duplicate of a manual entry — delete one</b></>}
     </span>
   );
