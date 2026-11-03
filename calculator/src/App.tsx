@@ -31,7 +31,7 @@ import { etParts } from './engine/automation/etTime';
 import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/automation/v12/shadowLog';
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
-import { brokerOrdersFrom, reconcileBroker, syncJournal, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
+import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useLiveQuotes, usePersistent, type ClassMap } from './lib/automationClient';
 import {
   changedCoreFields,
@@ -316,7 +316,8 @@ export default function App() {
       candidate: t.recordId ? candidates.find((c) => c.id === t.recordId) ?? null : null,
       record: t.recordId ? recs.get(t.recordId) ?? null : null,
     });
-    setJournal((j) => syncJournal(j, brokerTrades, ctx).journal);
+    // Gate: only after today's alert feed and broker feed have both loaded (never treat "not loaded yet" as NO ALERT).
+    setJournal((j) => syncJournalWhenReady(j, brokerTrades, ctx, { date: autoDate, alertsLoadedFor: feed.loadedDate, brokerLoadedFor: brokerFeed.loadedDate }).journal);
   }, [brokerTrades]);
   useEffect(() => {
     if (queue?.changed) setCandidates(queue.candidates);

@@ -111,22 +111,24 @@ export interface FeedState {
   records: AutoAlertRecord[];
   lastOkMs: number | null;
   error: string | null;
+  /** ET date whose alert records were last loaded successfully (null = not loaded yet). Journal sync waits for it. */
+  loadedDate: string | null;
 }
 
 /** Polls the day's alert records. Each record is an immutable snapshot; the client never edits them. */
 export function useAlertRecords(cfg: AutomationConfig, token: string, date: string): FeedState & { reprocess: (id: string) => Promise<void> } {
-  const [state, setState] = useState<FeedState>({ records: [], lastOkMs: null, error: null });
+  const [state, setState] = useState<FeedState>({ records: [], lastOkMs: null, error: null, loadedDate: null });
   const retried = useRef(new Map<string, number>());
   useEffect(() => {
     if (!cfg.enabled || !token) {
-      setState({ records: [], lastOkMs: null, error: null });
+      setState({ records: [], lastOkMs: null, error: null, loadedDate: null });
       return;
     }
     let stop = false;
     const tick = async () => {
       try {
         const j = await call<{ records: AutoAlertRecord[] }>(`rb-alerts?date=${date}`, token);
-        if (!stop) setState({ records: j.records, lastOkMs: Date.now(), error: null });
+        if (!stop) setState({ records: j.records, lastOkMs: Date.now(), error: null, loadedDate: date });
         // Bounded automatic retry of records stuck in RECEIVED (function timed out) or DATA_ERROR.
         for (const r of j.records) {
           const stuck = (r.status === 'RECEIVED' || r.status === 'ENRICHING') && Date.now() - r.receivedMs > 20_000;
@@ -195,6 +197,8 @@ export interface BrokerFeed {
   positions: BrokerPosition[];
   lastOkMs: number | null;
   error: string | null;
+  /** ET date whose orders/positions were last loaded successfully (null = not loaded yet). */
+  loadedDate?: string | null;
 }
 
 /** CR-12 — polls the READ-ONLY rb-broker endpoint (paper account orders + positions). It never sends an order. */
@@ -206,7 +210,7 @@ export function useBrokerFeed(enabled: boolean, token: string, date: string, pol
     const tick = async () => {
       try {
         const j = await call<{ orders: unknown[]; positions: BrokerPosition[] }>(`rb-broker?date=${date}`, token);
-        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, lastOkMs: Date.now(), error: null });
+        if (!stop) setS({ status: 'LIVE', orders: j.orders, positions: j.positions, lastOkMs: Date.now(), error: null, loadedDate: date });
       } catch (e) {
         const msg = (e as Error).message;
         if (!stop) setS((x) => ({ ...x, status: /HTTP 503/.test(msg) ? 'OFF' : 'ERROR', error: msg }));

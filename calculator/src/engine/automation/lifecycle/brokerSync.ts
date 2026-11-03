@@ -330,7 +330,21 @@ export interface JournalSyncResult {
   updated: string[];
   /** Broker entries added next to a manually logged entry that looks like the same trade (never merged). */
   flagged: string[];
+  /** Entries upgraded one-way from NO_PRICE_MATCH to MATCHED (a later poll found exactly one price match). */
+  repaired: string[];
 }
+
+/**
+ * Alert-owned fields of a journal entry: what the one-way NO_PRICE_MATCH → MATCHED repair may fill. These were
+ * placeholders (0 / null / NO ALERT) on an unlinked entry. Broker-owned facts (fill, quantity, exit, statuses, P/L)
+ * and user-owned fields (notes, date/time edits) are never part of this set.
+ */
+const ALERT_OWNED: (keyof JournalEntry)[] = [
+  'alertRecordId', 'alertLinkage', 'strategyDecision', 'plannedEntry', 'stop', 'target', 'plannedQty', 'expectedRisk', 'expectedReward',
+  'alertTimeIso', 'v11Score', 'v11Tier', 'v12Score', 'v12OptionA', 'v12OptionB', 'ruleSet',
+  'open', 'high', 'low', 'close', 'atr', 'alertPrice', 'decision', 'orderType', 'rulesVersion',
+];
+const alertOwned = (e: JournalEntry): Partial<JournalEntry> => Object.fromEntries(ALERT_OWNED.map((k) => [k, e[k]])) as Partial<JournalEntry>;
 
 const near = (a: number | null | undefined, b: number | null | undefined) => a !== null && a !== undefined && b !== null && b !== undefined && a > 0 && Math.abs(a - b) <= 0.02 + 1e-9;
 
@@ -346,6 +360,7 @@ export function syncJournal(journal: JournalEntry[], trades: TradeSync[], ctx: (
   const added: string[] = [];
   const updated: string[] = [];
   const flagged: string[] = [];
+  const repaired: string[] = [];
   for (const t of trades) {
     if (!t.entryOrderId) continue;
     const idx = next.findIndex((e) => e.brokerOrderId === t.entryOrderId);
@@ -362,11 +377,25 @@ export function syncJournal(journal: JournalEntry[], trades: TradeSync[], ctx: (
     }
     const cur = next[idx];
     if (cur.source !== 'broker_sync') continue; // never touch a manual entry
-    const patch = brokerFacts(t, cur.strategyDecision ?? t.strategyDecision);
+    // One-way repair: an entry written while unlinked (NO_PRICE_MATCH) is linked when this reconciliation found exactly
+    // one deterministic price match. MATCHED and AMBIGUOUS entries are never relinked; a zero match changes nothing.
+    const repair = cur.alertLinkage === 'NO_PRICE_MATCH' && t.linkage === 'MATCHED' && t.recordId ? alertOwned(journalEntryFromSync(t, ctx(t))) : null;
+    const patch = { ...repair, ...brokerFacts(t, repair ? (repair.strategyDecision as TradeSync['strategyDecision']) : cur.strategyDecision ?? t.strategyDecision) };
     const changed = (Object.keys(patch) as (keyof JournalEntry)[]).some((k) => cur[k] !== patch[k]);
     if (!changed) continue;
     next = next.map((e, k) => (k === idx ? { ...e, ...patch } : e));
     updated.push(cur.id);
+    if (repair) repaired.push(cur.id);
   }
-  return { journal: next, changed: next !== journal, added, updated, flagged };
+  return { journal: next, changed: next !== journal, added, updated, flagged, repaired };
+}
+
+/**
+ * Sequencing gate for the journal sync: nothing is written until the current ET day's alert feed AND broker feed have
+ * each loaded successfully for that date. Before that, "no alert matched" would only mean "alerts not loaded yet", so
+ * the journal is left untouched (the Broker panel still displays whatever it has).
+ */
+export function syncJournalWhenReady(journal: JournalEntry[], trades: TradeSync[], ctx: (t: TradeSync) => SyncContext, ready: { date: string; alertsLoadedFor: string | null; brokerLoadedFor: string | null | undefined }): JournalSyncResult {
+  if (ready.alertsLoadedFor !== ready.date || ready.brokerLoadedFor !== ready.date) return { journal, changed: false, added: [], updated: [], flagged: [], repaired: [] };
+  return syncJournal(journal, trades, ctx);
 }

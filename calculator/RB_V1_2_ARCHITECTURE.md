@@ -609,3 +609,19 @@ Punch-list follow-up (shadow-validation gate):
   cutoff. The v1.2 layer reports `ENTRY WINDOW CLOSED` / `NO TICKET — ENTRY WINDOW CLOSED` and shows a "DO NOT EXECUTE —
   AFTER 3:30 PM ENTRY CUTOFF" banner, listing the historical alert-time ticket struck through. An earlier note here said
   v1.1 kept the ticket; that was wrong.
+
+## 30. Journal broker sync — load-race fix and known cross-day limitation
+
+**Load-race fix.**
+- **Sequencing gate:** the Journal sync writes nothing until today's alert feed and broker feed have each loaded at least once for the current ET date (`FeedState.loadedDate`, `BrokerFeed.loadedDate`, `syncJournalWhenReady`). "Alerts not loaded yet" is never recorded as NO ALERT.
+- **One-way repair:** a broker entry written as `NO_PRICE_MATCH` is upgraded to `MATCHED` when a later reconciliation finds exactly one price match (same ticker, side and ET day; time-eligible; within 2¢).
+  - **Fields filled:** only alert-owned fields — link, strategy decision, frozen plan/risk, scores, rule set, alert time and the alert OHLC placeholders.
+  - **Fields untouched:** broker-owned facts (fill, quantity, exit, statuses, P/L) and user-owned fields (notes, date/time).
+  - **Never relinked:** `MATCHED` and `AMBIGUOUS` entries. There is no "latest alert" fallback.
+
+**Known limitation (cross-day / overnight).**
+- **Current day only:** broker sync loads only the current ET day's orders (by submission time), and alert matching searches only the current ET day's alerts.
+- **Overnight positions:** an overnight position is not updated in the next session. Bracket legs filled on a later day belong to the earlier parent order, which isn't fetched.
+- **Next-day closes:** a manual close entered the next day appears as a separate unlinked row.
+- **Older trades:** trades from earlier days can't be linked or repaired after midnight ET.
+- **Planned fix:** cross-day persistence and historical backfill are deferred to the Supabase persistence / historical-backfill CR.
