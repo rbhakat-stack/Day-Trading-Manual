@@ -18,7 +18,7 @@ import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
 import { SuggestionCard } from '../ranker/FitPanel';
 import { QueueHeader, QueueLegend, QueueTable, QueueToolbar, type ColumnGroups, type QueueFilter } from './QueueParts';
-import { isDataReview, presentationFor, queueLayout, type PresentationConfig } from './queueView';
+import { isDataReview, presentationFor, queueLayout, ticketActionable, type PresentationConfig } from './queueView';
 
 export interface LiveActions {
   submit: (id: string) => void;
@@ -89,8 +89,8 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const [cols, setCols] = useState<ColumnGroups>({ shadow: true, trade: true, safety: true });
   const [open, setOpen] = useState<Set<string>>(new Set());
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
-  // Tickets the execution layer withholds (15:30 cutoff, terminal SETUP FAILED) are never shown as orders to place.
-  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && !r.lifecycle?.portfolioUnverified);
+  // Tickets the execution layer withholds (15:30 cutoff, terminal SETUP FAILED, CR-17 terminal chase) are never shown as orders to place.
+  const actionable = rows.filter(ticketActionable);
   // CR-13 — v1.1 tickets past the 15:30 entry cutoff: shown as historical, never as an order to place.
   const cutoff = rows.filter((r) => r.lifecycle?.entryWindowClosed);
   if (!enabled) {

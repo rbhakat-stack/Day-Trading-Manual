@@ -70,6 +70,8 @@ export interface Lifecycle {
   portfolioGate: string | null;
   /** Terminal SETUP FAILED latched from an observed stop breach (null = none). Any RB v1.1 ticket is withheld. */
   setupFailed: { observedAtMs: number; price: number; stop: number } | null;
+  /** CR-17 — terminal chase latched from a reliable observation beyond the chase limit (null = none). Any ticket is withheld. */
+  chaseMissed: { observedAtMs: number; price: number; entry: number; distanceAtr: number | null; thresholdAtr: number | null; quoteTradeIso: string } | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
   frozenV12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null } | null;
   gates: GateSequence;
@@ -121,7 +123,9 @@ export interface EodStatus {
 }
 
 const mins = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-export const ENTRY_WINDOW_CLOSED = 'NO TICKET — ENTRY WINDOW CLOSED. DO NOT EXECUTE — AFTER 3:30 PM ENTRY CUTOFF (any ticket issued for this alert before 15:30 is historical).';
+/** CR-17 entry-eligibility labels (presentation; the ExecutionState values are unchanged). */
+export const MISSED_DO_NOT_CHASE = 'MISSED — DO NOT CHASE';
+export const ENTRY_WINDOW_CLOSED ='NO TICKET — ENTRY WINDOW CLOSED. DO NOT EXECUTE — AFTER 3:30 PM ENTRY CUTOFF (any ticket issued for this alert before 15:30 is historical).';
 const WINDOW_CLOSED_DETAIL = 'NOT ELIGIBLE — NEW ENTRY WINDOW CLOSED';
 /** The entry window closed AFTER a valid alert (alert before 15:30, evaluated at/after it) — time-driven, not never-eligible. */
 const closedAfterAlert = (row: QueueRow, detail: string) => detail === WINDOW_CLOSED_DETAIL && etParts(row.record.alert.alertTimeMs).hhmm < RB_V1_DEFAULTS.entryWindowEnd;
@@ -191,7 +195,7 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
   return null;
 }
 
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null): Lifecycle {
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null): Lifecycle {
   const d = row.decision;
   const st = row.candidate?.status;
   const action = row.live?.action ?? null;
@@ -208,7 +212,7 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
     : frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const frozenScore: ScoreDisplay = frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' };
   const L = (executionState: ExecutionState, finalActionability: FinalActionability, reason: string, terminal = false, score = liveScore): Lifecycle =>
-    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, portfolioUnverified: false, portfolioGate, setupFailed: null, frozenV12, gates, score, eod });
+    ({ alertTimeTier, executionState, finalActionability, reason, terminal, entryWindowClosed: false, portfolioUnverified: false, portfolioGate, setupFailed: null, chaseMissed: null, frozenV12, gates, score, eod });
 
   // User-controlled lifecycle always wins: an order or position is governed by the broker, not by the alert clock.
   if (st === 'PENDING') return L('SUBMITTED', 'NO TICKET', 'Order marked submitted — manage it at the broker.', false, frozenScore);
@@ -225,12 +229,25 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
     };
   }
 
+  // CR-17 — terminal chase: a reliable observation beyond the chase limit ends new-entry eligibility for good (no
+  // revival when price pulls back, also after the alert window). An alert that was never eligible keeps that reason.
+  if (chase?.kind === 'CHASED' && !neverEligible(row, snap)) {
+    const entry = chase.entry ?? row.candidate?.entry ?? 0;
+    const atr = chase.distanceAtr !== undefined ? ` (${chase.distanceAtr.toFixed(2)} ATR, limit ${chase.thresholdAtr ?? RB_V1_DEFAULTS.chaseThresholdAtr} ATR)` : '';
+    return {
+      ...L('CHASED', 'NO TRADE', `${MISSED_DO_NOT_CHASE} — price ${chase.price} was beyond the ${entry} trigger${atr} at ${etParts(chase.observedAtMs).hhmmss} ET (last trade ${etParts(Date.parse(chase.quoteTradeIso)).hhmmss} ET). Terminal: no new entry from this alert; a new TrendSpider alert is required.`, true, frozenScore),
+      chaseMissed: { observedAtMs: chase.observedAtMs, price: chase.price, entry, distanceAtr: chase.distanceAtr ?? null, thresholdAtr: chase.thresholdAtr ?? null, quoteTradeIso: chase.quoteTradeIso },
+    };
+  }
+
   // CR-05 — terminal staleness: no revival, no READY, no rescoring after the alert window. Only an alert that was a
   // valid setup can expire; one that was never eligible keeps the reason it was never actionable (time never
   // rewrites "NOT ELIGIBLE — AFTER REGULAR SESSION" into "EXPIRED — STALE").
   if (now >= expiresAt) {
     const ne = neverEligible(row, snap);
     if (ne) return L(ne.state, 'NO TRADE', ne.reason, true, frozenScore);
+    // CR-17 — never claim "no trigger" when the current price is past the trigger.
+    if (row.live?.chase?.crossed) return L('EXPIRED — STALE', 'NO TRADE', `EXPIRED — STALE: the entry trigger was crossed but no order was submitted within ${RB_V1_DEFAULTS.alertWindowMinutes} minutes of the alert. Terminal.`, true, frozenScore);
     return L('EXPIRED — STALE', 'NO TRADE', `EXPIRED — STALE: no trigger within ${RB_V1_DEFAULTS.alertWindowMinutes} minutes of the alert. Terminal.`, true, frozenScore);
   }
 

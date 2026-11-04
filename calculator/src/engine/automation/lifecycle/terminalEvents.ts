@@ -12,6 +12,12 @@
  *   • the alert is still inside its alert window and no order has been submitted / filled (the broker governs those).
  * Missing or stale data never latches anything. The frozen alert snapshot, scores and plan are untouched; the RB v1.1
  * decision itself is not changed (the execution layer withholds its ticket, like the 15:30 cutoff).
+ *
+ * CR-17 — terminal CHASE ("MISSED — DO NOT CHASE"), same rules: the first reliable observation that price is beyond the
+ * existing 0.25 ATR chase limit (the calculator's own CHASED_SETUP hard fail, re-checked against the frozen entry and
+ * the signal ATR) for an unsubmitted alert ends its new-entry eligibility; a later pullback can never rearm it. It is
+ * stored in the same map under `chaseKey(recordId)` (not the record id), so a build without CR-17 ignores it and its
+ * own SETUP FAILED latch for the same record is unaffected.
  */
 import { RB_V1_DEFAULTS } from '../../settings';
 import { quoteAges, type AutomationConfig } from '../alertDecision';
@@ -19,17 +25,24 @@ import type { QueueRow } from '../liveQueue';
 
 export interface TerminalEvent {
   recordId: string;
-  kind: 'SETUP_FAILED';
+  kind: 'SETUP_FAILED' | 'CHASED';
   direction: 'LONG' | 'SHORT';
   alertTimeMs: number;
   observedAtMs: number;
-  /** Observed price that breached the planned stop, and the frozen planned stop it breached. */
+  /** Observed price that breached the planned stop (CHASED: the chase limit), and the frozen planned stop. */
   price: number;
   stop: number;
   quoteTradeIso: string;
+  /** CHASED only: frozen planned entry, observed distance beyond it in ATR, and the limit it exceeded. */
+  entry?: number;
+  distanceAtr?: number;
+  thresholdAtr?: number;
 }
 
 export type TerminalEventMap = Record<string, TerminalEvent>;
+
+/** Map key of the CR-17 terminal chase event (kept apart from the record-id key used by SETUP FAILED). */
+export const chaseKey = (recordId: string) => `${recordId}|CHASED`;
 
 const UNSUBMITTED = ['NEW', 'WATCHLIST'];
 
@@ -49,15 +62,56 @@ export function observedSetupFailure(r: QueueRow, now: number, cfg: Pick<Automat
   return { recordId: r.record.id, kind: 'SETUP_FAILED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso };
 }
 
+/**
+ * CR-17 — the terminal chase to latch for this row now, or null (no reliable observation). Requires: OK record not
+ * under DATA REVIEW, no submitted / filled order, inside the alert window, a fresh quote (existing freshness rules)
+ * whose last trade is not older than the alert, the calculator's CHASED_SETUP hard fail, and the observed price itself
+ * beyond the frozen entry by more than the chase limit in signal ATR.
+ */
+export function observedChase(r: QueueRow, now: number, cfg: Pick<AutomationConfig, 'maxDataAgeSec' | 'maxTradeAgeSec'>): TerminalEvent | null {
+  if (r.record.status !== 'OK' || !r.live?.chase || !r.quote) return null;
+  if (r.decision.section === 'DATA_REVIEW') return null;
+  if (r.candidate && !UNSUBMITTED.includes(r.candidate.status)) return null;
+  if (now - r.record.alert.alertTimeMs >= RB_V1_DEFAULTS.alertWindowMinutes * 60_000) return null;
+  if (!r.live.hardFails.some((f) => f.code === 'CHASED_SETUP')) return null;
+  const ages = quoteAges(r.quote, now);
+  if (!ages || ages.dataAgeSec > cfg.maxDataAgeSec || ages.tradeAgeSec > cfg.maxTradeAgeSec) return null;
+  const tradeMs = Date.parse(r.quote.tradeIso);
+  if (!Number.isFinite(tradeMs) || tradeMs < r.record.receivedMs) return null; // an observation from before the alert
+  const entry = r.candidate?.entry ?? r.live.plan?.entry;
+  const stop = r.candidate?.stop ?? r.live.plan?.stop;
+  const atr = r.record.snapshot?.values?.atr;
+  const limit = r.live.chase.thresholdAtr;
+  if (entry === undefined || entry === null || stop === undefined || stop === null || !atr || !(atr > 0)) return null;
+  // Belt and braces: the observed price itself must be beyond the frozen entry by more than the limit.
+  const distanceAtr = ((r.record.alert.direction === 'LONG' ? r.quote.price - entry : entry - r.quote.price) / atr);
+  if (!(distanceAtr > limit)) return null;
+  return {
+    recordId: r.record.id, kind: 'CHASED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now,
+    price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso, entry, distanceAtr: Math.round(distanceAtr * 1000) / 1000, thresholdAtr: limit,
+  };
+}
+
 /** Write-once: existing events are never changed or removed (same object returned when nothing new is latched). */
 export function latchTerminalEvents(prev: TerminalEventMap, rows: QueueRow[], now: number, cfg: Pick<AutomationConfig, 'maxDataAgeSec' | 'maxTradeAgeSec'>): { map: TerminalEventMap; changed: boolean } {
   let map = prev;
   for (const r of rows) {
-    if (prev[r.record.id]) continue;
-    const ev = observedSetupFailure(r, now, cfg);
-    if (!ev) continue;
-    if (map === prev) map = { ...prev };
-    map[r.record.id] = ev;
+    if (!prev[r.record.id]) {
+      const ev = observedSetupFailure(r, now, cfg);
+      if (ev) {
+        if (map === prev) map = { ...prev };
+        map[r.record.id] = ev;
+      }
+    }
+    // CR-17 — terminal chase (write-once; not needed once the setup has already failed terminally).
+    const ck = chaseKey(r.record.id);
+    if (!prev[ck] && !map[r.record.id]) {
+      const ev = observedChase(r, now, cfg);
+      if (ev) {
+        if (map === prev) map = { ...prev };
+        map[ck] = ev;
+      }
+    }
   }
   return { map, changed: map !== prev };
 }

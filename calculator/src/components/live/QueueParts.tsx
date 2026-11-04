@@ -12,7 +12,7 @@ import type { QualityTier } from '../../engine/ranker/opportunityTypes';
 import { FIT_KEYS, SETUP_KEYS } from '../../engine/ranker/opportunityTypes';
 import { usd } from '../../lib/format';
 import {
-  executionBadge, gateText,
+  entryState, executionBadge, gateText, ticketActionable, MISSED_DO_NOT_CHASE,
   chaseStatus, dataStatus, decisionBadge, detailFields, finalBadge, finalState, isDataReview, portfolioStatus, portfolioSummary, qualificationStatus,
   ruleSetText, scoreTone, TIER_SHORT, TIER_TONE, type Status, type StrategyColumn, type Tone,
 } from './queueView';
@@ -238,7 +238,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                       <td className={td}><Pill s={portfolioStatus(r)} title={portfolioStatus(r).detail} /></td>
                     </>
                   )}
-                  <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
+                  <td className={td}><Pill s={entryState(r) ?? executionBadge(r)} wide title={(entryState(r) ?? executionBadge(r)).detail} /></td>
                   <td className={td}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
                 </tr>
                 {isOpen && (
@@ -311,12 +311,14 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
   const lat = alertLatency(r.record);
   const lc = r.lifecycle;
   const ex = executionBadge(r);
+  const es = entryState(r); // CR-17 — one of the three entry states, or null (the existing decision applies)
   return (
     <div className="space-y-3 font-sans" data-details={r.record.id}>
       <div className="flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border-2 border-[#3d7bff] bg-ink-900 px-5 py-3">
         <div className="flex items-center gap-3 pr-6 sm:border-r sm:border-ink-600">
           <span className="text-[28px] font-black tracking-tight text-ink-100">{a.symbol}</span>
           <SidePill side={a.direction} />
+          {es && <Pill s={es} wide title={es.detail} />}
         </div>
         {layout.map((c, i) => {
           const cell = c.cell(r);
@@ -352,6 +354,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           ['Chase distance', ch ? `${ch.distance >= 0 ? '+' : ''}${ch.distance.toFixed(2)} (${ch.distanceAtr >= 0 ? '+' : ''}${ch.distanceAtr.toFixed(2)} ATR)` : '—'],
           ['Allowed chase distance', ch ? `${ch.thresholdAtr} ATR = ${money(ch.thresholdDollars)}` : '—'],
           ['Chase status', <b key="c" className={TONE_TEXT[cs.tone]}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</b>],
+          ['Entry state', es ? <b key="es" className={TONE_TEXT[es.tone]} title={es.detail}>{es.label}</b> : <span key="es" className="text-ink-400" title={dec.detail}>— (decision: {dec.label})</span>],
         ]} />
         <Panel4 icon="data" title="Data & Diagnostics" rows={[
           ['Data status', <b key="d" className={TONE_TEXT[ds.tone]}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</b>],
@@ -366,6 +369,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           ['Portfolio status', <b key="p" className={TONE_TEXT[ps.tone]} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</b>],
           ['Gate sequence', <span key="g" className="text-[12.5px]">{gateText(r)}</span>],
           ['Alert-time tier', lc?.alertTimeTier ? <b key="t">{TIER_SHORT[lc.alertTimeTier as QualityTier] ?? lc.alertTimeTier} <span className="font-normal text-ink-400">(frozen)</span></b> : '—'],
+          ['Entry state', es ? <b key="es2" className={TONE_TEXT[es.tone]} title={es.detail}>{es.label}</b> : <span key="es2" className="text-ink-400" title={dec.detail}>— (decision: {dec.label})</span>],
           ['Current execution state', <b key="e" className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</b>],
           ['Final execution state (Final Actionability)', <b key="f" className={TONE_TEXT[lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone]} title={lc?.reason}>{lc ? `${lc.finalActionability}${lc.finalActionability !== 'READY' ? ` — ${lc.reason}` : ''}` : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`}</b>],
           ['Score basis', lc ? `${lc.score.basis}${lc.score.value !== null ? ` · ${lc.score.value}` : ''} · rank ${lc.score.rank === 'NOT RANKED' ? 'NOT RANKED' : `#${lc.score.rank}`}` : '—'],
@@ -385,9 +389,10 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[#3ee08f]">{active?.version ?? ''} active actions</span>
         {r.decision.ticket && r.lifecycle?.entryWindowClosed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — after 3:30 PM entry cutoff</span>}
+        {r.decision.ticket && r.lifecycle?.chaseMissed && !r.lifecycle?.setupFailed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — {MISSED_DO_NOT_CHASE} (terminal)</span>}
         {r.decision.ticket && r.lifecycle?.setupFailed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">Do not execute — setup failed (terminal)</span>}
         {r.decision.ticket && r.lifecycle?.portfolioUnverified && !r.lifecycle?.setupFailed && <span className="rounded bg-short px-2 py-1 text-xs font-black uppercase text-ink-950">No ticket — portfolio unverified</span>}
-        {r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && !r.lifecycle?.portfolioUnverified && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
+        {ticketActionable(r) && <button type="button" onClick={() => actions.submit(r.record.id)} className="rounded bg-long px-2.5 py-1 text-xs font-bold text-ink-950">Mark order submitted</button>}
         {canAct && <button type="button" onClick={() => actions.watch(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Watch</button>}
         {canAct && <button type="button" onClick={() => actions.skip(r.record.id)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Skip trade</button>}
         {v && <button type="button" onClick={() => actions.openInCalculator(r)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Open in manual Calculator</button>}
