@@ -70,6 +70,45 @@ export async function logout(): Promise<boolean> {
   }
 }
 
+export type LogoutOutcome =
+  | { kind: 'signed-out'; state: AuthState } // server confirmed: session revoked, cookie cleared
+  | { kind: 'unconfirmed'; state: AuthState; message: string } // this browser is signed out, server revocation NOT confirmed
+  | { kind: 'failed'; message: string }; // still signed in (or unknown) — stay in the app and say so
+
+/**
+ * Log out and report only what is actually known. The server's answer decides whether the session was revoked; a
+ * fresh status check decides whether this browser is still signed in. Never claims a revocation the server did not
+ * confirm. Never touches browser storage.
+ */
+export async function performLogout(status: () => Promise<AuthState> = fetchAuthStatus): Promise<LogoutOutcome> {
+  let confirmed = false;
+  let reason = '';
+  try {
+    const res = await fetch(AUTH_URL, {
+      method: 'POST', cache: 'no-store', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'logout' }),
+    });
+    const b = (await readJson(res)) as { ok?: unknown; error?: unknown } | null;
+    confirmed = res.ok && b?.ok === true;
+    if (!confirmed) reason = typeof b?.error === 'string' ? b.error : `HTTP ${res.status}`;
+  } catch (e) {
+    reason = (e as Error).message || 'Network error';
+  }
+  const after = await status();
+  if (after.kind === 'authenticated') {
+    return { kind: 'failed', message: `Log out failed (${reason || 'session still active'}). You are still signed in — try again.` };
+  }
+  if (after.kind === 'unreachable') {
+    return { kind: 'failed', message: `Log out could not be confirmed (${reason || after.error}). You may still be signed in — try again.` };
+  }
+  if (confirmed) return { kind: 'signed-out', state: after };
+  return {
+    kind: 'unconfirmed', state: after,
+    message: `Signed out in this browser, but the server could not confirm the session was revoked (${reason}). It expires automatically within 12 hours.`,
+  };
+}
+
 /** Re-check result handling: only a definitive server answer changes an already-decided state (a network blip does not). */
 export function nextState(current: AuthState, fresh: AuthState): AuthState {
   if (fresh.kind === 'unreachable' && current.kind !== 'checking' && current.kind !== 'unreachable') return current;

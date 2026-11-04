@@ -5,8 +5,9 @@
  * browser untouched.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { fetchAuthStatus, logout, nextState, type AuthState } from './authClient';
+import { fetchAuthStatus, nextState, performLogout, type AuthState } from './authClient';
 import { LoginScreen } from './LoginScreen';
+import { AuthSessionContext } from './LogoutButton';
 
 const RECHECK_MS = 60_000;
 
@@ -41,29 +42,32 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [expiresAt, refresh]);
 
   const [signingOut, setSigningOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const onLogout = async () => {
+    if (signingOut) return;
     setSigningOut(true);
-    await logout();
+    setLogoutError(null);
+    const r = await performLogout();
     setSigningOut(false);
-    setState({ kind: 'checking' });
-    await refresh();
+    if (r.kind === 'failed') {
+      setLogoutError(r.message); // still signed in: stay in the app and say so
+      return;
+    }
+    setNotice(r.kind === 'unconfirmed' ? r.message : null);
+    setState(r.state);
   };
 
   if (state.kind === 'disabled') return <>{children}</>;
   if (state.kind === 'authenticated') {
+    // The Log out control is rendered in the application header (LogoutButton) from this context.
     return (
-      <>
+      <AuthSessionContext.Provider value={{ user: state.user, signingOut, error: logoutError, logout: () => void onLogout() }}>
         {children}
-        <div className="fixed bottom-3 right-3 z-50 flex items-center gap-2 rounded-full border border-ink-700 bg-ink-900/95 px-3 py-1.5 text-xs text-ink-300 shadow-lg backdrop-blur">
-          <span className="hidden sm:inline">Signed in as <span className="font-semibold text-ink-100">{state.user}</span></span>
-          <button type="button" onClick={() => void onLogout()} disabled={signingOut} className="rounded-full border border-ink-600 px-2.5 py-0.5 font-semibold text-ink-100 hover:bg-ink-800 disabled:opacity-50">
-            {signingOut ? 'Signing out…' : 'Log out'}
-          </button>
-        </div>
-      </>
+      </AuthSessionContext.Provider>
     );
   }
-  if (state.kind === 'login') return <LoginScreen onSignedIn={() => void refresh()} />;
+  if (state.kind === 'login') return <LoginScreen notice={notice} onSignedIn={() => { setNotice(null); setLogoutError(null); void refresh(); }} />;
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="w-full max-w-sm rounded-xl border border-ink-700 bg-ink-900 p-6 text-center">

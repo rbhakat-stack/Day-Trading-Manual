@@ -39,6 +39,7 @@ import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, us
 import { applyCrossDay, cr15Gate, crossDayEvidenceVerified, crossDayRequest, planCrossDay, validateReconciledJournal, type Cr15Mode, type CrossDayEvidence, type CrossDayPlan } from './engine/automation/lifecycle/crossDayJournal';
 import { ensurePreCr15Backup, readBackup, restorePreCr15 } from './lib/journalBackup';
 import { Cr15Panel } from './components/Cr15Panel';
+import { LogoutButton } from './auth/LogoutButton'; // CR-16: header Log out (renders only when signed in)
 import {
   changedCoreFields,
   coreChanged,
@@ -603,6 +604,7 @@ export default function App() {
             <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] ${autoCfg.enabled ? 'border-long/50 text-long' : 'border-ink-600 text-ink-400'}`}>
               Automated alerts {autoCfg.enabled ? 'on' : 'off'}
             </span>
+            <LogoutButton />
           </div>
           <nav className="flex w-full gap-1 overflow-x-auto sm:w-auto" aria-label="Sections">
             {tabs.map((t) => (
