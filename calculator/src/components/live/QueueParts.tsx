@@ -156,9 +156,9 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
   const [asc, setAsc] = useState(false);
   const sorted = useMemo(() => [...rows].sort((a, b) => (asc ? 1 : -1) * (a.record.alert.alertTimeMs - b.record.alert.alertTimeMs) || a.record.id.localeCompare(b.record.id)), [rows, asc]);
   const strat = layout.filter((c) => c.role === 'ACTIVE' || cols.shadow);
-  const stratCols = (c: StrategyColumn) => [c.scoreLabel, ...c.tierLabels, ...(c.role === 'ACTIVE' ? ['Decision'] : [])];
+  const stratCols = (c: StrategyColumn) => [c.scoreLabel, ...c.tierLabels, ...(c.role === 'ACTIVE' ? ['Decision', 'Execution', 'Final State'] : [])];
   const trade = cols.trade ? ['Entry', 'Stop', 'Target', 'Qty', '$ Risk', 'Cur Price'] : [];
-  const safety = [...(cols.safety ? ['Chase', 'Data', 'Portfolio'] : []), 'Execution', 'Final State'];
+  const safety = cols.safety ? ['Chase', 'Data', 'Portfolio'] : [];
   const span = 6 + strat.reduce((n, c) => n + stratCols(c).length, 0) + trade.length + safety.length;
   const toggle = (id: string) => { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); setOpen(n); };
   const th = 'whitespace-nowrap px-1.5 py-2 text-[12.5px] font-semibold text-ink-200';
@@ -217,7 +217,13 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                           {cell.frozen && cell.live != null && <span className="block text-[10px] font-normal text-ink-500">now {cell.live} (live)</span>}
                         </td>
                         {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}><TierPill t={t} /></td>)}
-                        {c.role === 'ACTIVE' && <td className={`${td} border-r ${edge(c)}`}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>}
+                        {c.role === 'ACTIVE' && (
+                          <>
+                            <td className={td}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
+                            <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
+                            <td className={`${td} border-r ${edge(c)}`}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
+                          </>
+                        )}
                       </Fragment>
                     );
                   })}
@@ -238,8 +244,6 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                       <td className={td}><Pill s={portfolioStatus(r)} title={portfolioStatus(r).detail} /></td>
                     </>
                   )}
-                  <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
-                  <td className={td}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
                 </tr>
                 {isOpen && (
                   <tr>
@@ -288,6 +292,123 @@ function Panel4({ icon, title, rows }: { icon: keyof typeof ICONS; title: string
   );
 }
 
+/* ───────────────────────── consolidated decision & order panel (presentation only) ───────────────────────── */
+
+type Freshness = 'LIVE' | 'FROZEN';
+const MARK_TEXT: Record<Freshness, string> = {
+  LIVE: 'LIVE — can change while RB re-evaluates the alert (a terminal rejection never becomes READY again)',
+  FROZEN: 'FROZEN — captured with the original alert / trade plan; does not change during this alert',
+};
+
+/** Small LIVE / FROZEN marker: an icon plus visible text (never colour alone) and a tooltip. */
+function Mark({ k }: { k: Freshness }) {
+  return (
+    <span title={MARK_TEXT[k]} aria-label={MARK_TEXT[k]} data-mark={k} className={`ml-1.5 inline-flex items-center gap-0.5 align-middle text-[9.5px] font-semibold uppercase tracking-wider ${k === 'LIVE' ? 'text-[#3ee08f]' : 'text-[#9db8ff]'}`}>
+      {k === 'LIVE'
+        ? <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>
+        : <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>}
+      {k}
+    </span>
+  );
+}
+
+function Card({ label, mark, children, wide }: { label: string; mark: Freshness; children: ReactNode; wide?: boolean }) {
+  return (
+    <div className={`rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 ${wide ? 'sm:col-span-2 xl:col-span-1' : ''}`} data-field={label}>
+      <div className="flex items-center justify-between gap-2 text-[12px] text-ink-300"><span>{label}</span><Mark k={mark} /></div>
+      <div className="mt-0.5 text-[20px] font-bold leading-tight tabular-nums">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The ACTIVE strategy's decision, statuses and trade plan in one place. Every value is the one the existing queue
+ * already renders (same helpers and expressions as the table and the detail panels); nothing is recomputed here.
+ */
+function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore }: {
+  r: QueueRow; f: ReturnType<typeof detailFields>; active: StrategyColumn; dec: Status; ex: Status; ds: Status; cs: Status; ps: Status;
+  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number;
+}) {
+  const a = r.record.alert;
+  const lc = r.lifecycle;
+  const cell = active.cell(r);
+  const ch = f.chase;
+  // Markers follow the real source: the score shown is frozen only when the presenter shows the alert-time value.
+  const scoreMark: Freshness = cell.frozen ? 'FROZEN' : 'LIVE';
+  const planMark: Freshness = f.planSource === 'CANDIDATE' ? 'FROZEN' : 'LIVE';
+  // Same expression as the existing "Final execution state (Final Actionability)" row (the reason is shown below it).
+  const finalText = lc ? lc.finalActionability : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`;
+  const finalToneKey: Tone = lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone;
+  const orderTone = (t: string | null) => (t && /^BUY/.test(t) ? 'text-long' : t && /^SELL/.test(t) ? 'text-short' : 'text-ink-100');
+  const small = 'text-[12px] text-ink-300';
+  const supporting: [string, string, Freshness][] = [
+    ['Dollar risk (planned)', money(f.plannedRisk), planMark],
+    ['ATR (signal)', p(f.atr, 4), 'FROZEN'],
+    ['Chase distance', ch ? `${ch.distance >= 0 ? '+' : ''}${ch.distance.toFixed(2)} (${ch.distanceAtr >= 0 ? '+' : ''}${ch.distanceAtr.toFixed(2)} ATR)` : '—', 'LIVE'],
+    ['Allowed chase distance', ch ? `${ch.thresholdAtr} ATR = ${money(ch.thresholdDollars)}` : '—', 'FROZEN'],
+    [`Alert time (${f.timeSource === 'RECEIVED' ? 'server' : 'payload'})`, fmtEt(f.alertTimeMs), 'FROZEN'],
+    ['Signal candle', f.signalCandle ?? '—', 'FROZEN'],
+    ['RB v1.1 hard fails', f.hardFails.length ? f.hardFails.join(', ') : 'none', 'LIVE'],
+    ['Portfolio slots', f.portfolio ? `${f.portfolio.slotsUsed} / ${f.portfolio.maxPositions} used` : '—', 'LIVE'],
+    ['Portfolio heat', f.portfolio ? `${money(f.portfolio.heatCommitted)} / ${money(f.portfolio.heatLimit, 0)}` : '—', 'LIVE'],
+  ];
+  return (
+    <section className="sticky left-0 max-w-[calc(100vw-4rem)] rounded-xl border-2 border-[#3d7bff] bg-ink-900 p-3 sm:p-4" data-decision-panel={r.record.id} aria-label={`${active.version} (${active.role}) — Trade Decision & Order`}>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <span className="text-[26px] font-black tracking-tight text-ink-100">{a.symbol}</span>
+        <SidePill side={a.direction} />
+        <h3 className="text-[16px] font-semibold text-ink-100"><span className="text-[#5b9bff]">{active.version}</span> ({active.role}) — Trade Decision &amp; Order</h3>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5" data-row-group="decision">
+        <Card label="Score" mark={scoreMark}>
+          <span className={cell.tiers[0] && !cell.frozen ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? '—'}</span>
+          <span className="text-[14px] font-semibold text-ink-400"> / {active.version === 'RB v1.2' ? maxScore : 100}</span>
+          {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
+        </Card>
+        <Card label="Tier" mark={scoreMark}><TierPill t={cell.tiers[0] ?? null} /></Card>
+        <Card label="Decision" mark="LIVE"><span className={TONE_TEXT[dec.tone]} title={`${r.decision.decision} — ${r.decision.detail}`}>{dec.label}</span></Card>
+        <Card label="Current execution state" mark="LIVE"><span className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</span></Card>
+        <Card label="Final execution state (Final Actionability)" mark="LIVE" wide>
+          <span className={TONE_TEXT[finalToneKey]} title={lc?.reason}>{finalText}</span>
+          {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[11.5px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
+        </Card>
+      </div>
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-3" data-row-group="checks">
+        <Card label="Data status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
+        <Card label="Chase status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
+        <Card label="Portfolio status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
+      </div>
+
+      <div className="mt-2 rounded-lg border border-ink-600 bg-ink-850 px-3 py-2" data-row-group="order">
+        <div className="mb-1 flex items-center gap-2 text-[13px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'alert-time plan'})</span>}<Mark k={planMark} /></div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 lg:grid-cols-5">
+          <div data-field="Entry"><dt className={small}>Entry</dt><dd className="text-[24px] font-bold tabular-nums text-ink-100">{p(f.entry)}</dd></div>
+          <div data-field="Stop"><dt className={small}>Stop</dt><dd className="text-[24px] font-bold tabular-nums text-[#ff6b7f]">{p(f.stop)}</dd></div>
+          <div data-field="Target"><dt className={small}>Target</dt><dd className="text-[24px] font-bold tabular-nums text-[#3ee08f]">{p(f.target)}</dd></div>
+          <div data-field="Quantity"><dt className={small}>Quantity</dt><dd className="text-[24px] font-bold tabular-nums text-ink-100">{f.shares === null ? '—' : String(f.shares)}</dd></div>
+          <div data-field="Execution Type"><dt className={small}>Execution Type</dt><dd><span className={`inline-block rounded-md border border-ink-500 bg-ink-800 px-2.5 py-1 text-[18px] font-black uppercase tracking-wide ${orderTone(f.orderType)}`}>{f.orderType ?? '—'}</span></dd></div>
+        </dl>
+      </div>
+
+      <dl className="mt-2 grid gap-x-6 gap-y-1 rounded-lg border border-ink-700 px-3 py-2 text-[12.5px] sm:grid-cols-2 xl:grid-cols-3" data-row-group="supporting">
+        {supporting.map(([k, v, m]) => (
+          <div key={k} className="flex items-baseline justify-between gap-2 border-b border-ink-800 py-0.5" data-field={k}>
+            <dt className="text-ink-300">{k}</dt>
+            <dd className="text-right tabular-nums text-ink-100">{v}<Mark k={m} /></dd>
+          </div>
+        ))}
+      </dl>
+
+      <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-400" data-legend="live-frozen">
+        <span><Mark k="LIVE" /> can change while RB re-evaluates the alert</span>
+        <span><Mark k="FROZEN" /> captured with the original alert / trade plan</span>
+      </p>
+    </section>
+  );
+}
+
 export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades }) {
   const f = detailFields(r);
   const s = r.record.snapshot;
@@ -313,27 +434,28 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
   const ex = executionBadge(r);
   return (
     <div className="space-y-3 font-sans" data-details={r.record.id}>
-      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border-2 border-[#3d7bff] bg-ink-900 px-5 py-3">
-        <div className="flex items-center gap-3 pr-6 sm:border-r sm:border-ink-600">
-          <span className="text-[28px] font-black tracking-tight text-ink-100">{a.symbol}</span>
-          <SidePill side={a.direction} />
-        </div>
-        {layout.map((c, i) => {
-          const cell = c.cell(r);
-          return (
-            <div key={c.version} className={`text-[14px] ${i > 0 ? 'sm:border-l sm:border-ink-600 sm:pl-8' : ''}`}>
-              <div className="text-[16px] font-semibold"><span className="text-[#5b9bff]">{c.version}</span> <span className={c.role === 'ACTIVE' ? 'text-ink-100' : 'text-[#d9c8ff]'}>({c.role})</span></div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-ink-200">
-                <span>Score: <b className={c.role === 'ACTIVE' && cell.tiers[0] ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? '—'}</b> / {c.version === 'RB v1.2' ? maxScore : 100}</span>
+      {active && (
+        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} />
+      )}
+      {comparison.length > 0 && (
+        <div className="sticky left-0 flex max-w-[calc(100vw-4rem)] flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-4 py-2 text-[13px]" data-comparison="shadow">
+          {comparison.map((c) => {
+            const cell = c.cell(r);
+            return (
+              <div key={c.version} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ink-200">
+                <span className="font-semibold"><span className="text-[#5b9bff]">{c.version}</span> <span className="text-[#d9c8ff]">({c.role})</span></span>
+                <span>Score: <b className="text-ink-100">{cell.score ?? '—'}</b> / {c.version === 'RB v1.2' ? maxScore : 100}</span>
                 {c.tierLabels.map((l, k) => <span key={l} className="flex items-center gap-1.5">{l}: <TierPill t={cell.tiers[k]} /></span>)}
-                {cell.decision && <span>Decision: <b className={TONE_TEXT[dec.tone]}>{cell.decision}</b></span>}
+                <span className="text-[11px] text-ink-400">comparison only — not used for execution</span>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
-      <div className="grid gap-y-2 rounded-xl border border-ink-700 bg-ink-850 py-2 md:grid-cols-2 xl:grid-cols-4 xl:divide-x xl:divide-ink-700">
+      <details className="rounded-xl border border-ink-700 bg-ink-850" data-full-details>
+        <summary className="cursor-pointer px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-ink-400">Full details — Alert &amp; Mapping · Trade Construction · Data &amp; Diagnostics · Portfolio &amp; Execution</summary>
+      <div className="grid gap-y-2 border-t border-ink-700 py-2 md:grid-cols-2 xl:grid-cols-4 xl:divide-x xl:divide-ink-700">
         <Panel4 icon="mapping" title="Alert & Mapping" rows={[
           [`Alert time (${f.timeSource === 'RECEIVED' ? 'server' : 'payload'})`, fmtEt(f.alertTimeMs)],
           ['Signal candle', f.signalCandle ?? '—'],
@@ -371,6 +493,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
           ['Score basis', lc ? `${lc.score.basis}${lc.score.value !== null ? ` · ${lc.score.value}` : ''} · rank ${lc.score.rank === 'NOT RANKED' ? 'NOT RANKED' : `#${lc.score.rank}`}` : '—'],
         ]} />
       </div>
+      </details>
 
       {why && (
         <div className="flex items-start gap-3 rounded-xl border-2 border-[#b8901e] bg-[#2a2109]/70 px-4 py-2.5 text-[14px] text-ink-100">

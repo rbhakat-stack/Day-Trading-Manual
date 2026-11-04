@@ -307,6 +307,10 @@ export function detailFields(r: QueueRow) {
     target: c?.target ?? plan?.target ?? null,
     shares: c?.shares ?? plan?.shares ?? null,
     plannedRisk: c?.plannedRisk ?? plan?.maxLoss ?? null,
+    /** The plan's own order instruction (same object as entry / stop / target / shares; never inferred from the side). */
+    orderType: c?.orderType ?? plan?.orderType ?? null,
+    /** Where the plan values above come from: the candidate's frozen plan, or (no candidate) the live calculator plan. */
+    planSource: c ? ('CANDIDATE' as const) : plan ? ('LIVE_PLAN' as const) : null,
     atr: rec.snapshot?.values?.atr ?? null,
     currentPrice: r.quote?.price ?? c?.currentPrice ?? null,
     chase: ch,
