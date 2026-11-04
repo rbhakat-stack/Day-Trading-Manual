@@ -72,6 +72,8 @@ export interface Lifecycle {
   setupFailed: { observedAtMs: number; price: number; stop: number } | null;
   /** S2a — terminal chase recorded from a reliable observation (evidence; null/absent = none). */
   chaseLatched?: { observedAtMs: number; price: number; entry: number | null; distanceAtr: number | null; thresholdAtr: number | null; quoteTradeIso: string } | null;
+  /** S2a.2 — a READY ticket withheld for missing observation-continuity or time evidence (the reason). */
+  observationWithheld?: string | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
   frozenV12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null } | null;
   gates: GateSequence;
@@ -201,8 +203,21 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
  *   • otherwise, whenever the active decision carries a ticket (a revival after the chase), withholds it: CHASED · NO TRADE.
  * Without a live ticket the existing labels are kept, so nothing changes for alerts that could not be traded anyway.
  */
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null): Lifecycle {
-  const lc = deriveLifecycleBase(row, snap, now, eod, terminal, portfolioGate);
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null, observationRefusal: string | null = null): Lifecycle {
+  return withObservation(withChase(row, snap, deriveLifecycleBase(row, snap, now, eod, terminal, portfolioGate), chase), row, observationRefusal);
+}
+
+/**
+ * S2a.2 — a ticket the lifecycle would offer (READY) is withheld when this tab cannot show continuous market-data
+ * observation since the alert, or when the computer's clock disagrees with server time. It uses the existing DATA REVIEW /
+ * NO TICKET state; every other lifecycle (terminal, submitted, no ticket) is returned unchanged.
+ */
+function withObservation(lc: Lifecycle, row: QueueRow, refusal: string | null): Lifecycle {
+  if (!refusal || !row.decision.ticket || lc.finalActionability !== 'READY') return lc;
+  return { ...lc, executionState: 'DATA REVIEW', finalActionability: 'NO TICKET', observationWithheld: refusal, reason: `NO TICKET — ${refusal}. No new entry is offered for this alert in this browser; it is not evidence that the setup failed or was chased.` };
+}
+
+function withChase(row: QueueRow, snap: AlertTimeSnapshot | null, lc: Lifecycle, chase: TerminalEvent | null): Lifecycle {
   if (chase?.kind !== 'CHASED') return lc;
   const chaseLatched = { observedAtMs: chase.observedAtMs, price: chase.price, entry: chase.entry ?? null, distanceAtr: chase.distanceAtr ?? null, thresholdAtr: chase.thresholdAtr ?? null, quoteTradeIso: chase.quoteTradeIso };
   if (['SUBMITTED', 'IN POSITION', 'CLOSED'].includes(lc.executionState)) return { ...lc, chaseLatched };
@@ -302,7 +317,7 @@ const NEW_ENTRY = ['NEW', 'WATCHLIST'];
 /** The Queue's own "order to place" predicate (the same flags its action cards and buttons use), plus the S2a chase. */
 export function queueOffersOrder(r: QueueRow): boolean {
   const lc = r.lifecycle;
-  return !!r.decision.ticket && !!lc && lc.finalActionability === 'READY' && !lc.entryWindowClosed && !lc.setupFailed && !lc.portfolioUnverified && !lc.chaseLatched;
+  return !!r.decision.ticket && !!lc && lc.finalActionability === 'READY' && !lc.entryWindowClosed && !lc.setupFailed && !lc.portfolioUnverified && !lc.chaseLatched && !lc.observationWithheld;
 }
 
 export function executionAuthorizations(rows: QueueRow[], now: number): Record<string, ExecutionAuthorization> {

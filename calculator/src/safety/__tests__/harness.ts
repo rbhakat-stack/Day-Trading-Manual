@@ -23,6 +23,7 @@ import { RB_V1_DEFAULTS } from '../../engine/settings';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import { executionAuthorizations } from '../../engine/automation/lifecycle/executionState';
 import { gateRankingByAuthorization } from '../../components/portfolioGate';
+import { observeContinuity, type ObservationMap } from '../../engine/automation/lifecycle/observationContinuity';
 
 export interface Fixture {
   _provenance: Record<string, string>;
@@ -72,18 +73,22 @@ export interface RunOpts {
   portfolioGate?: string | null;
   /** Mutate candidates before a pass (user actions such as "Mark order submitted"). */
   before?: (now: number, cs: Candidate[]) => Candidate[];
+  /** S2a.2 — model the App's in-memory observation continuity (lost on reload: never part of `start`). */
+  observe?: boolean;
 }
 
 /** The app loop over `steps`; every pass returns what both surfaces would show at that instant. */
 export function runApp(records: AutoAlertRecord[], steps: Step[], o: RunOpts = {}): Pass[] {
   let { candidates, frozen, terminal } = o.start ?? { candidates: [] as Candidate[], frozen: {} as AlertSnapshotMap, terminal: {} as TerminalEventMap };
   const positions = o.positions ?? [];
+  let observation: ObservationMap = {};
   return steps.map(({ now, quotes }) => {
     if (o.before) candidates = o.before(now, candidates);
     const recs = records
       .filter((r) => r.receivedMs <= now)
       .map((r) => (Date.parse(r.firstProcessedIso ?? r.processedIso ?? r.receivedIso) > now ? { ...r, status: 'RECEIVED' as const } : r));
-    const q = buildQueue({ records: recs, candidates, positions, quotes, now, cfg: DEFAULT_AUTOMATION, rb: RB_V1_DEFAULTS, rk: RK, classify, parity: {}, strategyVersion: 'RB v1.1', frozen, terminal, portfolioGate: o.portfolioGate ?? null });
+    if (o.observe) observation = observeContinuity(observation, recs, quotes, DEFAULT_AUTOMATION);
+    const q = buildQueue({ records: recs, candidates, positions, quotes, now, cfg: DEFAULT_AUTOMATION, rb: RB_V1_DEFAULTS, rk: RK, classify, parity: {}, strategyVersion: 'RB v1.1', frozen, terminal, portfolioGate: o.portfolioGate ?? null, observation: o.observe ? observation : undefined });
     candidates = q.candidates;
     frozen = freezeAlertSnapshots(frozen, q.rows, now, 91).map;
     terminal = latchTerminalEvents(terminal, q.rows, now, DEFAULT_AUTOMATION).map;

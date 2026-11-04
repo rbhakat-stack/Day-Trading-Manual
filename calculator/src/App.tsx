@@ -34,8 +34,9 @@ import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type Aler
 import { executionStatus } from './engine/automation/lifecycle/executionStatus';
 import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
-import { executionAuthorizations } from './engine/automation/lifecycle/executionState'; // S2a
-import { gateRankingByAuthorization } from './components/portfolioGate'; // S2a
+import { executionAuthorizations, queueOffersOrder } from './engine/automation/lifecycle/executionState'; // S2a
+import { calculatorHandoff, gateRankingByAuthorization } from './components/portfolioGate'; // S2a
+import { observeContinuity, type ObservationMap } from './engine/automation/lifecycle/observationContinuity'; // S2a.2
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useBrokerSymbolHistory, useLiveQuotes, usePersistent, useServerFlags, type ClassMap } from './lib/automationClient';
 import { applyCrossDay, cr15Gate, crossDayEvidenceVerified, crossDayRequest, planCrossDay, validateReconciledJournal, type Cr15Mode, type CrossDayEvidence, type CrossDayPlan } from './engine/automation/lifecycle/crossDayJournal';
@@ -67,6 +68,9 @@ function loadRankerSettings(): RankerSettings {
 export default function App() {
   const [settings, setSettings] = useState<RbSettings>(() => ({ ...RB_V1_DEFAULTS, ...load<Partial<RbSettings>>(KEYS.settings, {}) }));
   const [form, setForm] = useState<FormState>(() => emptyForm(settings));
+  // S2a.2 — the automated alert a Calculator session was opened from (kept while ticker and side are unchanged).
+  const [calcOrigin, setCalcOrigin] = useState<{ recordId: string; ticker: string; direction: FormState['direction']; label: string } | null>(null);
+  const alertOrigin = calcOrigin && form.ticker === calcOrigin.ticker && form.direction === calcOrigin.direction ? calcOrigin : null;
   const [calculated, setCalculated] = useState(false);
   const [useMarketEntry, setUseMarketEntry] = useState(false);
   const [actualFill, setActualFill] = useState('');
@@ -164,6 +168,7 @@ export default function App() {
   };
 
   const clear = () => {
+    setCalcOrigin(null); // S2a.2
     setForm(emptyForm(settings, form.direction));
     setCalculated(false);
     setUseMarketEntry(false);
@@ -173,6 +178,7 @@ export default function App() {
   const loadScenario = (id: string) => {
     const s = SCENARIOS.find((x) => x.id === id);
     if (!s) return;
+    setCalcOrigin(null); // S2a.2
     setForm(formFromInputs(s.inputs));
     setUseMarketEntry(false);
     setActualFill('');
@@ -220,6 +226,18 @@ export default function App() {
 
   /** Calculator → Ranker: transfer everything the calculator already knows. */
   const sendToRanker = () => {
+    // S2a.2 — an alert-derived calculation never becomes a separate manual candidate.
+    const h = calculatorHandoff(alertOrigin, candidates);
+    if (h.kind === 'SELECT_ALERT_CANDIDATE') {
+      setSelectedId(h.id);
+      setTab('ranker');
+      window.scrollTo({ top: 0 });
+      return;
+    }
+    if (h.kind === 'REFUSE_ALERT_DERIVED') {
+      alert(`This calculation comes from the automated alert ${alertOrigin?.label}. Its authorization is decided by the Live Queue, so it is not sent to the Ranker as a manual candidate.`);
+      return;
+    }
     // Only an eligible, ready ticket can be sent. Hard-failed results never reach the ranker.
     if (!result?.ready || !result.eligible || !result.ticket || result.hardFails.length) return;
     const p = result.ticket;
@@ -326,6 +344,9 @@ export default function App() {
   );
   // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
   const [terminalEvents, setTerminalEvents] = usePersistent<TerminalEventMap>(AUTO_KEYS.terminalEvents, () => pruneTerminalEvents(load<TerminalEventMap>(AUTO_KEYS.terminalEvents, {}), Date.now()));
+  // S2a.2 — in-memory observation continuity per alert (server-time evidence); lost on reload by design (fail closed).
+  const observationRef = useRef<ObservationMap>({});
+  const observation = useMemo(() => (observationRef.current = observeContinuity(observationRef.current, feed.records, quotes, autoCfg)), [feed.records, quotes, autoCfg]);
   const queue = useMemo(() => {
     if (!autoCfg.enabled) return null;
     return buildQueue({
@@ -348,8 +369,9 @@ export default function App() {
       knownBrokerEntries,
       knownBrokerPositions,
       portfolioGate: verification.gated ? verification.reason : null,
+      observation,
     });
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation]);
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
   const authorizations = useMemo(() => (queue ? executionAuthorizations(queue.rows, clock) : null), [queue, clock]);
@@ -569,7 +591,9 @@ export default function App() {
     openInCalculator: (row) => {
       const i = inputsFromRecord(row.record, row.quote?.price ?? row.record.initialQuote?.price ?? 0, Date.now(), settings);
       if (!i) return;
-      setForm(formFromInputs(i));
+      const f = formFromInputs(i);
+      setCalcOrigin({ recordId: row.record.id, ticker: f.ticker, direction: f.direction, label: `${row.record.alert.symbol} ${row.record.alert.direction} ${etParts(row.record.alert.alertTimeMs).hhmmss} ET` });
+      setForm(f);
       setUseMarketEntry(false);
       setActualFill('');
       setCalculated(true);
@@ -629,6 +653,17 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1500px] px-4 py-4">
+        {tab === 'calc' && alertOrigin && (() => {
+          // S2a.2 — an alert-derived calculation is informational; RB authorization comes only from the Live Queue.
+          const row = queue?.rows.find((r) => r.record.id === alertOrigin.recordId);
+          const ok = !!row && queueOffersOrder(row);
+          return (
+            <p className="mb-3 rounded-lg border-2 border-warn bg-warn-dim/30 px-3 py-2 text-sm text-ink-100" data-alert-origin={alertOrigin.recordId}>
+              <b>Alert-derived calculation — {alertOrigin.label}.</b> This Calculator result is informational only. RB authorization for this alert comes from the Live Queue:{' '}
+              <b>{ok ? 'currently authorized there (recheck live before submitting).' : `NOT RB-AUTHORIZED — ${row ? row.lifecycle.reason : 'the Live Queue has not evaluated it in this browser'}`}</b>
+            </p>
+          );
+        })()}
         {tab === 'calc' && (
           <div className="grid gap-4 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)] xl:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(300px,360px)]">
             <InputPanel

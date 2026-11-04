@@ -231,3 +231,63 @@ The whole-day comparison has exactly 3 intended differences:
 It found 0 new authorizations. It also recorded 18 chase events; none changed a label, because none of those alerts later had a ticket.
 
 **Rollback:** the previous build (`280b982`) reads S2a data safely. SETUP FAILED stays terminal and the `|CHASED` entries are ignored, giving pre-S2a behaviour with no crash. No storage reset, Journal restore or environment change is needed.
+
+## 9. S2a safety completion (local branch `rb-s2a-safety-completion`, not deployed)
+
+**1. Observation continuity** (`lifecycle/observationContinuity.ts`, new).
+- **What is measured:** a new-entry ticket is offered only if this browser tab observed the alert's market data without a gap. The chain runs from the server's own first observation (`initialQuote.fetchedIso`, stamped at webhook processing) to the current decision. Every gap is measured in server time, using `quote.fetchedIso`, which the server stamps at each Alpaca fetch.
+- **Memory only:** a reload, a second tab, a late opening, a suspended tab, an offline period or missed polls all show up as a gap and are never healed for that alert.
+- **When it fires:** only when a ticket would otherwise be READY. The result is the existing DATA REVIEW / NO TICKET, with a reason that states the missing evidence and never claims a chase.
+- **Limits** are derived from the configuration and validated against production timing (85 records on 2026-11-04, plus 25 function round trips):
+
+  | Quantity | Measured |
+  |---|---|
+  | Server's first observation after webhook receipt | ≤ 1.6 s |
+  | Record complete after that | ≤ 1.4 s |
+  | Function round trip | p50 0.12 s, p95 0.30 s, max 1.3 s |
+  | Alert and price polls | 3 s each |
+
+  | Limit | Formula | Default | Margin |
+  |---|---|---|---|
+  | First observation | `pollMs + maxDataAgeSec` | 8 s | Worst case measured ≈ 5.7 s |
+  | Between observations | `quotePollMs + maxDataAgeSec` | 8 s | One missed poll (≈ 6 s) is tolerated, equal to the existing data-age tolerance; two (≥ 9 s) break continuity |
+
+**2. Calculator bypass** (`components/portfolioGate.ts` `calculatorHandoff`; `App.tsx`).
+- A Calculator session opened from an alert keeps that alert's identity while its ticker and side are unchanged.
+- "Send to Opportunity Ranker" then opens the alert's own Queue-gated candidate, whatever its status. If the alert has no candidate, the send is refused. It is never sent as a new manual candidate.
+- The Calculator shows a notice that the result is informational, with the Live Queue's current authorization or refusal reason.
+- Independent manual calculations are unchanged. Their TRADE NOW is labelled `· MANUAL — NOT RB-AUTHORIZED`.
+
+**3. Time integrity** (`observationRefusal`).
+- Each quote carries server time (`fetchedIso`) and the client receive time. If they differ by more than `maxDataAgeSec` (5 s; with correct clocks the difference measured ≈ −latency, within 1.3 s), the ticket is withheld.
+- So a client clock that is materially fast or slow can never time the alert's lifecycle. The 10-minute window and the 15:30 cutoff are unchanged.
+
+**Deferred, not in this release:** CR-15 Journal attribution. `brokerSync.ts:177` derives `strategyDecision` from `row.decision.ticket`, so a fill against a withheld ticket is recorded as READY with `manualOverride: false`; `:240` uses the alert-time decision. Planned as a dedicated CR-15 reconciliation fix: use the Queue authorization at fill time.
+
+**Results:**
+
+| Check | Result |
+|---|---|
+| Original tests | 1,135/1,135 |
+| S1 tests | 47 pass, 6 known out-of-scope failures (D3, D4, D8, D9 ×2, D12), 2 todo |
+| S2a tests | 27/27 |
+| New completion tests | 16/16 (12 failed on `f917669` before the correction) |
+| Type checks, build | Pass |
+| 28-case replay | Identical |
+| VRSK, BSX ×2, UNH, NCLH fixtures | 0 differences vs S2a |
+| 2026-11-04 whole day, continuously observed (4,816 passes, 247,704 rows) | 0 differences vs S2a |
+
+**Real-browser tests** (local mock of the functions; real app build; real VRSK record):
+
+| Scenario | `f917669` (before) | Completion (after) |
+|---|---|---|
+| Continuous observation | READY | READY |
+| Second tab opened late | READY | Withheld |
+| Refresh | READY | Withheld |
+| Disconnection (25 s) | READY | Withheld |
+| Suspension (20 s) | READY | Withheld |
+| Client clock 3 min fast | READY | Withheld (clock) |
+| Client clock 3 min slow | — | Withheld (clock) |
+| Calculator → Ranker | Created a separate MANUAL candidate | Opened the alert's own candidate, created none, no TRADE NOW |
+
+**Rollback:** nothing new is persisted. The previous build (`280b982`) reads all data written by this build safely.

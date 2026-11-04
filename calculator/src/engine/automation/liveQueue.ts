@@ -23,6 +23,7 @@ import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
 import { chaseKey, type TerminalEventMap } from './lifecycle/terminalEvents';
+import { observationRefusal, type ObservationMap } from './lifecycle/observationContinuity';
 import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
@@ -53,6 +54,8 @@ export interface QueueInput {
   knownBrokerPositions?: BrokerOnlyPosition[];
   /** Portfolio verification gate (reason) — set when broker sync is enabled and the portfolio is not verified. */
   portfolioGate?: string | null;
+  /** S2a.2 — this tab's in-memory observation continuity (server-time evidence). The App always supplies it. */
+  observation?: ObservationMap;
 }
 
 export interface QueueRow {
@@ -213,7 +216,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg));
     return row;
   });
 
