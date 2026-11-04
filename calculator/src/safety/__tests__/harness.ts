@@ -2,6 +2,8 @@
  * S1 safety harness — drives the REAL decision interfaces exactly as App.tsx does, at one evaluation instant:
  *   Live Alert Queue  : buildQueue → freezeAlertSnapshots → latchTerminalEvents (the app's effects, fed into the next pass)
  *   Opportunity Ranker: reconcileExposure(candidates) → rankCandidates(candidates, positions, …, exclude)   (App.tsx:314–323)
+ *                       → gateRankingByAuthorization(ranking, executionAuthorizations(queue rows), now)      (App.tsx, S2a)
+ *   `ranked` is what the Ranker page displays (gated); `rawRanked` is the ungated quality ranking.
  * Nothing here re-implements a rule; the helpers only read what the two surfaces would display.
  */
 import { readFileSync } from 'node:fs';
@@ -19,6 +21,8 @@ import type { Candidate, ManualPosition } from '../../engine/ranker/opportunityT
 import { cloneRankerDefaults } from '../../engine/ranker/rankerSettings';
 import { RB_V1_DEFAULTS } from '../../engine/settings';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
+import { executionAuthorizations } from '../../engine/automation/lifecycle/executionState';
+import { gateRankingByAuthorization } from '../../components/portfolioGate';
 
 export interface Fixture {
   _provenance: Record<string, string>;
@@ -41,6 +45,7 @@ export interface Pass {
   rows: QueueRow[];
   row: (id: string) => QueueRow | undefined;
   ranked: (id: string) => RankedCandidate | undefined;
+  rawRanked: (id: string) => RankedCandidate | undefined;
   state: State;
 }
 
@@ -84,9 +89,11 @@ export function runApp(records: AutoAlertRecord[], steps: Step[], o: RunOpts = {
     terminal = latchTerminalEvents(terminal, q.rows, now, DEFAULT_AUTOMATION).map;
     const ex = reconcileExposure(candidates, positions, null, { classify, conservativeRisk: RK.portfolio.accountEquity * RK.portfolio.riskPerTradePct, now, maxPositionValue: RK.portfolio.maxPositionValue });
     const ranking = rankCandidates(candidates, ex.positions, RK, etParts(now).date, STRATEGY, ex.exclude);
+    const view = gateRankingByAuthorization(ranking, executionAuthorizations(q.rows, now), now, DEFAULT_AUTOMATION.maxDataAgeSec * 1000);
     const byId = new Map(q.rows.map((r) => [r.record.id, r]));
-    const rk = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
-    return { now, rows: q.rows, row: (id) => byId.get(id), ranked: (id) => rk.get(id), state: { candidates, frozen, terminal } };
+    const rk = new Map(view.ranked.map((r) => [r.candidate.id, r]));
+    const raw = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
+    return { now, rows: q.rows, row: (id) => byId.get(id), ranked: (id) => rk.get(id), rawRanked: (id) => raw.get(id), state: { candidates, frozen, terminal } };
   });
 }
 

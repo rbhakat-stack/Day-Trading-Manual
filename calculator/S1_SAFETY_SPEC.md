@@ -178,3 +178,56 @@ Also outstanding for v1.2:
 - the scoring policy, which must use each version's own frozen tier;
 - the `rule_set` configuration for HCA, KKR and SWKS alerts;
 - bid/ask.
+
+## 8. S2a — implemented (local branch `rb-s2a-auth-safety`, not deployed)
+
+**Correction A — irreversible terminal chase** (`lifecycle/terminalEvents.ts`, `lifecycle/executionState.ts`, one line in `liveQueue.ts`).
+- **When a chase is recorded** (`observedChase`), all of these must hold:
+  - the record is OK and not under DATA REVIEW;
+  - the order is unsubmitted (candidate NEW or WATCHLIST);
+  - the alert is inside its 10-minute window;
+  - the quote is fresh (≤ 5 s data, ≤ 60 s trade);
+  - the last trade is not older than the alert;
+  - the calculator reports `CHASED_SETUP`;
+  - the observed price is beyond the frozen entry by more than the existing 0.25 ATR in signal ATR.
+- **Storage:** write-once, in the existing terminal-events map under the key `<id>|CHASED`, with price, entry, ATR distance, limit, observation time and last-trade time. SETUP FAILED is still recorded independently.
+- **Display precedence** (`deriveLifecycle` wrapper; the original derivation is unchanged):
+  1. SUBMITTED, IN POSITION and CLOSED win.
+  2. An earlier SETUP FAILED stays the reason.
+  3. Otherwise, whenever the live decision carries a ticket (a revival), the alert shows the existing `CHASED · NO TRADE`, with the ticket withheld at the same places SETUP FAILED withholds it.
+- **No new states:** without a ticket, every existing label is kept.
+
+**Correction B — one authoritative execution authorization** (`executionState.ts`, `components/portfolioGate.ts`, `App.tsx`).
+- **Contract** (`executionAuthorizations`): a record is authorized only while the Live Queue offers it as an order. That means a ticket, READY, no withholding flag, no recorded chase, an unsubmitted candidate and a quote.
+  - It is keyed by record ID and carries the evaluation time, the quote's trade time, the logic version, and the plan (side, entry, stop, target, quantity).
+  - It is never persisted.
+- **Ranker gate** (`gateRankingByAuthorization`): an AUTO candidate shows TRADE NOW only if `authorizationRefusal` returns null:
+  - the Queue was evaluated;
+  - the candidate is a new entry;
+  - the authorization's record ID matches;
+  - the evaluation is between 0 and 5 s old;
+  - the plan matches exactly.
+- **Refusals:** otherwise the status reads `NOT AUTHORIZED — <reason>`, the recommendation is withheld (null) and the ranker's own recommendation is kept as `qualityRecommendation`. Scores, tiers, components, ranks and allocation are unchanged.
+- **Manual candidates** are unchanged: their hard rules and the portfolio-verification gate still apply.
+- **App wiring:** both the Ranker page and the status-change confirmation use the gated view.
+
+**Harness:** `harness.ts` now models the Ranker exactly as `App.tsx` displays it, gated. `rawRanked` is the ungated quality ranking.
+
+**Results:**
+
+| Check | Result |
+|---|---|
+| Existing tests | 1,135/1,135 |
+| S1 tests | 47 pass (10 `[DEFECT]` tests for D1/D2 now pass); 6 still fail, all outside S2a scope (D3 score-equality, D4, D8, D9 ×2, D12); 2 todo |
+| S2a tests | 27/27 |
+| Type checks, build | Pass |
+| 28-case replay | Identical |
+| Whole-day 2026-11-04 lockstep comparison (83 records, 4,816 passes, 247,704 row comparisons) | 0 differences in decisions, tickets, scores, ranks, allocation, plans, live calculator, v1.2 shadow, candidates and broker statuses, frozen snapshots, SETUP FAILED events and the Ranker's quality ranking |
+
+The whole-day comparison has exactly 3 intended differences:
+- VRSK 10:36:46: READY becomes CHASED · NO TRADE (A);
+- VRSK 10:36:46 and BSX 12:26:49: Ranker TRADE NOW becomes NOT AUTHORIZED (B).
+
+It found 0 new authorizations. It also recorded 18 chase events; none changed a label, because none of those alerts later had a ticket.
+
+**Rollback:** the previous build (`280b982`) reads S2a data safely. SETUP FAILED stays terminal and the `|CHASED` entries are ignored, giving pre-S2a behaviour with no crash. No storage reset, Journal restore or environment change is needed.

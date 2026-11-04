@@ -34,6 +34,8 @@ import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type Aler
 import { executionStatus } from './engine/automation/lifecycle/executionStatus';
 import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
+import { executionAuthorizations } from './engine/automation/lifecycle/executionState'; // S2a
+import { gateRankingByAuthorization } from './components/portfolioGate'; // S2a
 import { brokerOrdersFrom, reconcileBroker, syncJournalWhenReady, withAlertTimeDecision, type SyncContext, type TradeSync } from './engine/automation/lifecycle/brokerSync';
 import { AUTO_KEYS, initialClassifications, loadAutomationConfig, loadParity, useAlertRecords, useBrokerFeed, useBrokerHistory, useBrokerSymbolHistory, useLiveQuotes, usePersistent, useServerFlags, type ClassMap } from './lib/automationClient';
 import { applyCrossDay, cr15Gate, crossDayEvidenceVerified, crossDayRequest, planCrossDay, validateReconciledJournal, type Cr15Mode, type CrossDayEvidence, type CrossDayPlan } from './engine/automation/lifecycle/crossDayJournal';
@@ -348,6 +350,10 @@ export default function App() {
       portfolioGate: verification.gated ? verification.reason : null,
     });
   }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification]);
+  // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
+  // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
+  const authorizations = useMemo(() => (queue ? executionAuthorizations(queue.rows, clock) : null), [queue, clock]);
+  const rankerView = useMemo(() => gateRankingByAuthorization(ranking, authorizations, clock, autoCfg.maxDataAgeSec * 1000), [ranking, authorizations, clock, autoCfg.maxDataAgeSec]);
   useEffect(() => {
     const found = [...rankerExposure.released, ...(queue?.exposure.released ?? [])];
     if (found.length) setReleasedExposure((prev) => latchReleases(prev, found).map);
@@ -501,7 +507,7 @@ export default function App() {
         return next;
       }),
     setStatus: (id, status: LifecycleStatus) => {
-      const rc = ranking.ranked.find((r) => r.candidate.id === id);
+      const rc = rankerView.ranked.find((r) => r.candidate.id === id); // S2a: the authorization-gated view
       if (!rc) return;
       if ((status === 'PENDING' || status === 'FILLED') && ['NEW', 'WATCHLIST'].includes(rc.candidate.status) && !rc.recommendation?.startsWith('TRADE')) {
         if (!confirm(`${rc.candidate.ticker} is "${rc.displayStatus}". Mark it as ${status === 'PENDING' ? 'a pending order' : 'filled'} anyway?`)) return;
@@ -710,13 +716,13 @@ export default function App() {
         )}
         {tab === 'ranker' && (
           <RankerPage
-            result={ranking}
+            result={rankerView}
             candidates={candidates}
             positions={positions}
             settings={rankerSettings}
             version={versionControls}
             settingsEpoch={settingsEpoch}
-            selectedId={selectedId ?? ranking.ranked[0]?.candidate.id ?? null}
+            selectedId={selectedId ?? rankerView.ranked[0]?.candidate.id ?? null}
             today={today}
             actions={rankerActions}
             verification={verification}

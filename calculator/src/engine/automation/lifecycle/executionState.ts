@@ -70,6 +70,8 @@ export interface Lifecycle {
   portfolioGate: string | null;
   /** Terminal SETUP FAILED latched from an observed stop breach (null = none). Any RB v1.1 ticket is withheld. */
   setupFailed: { observedAtMs: number; price: number; stop: number } | null;
+  /** S2a — terminal chase recorded from a reliable observation (evidence; null/absent = none). */
+  chaseLatched?: { observedAtMs: number; price: number; entry: number | null; distanceAtr: number | null; thresholdAtr: number | null; quoteTradeIso: string } | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
   frozenV12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null } | null;
   gates: GateSequence;
@@ -191,7 +193,32 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
   return null;
 }
 
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null): Lifecycle {
+/**
+ * S2a — the lifecycle with the terminal chase applied. The pre-S2a derivation below is unchanged; this wrapper only
+ *   • records the chase as evidence on every lifecycle of the alert (`chaseLatched`);
+ *   • keeps broker / user states (SUBMITTED, IN POSITION, CLOSED) exactly as they are — the broker governs those;
+ *   • keeps an earlier SETUP FAILED as the terminal reason (the first supported terminal event wins the display);
+ *   • otherwise, whenever the active decision carries a ticket (a revival after the chase), withholds it: CHASED · NO TRADE.
+ * Without a live ticket the existing labels are kept, so nothing changes for alerts that could not be traded anyway.
+ */
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null): Lifecycle {
+  const lc = deriveLifecycleBase(row, snap, now, eod, terminal, portfolioGate);
+  if (chase?.kind !== 'CHASED') return lc;
+  const chaseLatched = { observedAtMs: chase.observedAtMs, price: chase.price, entry: chase.entry ?? null, distanceAtr: chase.distanceAtr ?? null, thresholdAtr: chase.thresholdAtr ?? null, quoteTradeIso: chase.quoteTradeIso };
+  if (['SUBMITTED', 'IN POSITION', 'CLOSED'].includes(lc.executionState)) return { ...lc, chaseLatched };
+  if (lc.setupFailed && lc.setupFailed.observedAtMs <= chase.observedAtMs) return { ...lc, chaseLatched };
+  if (!row.decision.ticket && !lc.setupFailed) return { ...lc, chaseLatched };
+  const frozen = snap ? snap.v11.total : row.candidate?.initialScore?.total ?? null;
+  const dist = chase.distanceAtr !== undefined ? ` (${chase.distanceAtr.toFixed(2)} ATR, limit ${chase.thresholdAtr ?? RB_V1_DEFAULTS.chaseThresholdAtr} ATR)` : '';
+  return {
+    ...lc,
+    executionState: 'CHASED', finalActionability: 'NO TRADE', terminal: true, entryWindowClosed: false, portfolioUnverified: false, chaseLatched,
+    reason: `CHASED — price ${chase.price} was beyond the ${chase.entry ?? '—'} entry${dist} at ${etParts(chase.observedAtMs).hhmmss} ET. Terminal: no new entry from this alert; a new TrendSpider alert is required.`,
+    score: frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' },
+  };
+}
+
+function deriveLifecycleBase(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null): Lifecycle {
   const d = row.decision;
   const st = row.candidate?.status;
   const action = row.live?.action ?? null;
@@ -253,3 +280,52 @@ export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, n
   if (gates.portfolio.startsWith('BLOCKED') || gates.capital.startsWith('BLOCKED')) return L('PORTFOLIO BLOCKED', 'NO TICKET', gates.portfolio.startsWith('BLOCKED') ? gates.portfolio : gates.capital);
   return L(action === 'BUY_STOP' || action === 'SELL_STOP' ? 'NOT CROSSED' : 'NOT ELIGIBLE', 'NO TICKET', d.detail);
 }
+
+/* ───────────────────────── S2a — execution authorization contract ───────────────────────── */
+
+/**
+ * One authorization per alert that the Live Queue — the single execution authority — currently offers as an order to
+ * place. It is bound to the exact alert (record id), to the plan it authorizes (side, entry, stop, target, quantity), to
+ * the active logic version and to the instant of the evaluation. It is never persisted: it exists only for the current
+ * evaluation and is rebuilt on every Queue pass.
+ */
+export interface ExecutionAuthorization {
+  recordId: string;
+  logicVersion: string;
+  evaluatedAtMs: number;
+  quoteTradeIso: string;
+  plan: { direction: 'LONG' | 'SHORT'; entry: number; stop: number; target: number; shares: number };
+}
+
+const NEW_ENTRY = ['NEW', 'WATCHLIST'];
+
+/** The Queue's own "order to place" predicate (the same flags its action cards and buttons use), plus the S2a chase. */
+export function queueOffersOrder(r: QueueRow): boolean {
+  const lc = r.lifecycle;
+  return !!r.decision.ticket && !!lc && lc.finalActionability === 'READY' && !lc.entryWindowClosed && !lc.setupFailed && !lc.portfolioUnverified && !lc.chaseLatched;
+}
+
+export function executionAuthorizations(rows: QueueRow[], now: number): Record<string, ExecutionAuthorization> {
+  const out: Record<string, ExecutionAuthorization> = {};
+  for (const r of rows) {
+    const c = r.candidate;
+    if (!queueOffersOrder(r) || !c || !r.quote || !NEW_ENTRY.includes(c.status)) continue;
+    const logicVersion = (r.decision.flags ?? []).find((f) => f.startsWith('LOGIC '))?.slice(6) ?? r.record.versions?.strategy ?? 'RB v1.1';
+    out[r.record.id] = { recordId: r.record.id, logicVersion, evaluatedAtMs: now, quoteTradeIso: r.quote.tradeIso, plan: { direction: c.direction, entry: c.entry, stop: c.stop, target: c.target, shares: c.shares } };
+  }
+  return out;
+}
+
+/** Why an automated candidate may NOT be presented as a new entry right now (null = authorized). Fails closed. */
+export function authorizationRefusal(c: Candidate, auth: Record<string, ExecutionAuthorization> | null, now: number, maxAgeMs: number): string | null {
+  if (!auth) return 'NO CURRENT EXECUTION AUTHORIZATION — LIVE QUEUE NOT EVALUATED';
+  if (!NEW_ENTRY.includes(c.status)) return 'NOT A NEW ENTRY';
+  const a = auth[c.id];
+  if (!a || a.recordId !== c.id) return 'NOT AUTHORIZED BY THE LIVE QUEUE';
+  const age = now - a.evaluatedAtMs;
+  if (!(age >= 0 && age <= maxAgeMs)) return 'EXECUTION AUTHORIZATION EXPIRED';
+  const p = a.plan;
+  if (p.direction !== c.direction || p.entry !== c.entry || p.stop !== c.stop || p.target !== c.target || p.shares !== c.shares) return 'AUTHORIZATION DOES NOT MATCH THIS CANDIDATE';
+  return null;
+}
+

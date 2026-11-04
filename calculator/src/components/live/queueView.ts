@@ -216,6 +216,7 @@ export function decisionBadge(r: QueueRow): Status {
   const d = r.decision;
   // Terminal SETUP FAILED: any v1.1 ticket is withheld (the v1.1 decision itself is unchanged).
   if (d.ticket && r.lifecycle?.setupFailed) return { label: 'v1.1 TICKET — SETUP FAILED', tone: 'bad', detail: r.lifecycle.reason };
+  if (d.ticket && r.lifecycle?.chaseLatched) return { label: 'v1.1 TICKET — CHASED', tone: 'bad', detail: r.lifecycle.reason }; // S2a terminal chase
   // CR-13 — after the 15:30 cutoff the v1.1 ticket is historical: never labelled as ready to trade.
   if (d.ticket && r.lifecycle?.entryWindowClosed) return { label: 'v1.1 TICKET — AFTER CUTOFF', tone: 'bad', detail: r.lifecycle.reason };
   if (d.ticket && r.lifecycle?.portfolioUnverified) return { label: 'v1.1 TICKET — PORTFOLIO UNVERIFIED', tone: 'bad', detail: r.lifecycle.reason };
@@ -242,6 +243,7 @@ export function finalBadge(r: QueueRow): Status {
   const lc = r.lifecycle;
   // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
   if (lc?.setupFailed) return { label: 'NO TRADE — SETUP FAILED', tone: 'bad', detail: lc.reason };
+  if (d.ticket && lc?.chaseLatched) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason }; // S2a terminal chase
   if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
   if (lc?.portfolioUnverified) return { label: PORTFOLIO_UNVERIFIED, tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };

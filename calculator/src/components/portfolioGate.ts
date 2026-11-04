@@ -5,6 +5,7 @@
 import type { RankingResult } from '../engine/ranker/candidateRanker';
 import { PORTFOLIO_UNVERIFIED, type PortfolioVerification } from '../engine/automation/lifecycle/portfolioExposure';
 import { executionShortLabel, type ExecutionStatus } from '../engine/automation/lifecycle/executionStatus';
+import { authorizationRefusal, type ExecutionAuthorization } from '../engine/automation/lifecycle/executionState';
 
 export function gateRankingDisplay(result: RankingResult, v: PortfolioVerification): RankingResult {
   if (!v.gated || !result.ranked.some((r) => r.displayStatus.startsWith('TRADE NOW'))) return result;
@@ -23,3 +24,24 @@ export function withExecutionDisplay(result: RankingResult, executions: Record<s
   });
   return changed ? { ...result, ranked } : result;
 }
+
+/**
+ * S2a — execution authorization gate for the Opportunity Ranker. An AUTOMATED (alert-derived) candidate is presented as
+ * TRADE NOW only while the Live Queue — the single execution authority — currently authorizes that exact alert and plan
+ * (executionAuthorizations / authorizationRefusal). Otherwise its status shows why it is not authorized and the
+ * recommendation is withheld (null), so no new-entry path exists. Scores, tiers, ranks and allocation are untouched; the
+ * ranker's own recommendation is kept as `qualityRecommendation` for diagnosis. Manual candidates are unchanged (their
+ * hard rules and the portfolio-verification gate already apply).
+ */
+export function gateRankingByAuthorization(result: RankingResult, auth: Record<string, ExecutionAuthorization> | null, now: number, maxAgeMs: number): RankingResult {
+  let changed = false;
+  const ranked = result.ranked.map((r) => {
+    if (r.candidate.source !== 'AUTO' || !r.recommendation?.startsWith('TRADE NOW')) return r;
+    const refusal = authorizationRefusal(r.candidate, auth, now, maxAgeMs);
+    if (!refusal) return r;
+    changed = true;
+    return { ...r, recommendation: null, displayStatus: `NOT AUTHORIZED — ${refusal}`, qualityRecommendation: r.recommendation } as RankingResult['ranked'][number];
+  });
+  return changed ? { ...result, ranked } : result;
+}
+

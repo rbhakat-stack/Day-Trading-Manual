@@ -22,7 +22,7 @@ import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
-import type { TerminalEventMap } from './lifecycle/terminalEvents';
+import { chaseKey, type TerminalEventMap } from './lifecycle/terminalEvents';
 import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
@@ -213,7 +213,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null);
     return row;
   });
 
