@@ -8,6 +8,7 @@
  * within the last 31 days, one page of 500 (`complete: false` when the page may be truncated). Same read-only client. Authenticated with
  * RB_APP_ACCESS_TOKEN; OFF unless RB_BROKER_SYNC_ENABLED=true. GET only — this endpoint cannot change anything.
  */
+import { requireSession } from '../lib/session'; // CR-16: session guard (no-op unless RB_AUTH_ENABLED)
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
 import { OPEN_ORDERS_LIMIT, type BrokerReadClient } from '../lib/alpaca';
 import { brokerReadClient, env, json } from '../lib/env';
@@ -76,4 +77,4 @@ async function history(url: URL, client: BrokerReadClient): Promise<Response> {
   }
 }
 
-export default (req: Request): Promise<Response> => handleBroker(req, brokerReadClient(), env('RB_APP_ACCESS_TOKEN'));
+export default async (req: Request): Promise<Response> => (await requireSession(req)) ?? handleBroker(req, brokerReadClient(), env('RB_APP_ACCESS_TOKEN')); // CR-16 guard first

@@ -2,6 +2,7 @@
  * GET /.netlify/functions/rb-quotes?symbols=NVDA,GM → latest trade per symbol (live current price, never cached).
  * Authenticated with RB_APP_ACCESS_TOKEN. Read-only market data.
  */
+import { requireSession } from '../lib/session'; // CR-16: session guard (no-op unless RB_AUTH_ENABLED)
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
 import { dataClient, env, json } from '../lib/env';
 import { log } from '../lib/log';
@@ -10,6 +11,8 @@ const limiter = new RateLimiter(600, 60_000);
 const SYMBOL = /^[A-Z]{1,5}([.-][A-Z]{1,2})?$/;
 
 export default async (req: Request): Promise<Response> => {
+  const denied = await requireSession(req); // CR-16
+  if (denied) return denied;
   if (req.method !== 'GET') return json(405, { error: 'GET only' });
   const ip = clientIp(req);
   if (!limiter.allow(ip)) return json(429, { error: 'Too many requests' });

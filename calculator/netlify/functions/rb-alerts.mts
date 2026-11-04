@@ -4,6 +4,7 @@
  *      RECEIVED / DATA_ERROR record only (bounded to 3 attempts). Completed snapshots are never rewritten.
  * Authenticated with RB_APP_ACCESS_TOKEN (Authorization: Bearer). Read-only with respect to any broker.
  */
+import { requireSession } from '../lib/session'; // CR-16: session guard (no-op unless RB_AUTH_ENABLED)
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
 import { dataClient, env, json } from '../lib/env';
 import { log } from '../lib/log';
@@ -14,6 +15,8 @@ const limiter = new RateLimiter(600, 60_000);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default async (req: Request): Promise<Response> => {
+  const denied = await requireSession(req); // CR-16
+  if (denied) return denied;
   const ip = clientIp(req);
   if (!limiter.allow(ip)) return json(429, { error: 'Too many requests' });
   if (!safeEqual(bearerFrom(req), env('RB_APP_ACCESS_TOKEN'))) {

@@ -6,6 +6,7 @@
  * price), rebuilds the RB v1 alert-time snapshot with the shared engine and returns it. Stores nothing, creates no
  * alert, candidate or ticket, and never places an order.
  */
+import { requireSession } from '../lib/session'; // CR-16: session guard (no-op unless RB_AUTH_ENABLED)
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
 import { env, json } from '../lib/env';
 import { runHistoricalSipTest } from '../lib/historicalSip';
@@ -14,6 +15,8 @@ import { log } from '../lib/log';
 const limiter = new RateLimiter(30, 60_000);
 
 export default async (req: Request): Promise<Response> => {
+  const denied = await requireSession(req); // CR-16
+  if (denied) return denied;
   if (req.method !== 'POST') return json(405, { error: 'POST only' }, { allow: 'POST' });
   const ip = clientIp(req);
   if (!limiter.allow(ip)) return json(429, { error: 'Too many requests' });
