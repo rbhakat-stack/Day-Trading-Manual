@@ -128,7 +128,7 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
           <Kv k="Frozen alert-time v1.2 score" v={fz ? (fz.total !== null ? `${fz.total} / ${fz.max}` : 'unavailable (not scored at alert time)') : s?.total != null ? `${s.total} / ${maxScore}` : 'not scored'} />
           <Kv k="Tier (experimental thresholds)" v={tierLong(fz ? fz.tierOptionB : s?.tierOptionB)} />
           <Kv k="Option A comparison tier" v={tierLong(fz ? fz.tierOptionA : s?.tierOptionA)} dim />
-          {fz && <Kv k="Current v1.2 evaluation (live, not frozen)" v={r.lifecycle.setupFailed ? 'NOT RANKED — SETUP FAILED (terminal)' : r.lifecycle.chaseMissed ? 'NOT RANKED — MISSED — DO NOT CHASE (terminal)' : s?.total != null ? `${s.total} / ${maxScore} · ${d.decision}` : `NOT RANKED — ${d.detail}`} dim />}
+          {fz && <Kv k="Current v1.2 evaluation (live, not frozen)" v={r.lifecycle.setupFailed ? 'NOT RANKED — SETUP FAILED (terminal)' : s?.total != null ? `${s.total} / ${maxScore} · ${d.decision}` : `NOT RANKED — ${d.detail}`} dim />}
           <Kv k="RB v1.1 score" v={s ? `${s.v11Total ?? '—'}${s.deltaVsV11 !== null ? ` (Δ ${s.deltaVsV11 >= 0 ? '+' : ''}${s.deltaVsV11})` : ''}` : '—'} dim />
           <p className="mt-1.5 text-[11px] text-[#cdb3ff]">
             {`v1.2 experimental thresholds: Elite ${thresholds.shadow.elite} · High ${thresholds.shadow.high} · Watchlist ${thresholds.shadow.watchlist} · Low ${thresholds.shadow.low}`}
@@ -157,7 +157,7 @@ export function ShadowPanel({ r, maxScore, optionAGrades }: { r: QueueRow; maxSc
             {d.dataReview.length ? <span className="text-short">{d.dataReview.join(', ')}</span> : <span className="text-ink-300">none</span>}
           </div>
           {reasons.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-ink-300">{reasons.slice(0, 4).map((x, i) => <li key={i}>{x}</li>)}</ul>}
-          <div className="mt-1.5 text-[11px] text-ink-400">Ticket: {d.ticket ? (r.lifecycle?.chaseMissed ? 'withheld — MISSED — DO NOT CHASE (terminal; shadow)' : r.lifecycle?.portfolioGate ? `${PORTFOLIO_UNVERIFIED} (shadow) — ${r.lifecycle.portfolioGate}` : 'valid — same RB calculator plan (not offered: shadow only)') : 'none'}</div>
+          <div className="mt-1.5 text-[11px] text-ink-400">Ticket: {d.ticket ? (r.lifecycle?.portfolioGate ? `${PORTFOLIO_UNVERIFIED} (shadow) — ${r.lifecycle.portfolioGate}` : 'valid — same RB calculator plan (not offered: shadow only)') : 'none'}</div>
         </div>
       </div>
     </Section>

@@ -22,7 +22,7 @@ import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
-import { chaseKey, type TerminalEventMap } from './lifecycle/terminalEvents';
+import type { TerminalEventMap } from './lifecycle/terminalEvents';
 import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
@@ -41,7 +41,7 @@ export interface QueueInput {
   strategyVersion: string;
   /** Immutable alert-time snapshots (CR-03), read only — used for the separate execution layer. */
   frozen?: AlertSnapshotMap;
-  /** Latched terminal events (SETUP FAILED; CR-17 terminal chase under chaseKey), read only — execution layer only. */
+  /** Latched terminal events (SETUP FAILED), read only — execution layer only. */
   terminal?: TerminalEventMap;
   /** Read-only broker facts for portfolio exposure (released only when verified; absent = previous behaviour). */
   broker?: BrokerExposureInput;
@@ -213,7 +213,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null);
     return row;
   });
 

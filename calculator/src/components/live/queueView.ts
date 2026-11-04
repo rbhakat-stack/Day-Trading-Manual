@@ -9,7 +9,6 @@
  * "RB v1.2 ACTIVE" alone once v1.1 is retired. The layout follows ACTIVE_LOGIC_VERSION; it never changes it.
  */
 import { PORTFOLIO_UNVERIFIED } from '../../engine/automation/lifecycle/portfolioExposure';
-import { MISSED_DO_NOT_CHASE } from '../../engine/automation/lifecycle/executionState';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
@@ -93,7 +92,7 @@ const PRESENTERS: Record<string, Presenter> = {
       const f = r.lifecycle?.frozenV12;
       const decision = role === 'ACTIVE' ? r.decision.decision : null;
       if (f) {
-        const notRanked = !!r.lifecycle.setupFailed || !!r.lifecycle.chaseMissed || r.lifecycle.terminal || (r.shadow?.score?.total ?? null) === null;
+        const notRanked = !!r.lifecycle.setupFailed || r.lifecycle.terminal || (r.shadow?.score?.total ?? null) === null;
         return { score: f.total, tiers: [(f.tierOptionB as QualityTier | null) ?? null, (f.tierOptionA as QualityTier | null) ?? null], decision, frozen: f.total !== null && notRanked };
       }
       return { score: r.shadow?.score?.total ?? null, tiers: [r.shadow?.score?.tierOptionB ?? null, r.shadow?.score?.tierOptionA ?? null], decision };
@@ -206,41 +205,6 @@ export function finalState(r: QueueRow): Status & { ticket: boolean } {
   return { label: d.decision, tone, detail: d.detail, ticket };
 }
 
-/* ───────────────────────── CR-17 entry eligibility (exactly three states) ───────────────────────── */
-
-export const READY_PLACE_STOP = 'READY — PLACE STOP ORDER';
-export const TRIGGER_CROSSED_REVIEW = 'TRIGGER CROSSED — REVIEW ENTRY';
-export { MISSED_DO_NOT_CHASE };
-
-/** A ticket the execution layer withholds (15:30 cutoff, terminal SETUP FAILED, portfolio unverified, CR-17 terminal chase). */
-export const ticketWithheld = (r: QueueRow) => !!(r.lifecycle?.entryWindowClosed || r.lifecycle?.setupFailed || r.lifecycle?.portfolioUnverified || r.lifecycle?.chaseMissed);
-/** The active decision carries a ticket that may be prepared (subject to a final live recheck). */
-export const ticketActionable = (r: QueueRow) => !!r.decision.ticket && !ticketWithheld(r);
-
-const PASSED_TIERS = ['ELITE', 'HIGH_PRIORITY'];
-
-/**
- * CR-17 — price-related entry readiness, one of exactly three states, or null when none applies (the existing final
- * decision — SKIP, DATA REVIEW, SETUP FAILED, EXPIRED — STALE, portfolio, broker states — is shown instead and keeps its
- * authority). Presentation only: decisions, tickets and the 0.25 ATR rule are unchanged.
- *   READY — PLACE STOP ORDER       the active decision carries a ticket that nothing withholds (trigger not crossed)
- *   TRIGGER CROSSED — REVIEW ENTRY crossed within the chase band, alert-time score passed — review only, never a ticket
- *   MISSED — DO NOT CHASE          terminal chase latched from a reliable observation (no revival)
- */
-export function entryState(r: QueueRow): Status | null {
-  const lc = r.lifecycle;
-  if (!lc) return null;
-  if (lc.chaseMissed) return { label: MISSED_DO_NOT_CHASE, tone: 'bad', detail: lc.reason };
-  if (ticketActionable(r) && lc.finalActionability === 'READY' && r.live?.chase && !r.live.chase.crossed) {
-    const t = r.decision.ticket!;
-    return { label: READY_PLACE_STOP, tone: 'ok', detail: `${r.record.alert.direction === 'LONG' ? 'BUY' : 'SELL'} STOP · entry ${t.price.toFixed(2)} — recheck live before submitting; a stop order is not guaranteed to fill at its trigger.` };
-  }
-  if (lc.executionState === 'LATE — REVIEW' && !lc.terminal && PASSED_TIERS.includes(lc.alertTimeTier ?? '')) {
-    return { label: TRIGGER_CROSSED_REVIEW, tone: 'warn', detail: `Price is past the trigger but within the ${r.live?.chase?.thresholdAtr ?? 0.25} ATR chase band. Review only — no ticket is offered; RB never converts it to a market or limit order. Checked on the last trade (bid/ask not available).` };
-  }
-  return null;
-}
-
 /** Data Review filter: any non-PASS data state (the same states the Data badge names). */
 export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataStatus(r).label);
 
@@ -250,8 +214,6 @@ export const isDataReview = (r: QueueRow) => !['PASS', 'PENDING'].includes(dataS
  */
 export function decisionBadge(r: QueueRow): Status {
   const d = r.decision;
-  // CR-17 — terminal chase: never TRADE READY again for this alert (the v1.1 decision itself is unchanged).
-  if (r.lifecycle?.chaseMissed) return { label: MISSED_DO_NOT_CHASE, tone: 'bad', detail: r.lifecycle.reason };
   // Terminal SETUP FAILED: any v1.1 ticket is withheld (the v1.1 decision itself is unchanged).
   if (d.ticket && r.lifecycle?.setupFailed) return { label: 'v1.1 TICKET — SETUP FAILED', tone: 'bad', detail: r.lifecycle.reason };
   // CR-13 — after the 15:30 cutoff the v1.1 ticket is historical: never labelled as ready to trade.
@@ -280,7 +242,6 @@ export function finalBadge(r: QueueRow): Status {
   const lc = r.lifecycle;
   // CR-13 — after 15:30 ET the execution layer withholds READY (flag only; the v1.1 ticket itself is unchanged).
   if (lc?.setupFailed) return { label: 'NO TRADE — SETUP FAILED', tone: 'bad', detail: lc.reason };
-  if (lc?.chaseMissed) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason }; // CR-17 terminal chase
   if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
   if (lc?.portfolioUnverified) return { label: PORTFOLIO_UNVERIFIED, tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
