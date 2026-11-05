@@ -16,6 +16,8 @@ export type LogEvent =
   | 'broker_history_read'
   | 'broker_history_failed'
   | 'candidate_enriched'
+  | 'signal_candle_incomplete'
+  | 'delayed_reconstruction'
   | 'calculator_result'
   | 'hard_rule_result'
   | 'data_mismatch'

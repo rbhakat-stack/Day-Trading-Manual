@@ -4,7 +4,7 @@
  * Runs the real webhook pipeline (processAlert → enrichRecord) with an in-memory store and synthetic data.
  */
 import { describe, expect, it } from 'vitest';
-import { daysUpTo, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
+import { daysUpTo, minuteBarsBetween, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
 import { etToEpoch } from '../../src/engine/automation/etTime';
 import { alertLatency } from '../../src/engine/automation/lifecycle/latency';
 import type { MarketDataClient } from '../lib/alpaca';
@@ -21,6 +21,7 @@ function data(failFirst: number, tick: () => void): MarketDataClient {
   let n = 0;
   return {
     name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets',
+    async getBars1(_s, a, b) { return minuteBarsBetween(BARS, a, b); }, // Step 3 · A
     async getBars5() {
       tick(); // each market-data fetch takes 3 s of simulated time
       if (n++ < failFirst) throw new Error('Alpaca 503: temporarily unavailable');

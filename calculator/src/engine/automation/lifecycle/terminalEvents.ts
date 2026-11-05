@@ -31,6 +31,7 @@ import { RB_V1_DEFAULTS } from '../../settings';
 import { quoteAges, type AutomationConfig } from '../alertDecision';
 import type { QueueRow } from '../liveQueue';
 import { queueOffersOrder } from './executionState';
+import { isTriggerEvidence } from '../tradeEligibility';
 
 export interface TerminalEvent {
   recordId: string;
@@ -130,6 +131,35 @@ export function observedTriggerCross(r: QueueRow, now: number, cfg: Pick<Automat
   return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso, entry, distanceAtr };
 }
 
+/**
+ * Step 3 · D — conservative trigger evidence from the newest print the server did NOT use as the price (quote.skipped):
+ * an odd lot (otherwise eligible conditions) at/through the frozen entry, fresh, after the alert, for an unsubmitted alert.
+ * The executable price stays the eligible print; this can only end the alert (MISSED), never create a ticket.
+ */
+export function observedSkippedCross(r: QueueRow, now: number, cfg: Pick<AutomationConfig, 'maxDataAgeSec' | 'maxTradeAgeSec'>): TerminalEvent | null {
+  const s = r.quote?.skipped;
+  if (!s || !r.quote || r.record.status !== 'OK' || !r.candidate || !UNSUBMITTED.includes(r.candidate.status)) return null;
+  if (r.decision.section === 'DATA_REVIEW') return null;
+  if (now - r.record.alert.alertTimeMs >= RB_V1_DEFAULTS.alertWindowMinutes * 60_000) return null;
+  if (!isTriggerEvidence({ c: s.conditions, z: s.tape })) return null;
+  const tradeMs = Date.parse(s.tradeIso);
+  const dataAgeSec = (now - r.quote.receivedMs) / 1000;
+  const tradeAgeSec = (Date.parse(r.quote.fetchedIso) - tradeMs) / 1000;
+  if (!Number.isFinite(tradeMs) || tradeMs < r.record.receivedMs || dataAgeSec > cfg.maxDataAgeSec || tradeAgeSec > cfg.maxTradeAgeSec) return null;
+  const { entry, stop } = r.candidate;
+  const L = r.record.alert.direction === 'LONG';
+  if (!(entry > 0) || (L ? s.price < entry : s.price > entry)) return null;
+  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: s.price, stop, quoteTradeIso: s.tradeIso, entry };
+}
+
+/** Step 3 · A — the crossing the server proved during a delayed reconstruction (before any order could exist), or null. */
+export function delayedCrossing(r: QueueRow): TerminalEvent | null {
+  const g = r.record.delayedReconstruction?.gap;
+  if (r.record.status !== 'OK' || g?.status !== 'CROSSED' || g.crossedPrice === null || !g.crossedAtIso) return null;
+  if (r.candidate && !UNSUBMITTED.includes(r.candidate.status)) return null;
+  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: Date.parse(g.crossedAtIso), price: g.crossedPrice, stop: r.candidate?.stop ?? NaN, quoteTradeIso: g.crossedAtIso, entry: g.entry };
+}
+
 /** D4 — the first authorization of this row (the Queue offers it as an order to place now), or null. */
 export function observedAuthorization(r: QueueRow, now: number): TerminalEvent | null {
   if (!queueOffersOrder(r) || !r.candidate || !r.quote) return null;
@@ -157,9 +187,10 @@ export function latchTerminalEvents(prev: TerminalEventMap, rows: QueueRow[], no
       }
     }
     // D — confirmed missed trigger (evidence recorded independently; the lifecycle keeps the first terminal reason).
+    // Step 3 · A — a crossing proven by the server during a delayed reconstruction counts the same way.
     const tk = triggerKey(r.record.id);
     if (!prev[tk]) {
-      const ev = observedTriggerCross(r, now, cfg);
+      const ev = observedTriggerCross(r, now, cfg) ?? observedSkippedCross(r, now, cfg) ?? delayedCrossing(r);
       if (ev) {
         if (map === prev) map = { ...prev };
         map[tk] = ev;

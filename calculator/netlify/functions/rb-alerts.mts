@@ -8,7 +8,7 @@ import { requireSession } from '../lib/session'; // CR-16: session guard (no-op 
 import { bearerFrom, clientIp, RateLimiter, safeEqual } from '../lib/auth';
 import { dataClient, env, json } from '../lib/env';
 import { log } from '../lib/log';
-import { enrichRecord } from '../lib/processAlert';
+import { enrichRecord, retryGate } from '../lib/processAlert';
 import { blobStore } from '../lib/store';
 
 const limiter = new RateLimiter(600, 60_000);
@@ -41,7 +41,8 @@ export default async (req: Request): Promise<Response> => {
     const rec = await store.get(b.date as string, b.id);
     if (!rec) return json(404, { error: 'Not found' });
     if (rec.status === 'OK') return json(200, { record: rec, note: 'Snapshot already complete; it is immutable.' });
-    if (rec.attempts >= 3) return json(200, { record: rec, note: 'Retry limit reached — MANUAL REVIEW REQUIRED.' });
+    const gate = retryGate(rec, Date.now());
+    if (gate) return json(200, { record: rec, note: gate });
     const data = dataClient();
     if (!data) return json(503, { error: 'Market data not configured' });
     const done = await enrichRecord(rec, { store, data, log, now: Date.now, settleMs: 0 });

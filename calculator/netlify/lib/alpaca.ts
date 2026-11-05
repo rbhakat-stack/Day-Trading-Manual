@@ -12,6 +12,7 @@
  */
 import type { Bar } from '../../src/engine/automation/indicators';
 import type { QuoteSnapshot } from '../../src/engine/automation/alertDecision';
+import { isEligibleTrade } from '../../src/engine/automation/tradeEligibility';
 
 export const ALLOWED_DATA_HOSTS = ['data.alpaca.markets', 'data.sandbox.alpaca.markets'];
 
@@ -31,6 +32,8 @@ export interface MarketDataClient {
   /** 1-minute bars (used only by the Historical SIP Parity Test for intrabar reconstruction). */
   getBars1?(symbol: string, startIso: string, endIso: string): Promise<Bar[]>;
   getLatestTrades(symbols: string[]): Promise<Record<string, QuoteSnapshot>>;
+  /** Step 3 · A — every trade print in [start, end] (ascending), or null when more than `maxPages` pages (incomplete). */
+  getTrades?(symbol: string, startIso: string, endIso: string, maxPages?: number): Promise<RawTrade[] | null>;
 }
 
 export interface AlpacaOptions {
@@ -115,15 +118,65 @@ export function createAlpacaData(o: AlpacaOptions): MarketDataClient {
       }
       return out;
     },
+    /**
+     * Step 3 · D — latest ELIGIBLE trade per symbol (tradeEligibility.ts). The provider's latest-trade endpoint does not
+     * filter conditions, so when its print is ineligible (odd lot, average-price, derivatively priced, out of sequence …)
+     * the newest eligible print of the last LATEST_ELIGIBLE_LOOKBACK_MS is used instead (newest-first, bounded pages).
+     * A symbol with no eligible print in that window, or whose lookup fails, is left out — the client then has no current
+     * price for it (no ticket, fail closed); other symbols are unaffected. Freshness is judged downstream by trade time.
+     */
     async getLatestTrades(symbols) {
-      const j = (await get('/v2/stocks/trades/latest', { symbols: symbols.join(','), feed })) as { trades?: Record<string, { t: string; p: number }> };
-      const fetchedIso = new Date(now()).toISOString();
+      const j = (await get('/v2/stocks/trades/latest', { symbols: symbols.join(','), feed })) as { trades?: Record<string, RawTrade> };
+      const fetchedMs = now();
+      const fetchedIso = new Date(fetchedMs).toISOString();
       const out: Record<string, QuoteSnapshot> = {};
-      for (const [s, t] of Object.entries(j.trades ?? {})) if (t && Number.isFinite(t.p) && t.p > 0) out[s] = { price: t.p, tradeIso: t.t, fetchedIso };
+      await Promise.all(Object.entries(j.trades ?? {}).map(async ([s, t]) => {
+        if (!t || !Number.isFinite(t.p) || !(t.p > 0)) return;
+        if (isEligibleTrade(t)) { out[s] = { price: t.p, tradeIso: t.t, fetchedIso, conditions: t.c ?? [], tape: t.z ?? undefined, priceSource: 'LATEST', skipped: null }; return; }
+        try {
+          const e = await newestEligible(s, new Date(fetchedMs - LATEST_ELIGIBLE_LOOKBACK_MS).toISOString(), fetchedIso);
+          if (e) out[s] = { price: e.p, tradeIso: e.t, fetchedIso, conditions: e.c ?? [], tape: e.z ?? undefined, priceSource: 'LATEST_ELIGIBLE', skipped: { price: t.p, tradeIso: t.t, conditions: t.c ?? [], tape: t.z ?? null } };
+        } catch {
+          /* no eligible price for this symbol on this poll — fail closed for it only */
+        }
+      }));
       return out;
     },
+    async getTrades(symbol, startIso, endIso, maxPages = 5) {
+      const out: RawTrade[] = [];
+      let page: string | undefined;
+      for (let n = 0; n < maxPages; n++) {
+        const params: Record<string, string> = { start: startIso, end: endIso, feed, limit: '10000', sort: 'asc' };
+        if (page) params.page_token = page;
+        const j = (await get(`/v2/stocks/${encodeURIComponent(symbol)}/trades`, params)) as { trades?: RawTrade[] | null; next_page_token?: string | null };
+        out.push(...(j.trades ?? []));
+        page = j.next_page_token ?? undefined;
+        if (!page) return out;
+      }
+      return null; // more pages than allowed: incomplete — callers fail closed
+    },
   };
+
+  async function newestEligible(symbol: string, startIso: string, endIso: string): Promise<RawTrade | null> {
+    let page: string | undefined;
+    for (let n = 0; n < 3; n++) {
+      const params: Record<string, string> = { start: startIso, end: endIso, feed, limit: '1000', sort: 'desc' };
+      if (page) params.page_token = page;
+      const j = (await get(`/v2/stocks/${encodeURIComponent(symbol)}/trades`, params)) as { trades?: RawTrade[] | null; next_page_token?: string | null };
+      const hit = (j.trades ?? []).find((t) => Number.isFinite(t.p) && t.p > 0 && isEligibleTrade(t));
+      if (hit) return hit;
+      page = j.next_page_token ?? undefined;
+      if (!page) return null;
+    }
+    return null;
+  }
 }
+
+/** A provider trade print (Alpaca v2): time, price, size, exchange, conditions, tape. */
+export interface RawTrade { t: string; p: number; s?: number; x?: string; c?: string[] | null; z?: string | null }
+
+/** Look-back for the newest eligible print when the provider's latest print is ineligible. */
+export const LATEST_ELIGIBLE_LOOKBACK_MS = 5 * 60_000;
 
 /** Short-lived cache for COMPLETED historical bars only (never for current prices). */
 export class BarCache {

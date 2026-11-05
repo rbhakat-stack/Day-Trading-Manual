@@ -10,7 +10,9 @@
  */
 import { dedupeKey, parseAlertPayload, withoutSecrets, type ParsedAlert } from '../../src/engine/automation/alertPayload';
 import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type SnapshotConfig } from '../../src/engine/automation/alertSnapshot';
-import { DEFAULT_AUTOMATION, type AutoAlertRecord } from '../../src/engine/automation/alertDecision';
+import { CANDLE_MAX_ATTEMPTS, CANDLE_RETRY_DELAYS_MS, DEFAULT_AUTOMATION, type AutoAlertRecord, type DelayedReconstruction, type EnrichmentAttempt } from '../../src/engine/automation/alertDecision';
+import { delayedTriggerEvidence, signalWindow, verifySignalCandle } from '../../src/engine/automation/signalCompleteness';
+import type { Bar } from '../../src/engine/automation/indicators';
 import { needsRvolOptionalSnapshot, receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
 import { inputsFromRecord } from '../../src/engine/automation/autoCandidate';
 import { etParts, etToEpoch } from '../../src/engine/automation/etTime';
@@ -46,6 +48,9 @@ export type ProcessOutcome =
   | { kind: 'STORED'; status: 200; id: string; record: AutoAlertRecord };
 
 const FIVE = 5 * 60_000;
+
+/** Internal control flow: the signal candle was not final (already recorded and scheduled). */
+class IncompleteCandle extends Error {}
 
 export async function processAlert(body: unknown, deps: ProcessDeps): Promise<ProcessOutcome> {
   const now = deps.now();
@@ -98,6 +103,18 @@ export async function processAlert(body: unknown, deps: ProcessDeps): Promise<Pr
 }
 
 /**
+ * Step 3 · A — why a reprocess request must not run now (null = it may). Enforced by the server, so several tabs, a
+ * reload or a restart can never retry early or more often:
+ *   • incomplete signal candle: only at/after `nextAttemptMs`, at most CANDLE_MAX_ATTEMPTS attempts in total;
+ *   • any other DATA_ERROR / stuck record: the existing limit of 3 attempts.
+ */
+export function retryGate(rec: AutoAlertRecord, now: number): string | null {
+  if (rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE_FINAL' || (rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE' && rec.attempts >= CANDLE_MAX_ATTEMPTS)) return 'Signal candle still incomplete after the bounded retries — MANUAL REVIEW REQUIRED.';
+  if (rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE') return rec.nextAttemptMs && now < rec.nextAttemptMs ? `Signal candle retry scheduled at ${new Date(rec.nextAttemptMs).toISOString()}.` : null;
+  return rec.attempts >= 3 ? 'Retry limit reached — MANUAL REVIEW REQUIRED.' : null;
+}
+
+/**
  * Fill a RECEIVED / DATA_ERROR record. A record whose status is OK is immutable and is returned unchanged.
  */
 export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Promise<AutoAlertRecord> {
@@ -119,13 +136,40 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
   const startIso = new Date(start).toISOString();
   const endIso = new Date(rec.alert.alertTimeMs).toISOString();
   const cacheKey = `${rec.alert.symbol}|${startIso}|${new Date(sigEnd).toISOString()}`;
-  deps.log('market_data_fetch_started', { id: rec.id, symbol: rec.alert.symbol, startIso, endIso, feed: deps.data.feed });
+  const audit = [...(rec.enrichmentAudit ?? [])];
+  const win = signalWindow(rec.alert.alertTimeMs);
+  deps.log('market_data_fetch_started', { id: rec.id, symbol: rec.alert.symbol, startIso, endIso, feed: deps.data.feed, attempt: r.attempts });
+  // Step 3 · A — schedule the next attempt for an incomplete signal candle (bounded; never past the last delay).
+  const scheduleCandleRetry = (reason: string, provisional: EnrichmentAttempt['provisional']) => {
+    const final = r.attempts >= CANDLE_MAX_ATTEMPTS;
+    const delay = final ? null : CANDLE_RETRY_DELAYS_MS[r.attempts - 1];
+    r.status = 'DATA_ERROR';
+    r.errorCode = final ? 'SIGNAL_CANDLE_INCOMPLETE_FINAL' : 'SIGNAL_CANDLE_INCOMPLETE';
+    r.nextAttemptMs = delay === null ? null : deps.now() + delay;
+    r.errors = [`SIGNAL_CANDLE_INCOMPLETE: ${reason} ${final ? `Retries exhausted after ${r.attempts} attempts — MANUAL REVIEW REQUIRED. No ticket.` : `Attempt ${r.attempts} of ${CANDLE_MAX_ATTEMPTS}; next attempt in ${(delay as number) / 1000} s. No ticket until the candle is final.`}`];
+    audit.push({ attempt: r.attempts, atIso: new Date(deps.now()).toISOString(), outcome: 'SIGNAL_CANDLE_INCOMPLETE', detail: reason, provisional });
+    deps.log('signal_candle_incomplete', { id: r.id, symbol: r.alert.symbol, attempt: r.attempts, final, nextAttemptMs: r.nextAttemptMs, reason });
+  };
   try {
     const timeout = <T,>(p: Promise<T>) =>
       Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`market-data deadline exceeded (${deps.deadlineMs ?? 8000} ms)`)), Math.max(1, deadline - deps.now())))]);
     const cached = deps.cache?.get(cacheKey);
-    const [bars, trades] = await timeout(Promise.all([cached ? Promise.resolve(cached) : deps.data.getBars5(rec.alert.symbol, startIso, endIso), deps.data.getLatestTrades([rec.alert.symbol])]));
-    if (!cached) deps.cache?.set(cacheKey, bars.filter((b) => b.t + FIVE <= sigEnd)); // cache completed bars only
+    const fetchedMs = deps.now();
+    const [bars, bars1, trades] = await timeout(Promise.all([
+      cached ? Promise.resolve(cached) : deps.data.getBars5(rec.alert.symbol, startIso, endIso),
+      win && deps.data.getBars1 ? deps.data.getBars1(rec.alert.symbol, new Date(win.startMs).toISOString(), new Date(fetchedMs).toISOString()) : Promise.resolve([] as Bar[]),
+      deps.data.getLatestTrades([rec.alert.symbol]),
+    ]));
+    // Step 3 · A — the signal candle must equal its five 1-minute bars (final minute present) before it is used.
+    const comp = verifySignalCandle(bars, bars1, rec.alert.alertTimeMs);
+    if (comp.status !== 'COMPLETE') {
+      const p = comp.provisional;
+      scheduleCandleRetry(comp.reason ?? 'Signal candle not confirmed.', { bar5: p.bar5 ? { o: p.bar5.o, h: p.bar5.h, l: p.bar5.l, c: p.bar5.c, v: p.bar5.v } : null, minutes: p.minutes });
+      throw new IncompleteCandle();
+    }
+    if (!cached) deps.cache?.set(cacheKey, bars.filter((b) => b.t + FIVE <= sigEnd)); // cache VERIFIED completed bars only
+    r.errorCode = undefined;
+    r.nextAttemptMs = null;
     const quote = trades[rec.alert.symbol] ?? null;
     const snapshot = buildAlertSnapshot(bars, rec.alert.alertTimeMs, rec.alert.direction, cfg);
     r.snapshot = snapshot;
@@ -143,13 +187,41 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
     }
     const review = snapshot.issues.filter((i) => i.kind === 'REVIEW');
     if (review.length) deps.log('data_mismatch', { id: r.id, codes: review.map((i) => i.code) });
+    // Step 3 · A — completed on a retry: prove the entry was not reached while RB waited (else the client fails closed).
+    if (r.attempts > 1 && win) {
+      const entry = r.calcAtAlert?.entry ?? null;
+      let gap: DelayedReconstruction['gap'];
+      if (entry === null || !(entry > 0)) {
+        gap = { status: 'UNVERIFIED', direction: r.alert.direction, entry: entry ?? NaN, fromIso: new Date(win.endMs).toISOString(), toIso: new Date(fetchedMs).toISOString(), extreme: null, crossedAtIso: null, crossedPrice: null, reason: 'No planned entry could be calculated — trigger continuity during the delay cannot be proven.' };
+      } else {
+        let gapTrades: Awaited<ReturnType<NonNullable<MarketDataClient['getTrades']>>> = null;
+        try {
+          gapTrades = deps.data.getTrades ? await timeout(deps.data.getTrades(r.alert.symbol, new Date(win.endMs).toISOString(), new Date(fetchedMs).toISOString())) : null;
+        } catch {
+          gapTrades = null; // cannot prove → UNVERIFIED
+        }
+        gap = delayedTriggerEvidence({ direction: r.alert.direction, entry, signalEndMs: win.endMs, fetchedMs, bars1, trades: gapTrades });
+      }
+      r.delayedReconstruction = { firstAttemptIso: audit[0]?.atIso ?? rec.firstProcessedIso ?? rec.receivedIso, finalIso: new Date(deps.now()).toISOString(), attempts: r.attempts, gap };
+      deps.log('delayed_reconstruction', { id: r.id, attempts: r.attempts, gap: gap.status, reason: gap.reason });
+    }
+    audit.push({ attempt: r.attempts, atIso: new Date(deps.now()).toISOString(), outcome: 'OK', detail: `Signal candle ${comp.label} ET verified complete (5 of 5 minutes, 5-minute bar = 1-minute aggregate).` });
     v12Enrich(r, bars, cfg, deps);
     deps.log('candidate_enriched', { id: r.id, bars: bars.length, signal: snapshot.signal?.label, confirm15m: snapshot.confirm15m?.label, issues: snapshot.issues.map((i) => i.code), ms: deps.now() - started });
   } catch (e) {
-    r.status = 'DATA_ERROR';
-    r.errors = [(e as Error).message];
-    deps.log('market_data_fetch_failed', { id: r.id, symbol: r.alert.symbol, error: (e as Error).message, attempt: r.attempts });
+    if (!(e instanceof IncompleteCandle)) {
+      deps.log('market_data_fetch_failed', { id: r.id, symbol: r.alert.symbol, error: (e as Error).message, attempt: r.attempts });
+      if (rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE') {
+        // a failed fetch while waiting for a final candle keeps the bounded candle schedule
+        scheduleCandleRetry(`Market data fetch failed (${(e as Error).message}).`, null);
+      } else {
+        r.status = 'DATA_ERROR';
+        r.errors = [(e as Error).message];
+        audit.push({ attempt: r.attempts, atIso: new Date(deps.now()).toISOString(), outcome: 'FETCH_FAILED', detail: (e as Error).message });
+      }
+    }
   }
+  r.enrichmentAudit = audit;
   r.processedIso = new Date(deps.now()).toISOString();
   // CR-01: the ORIGINAL decision time is written once (first attempt, whatever its outcome) and never overwritten.
   // Retries are observable separately and are never used for Decision Latency.

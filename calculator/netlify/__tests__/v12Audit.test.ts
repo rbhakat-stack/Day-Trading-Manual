@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MarketDataClient } from '../lib/alpaca';
 import { processAlert, type ProcessDeps } from '../lib/processAlert';
 import { MemoryStore } from '../lib/store';
-import { daysUpTo, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
+import { daysUpTo, minuteBarsBetween, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
 import { etToEpoch } from '../../src/engine/automation/etTime';
 import type { Bar } from '../../src/engine/automation/indicators';
 import type { AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
@@ -16,6 +16,7 @@ const body = (o: Record<string, unknown> = {}) => ({ strategy: 'RB_V1', symbol: 
 function fakeData(o: { bars?: Bar[]; fail?: string } = {}): MarketDataClient {
   return {
     name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets',
+    async getBars1(_s, a, b) { return minuteBarsBetween(o.bars ?? BARS, a, b); }, // Step 3 · A
     async getBars5() {
       if (o.fail) throw new Error(o.fail);
       return o.bars ?? BARS;

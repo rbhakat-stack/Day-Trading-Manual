@@ -4,7 +4,7 @@
  * the Alpaca keys exist only on the server.
  */
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_AUTOMATION, type AutoAlertRecord, type AutomationConfig, type LiveQuote, type QuoteSnapshot } from '../engine/automation/alertDecision';
+import { CANDLE_MAX_ATTEMPTS, DEFAULT_AUTOMATION, type AutoAlertRecord, type AutomationConfig, type LiveQuote, type QuoteSnapshot } from '../engine/automation/alertDecision';
 import type { Classification } from '../engine/automation/autoCandidate';
 import { KNOWN_CLASSIFICATIONS } from '../engine/ranker/correlationRules';
 import type { ParityEntry } from '../engine/automation/parity';
@@ -141,7 +141,11 @@ export function useAlertRecords(cfg: AutomationConfig, token: string, date: stri
         for (const r of j.records) {
           const stuck = (r.status === 'RECEIVED' || r.status === 'ENRICHING') && Date.now() - r.receivedMs > 20_000;
           const n = retried.current.get(r.id) ?? 0;
-          if ((stuck || r.status === 'DATA_ERROR') && r.attempts < 3 && n < 2) {
+          // Step 3 · A — an incomplete signal candle is retried on the server's schedule (~30 / 60 / 120 s), bounded;
+          // the server re-checks the schedule and the limit, so another tab or a reload cannot add attempts.
+          const candle = r.status === 'DATA_ERROR' && r.errorCode === 'SIGNAL_CANDLE_INCOMPLETE';
+          const due = candle ? !!r.nextAttemptMs && Date.now() >= r.nextAttemptMs + 5_000 && r.attempts < CANDLE_MAX_ATTEMPTS && n < CANDLE_MAX_ATTEMPTS : false; // 5 s margin for clock skew
+          if (due || (!candle && r.errorCode !== 'SIGNAL_CANDLE_INCOMPLETE_FINAL' && (stuck || r.status === 'DATA_ERROR') && r.attempts < 3 && n < 2)) {
             retried.current.set(r.id, n + 1);
             void call('rb-alerts', token, { method: 'POST', body: JSON.stringify({ action: 'reprocess', id: r.id, date }) }).catch(() => undefined);
           }

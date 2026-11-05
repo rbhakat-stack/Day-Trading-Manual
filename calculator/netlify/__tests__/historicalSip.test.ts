@@ -5,7 +5,7 @@ import { assertHistoricalBarsRequest, classifyFailure, runHistoricalSipTest, typ
 import { DataFetchError, type MarketDataClient } from '../lib/alpaca';
 import { enrichRecord, processAlert, type ProcessDeps } from '../lib/processAlert';
 import { MemoryStore } from '../lib/store';
-import { daysUpTo, minuteBars, sessionBars, toFive } from '../../src/engine/automation/__tests__/fixtures';
+import { daysUpTo, minuteBars, minuteBarsBetween, sessionBars, toFive } from '../../src/engine/automation/__tests__/fixtures';
 import { etToEpoch } from '../../src/engine/automation/etTime';
 import { buildAlertSnapshot } from '../../src/engine/automation/alertSnapshot';
 import { historicalWindow, requestWindows } from '../../src/engine/automation/historicalParity';
@@ -235,7 +235,7 @@ describe('isolation: no live alert, no candidate, no capital, no heat, no journa
     const { f } = fakeFetch();
     await runHistoricalSipTest(REQ, deps(f));
     expect(await store.list(D)).toHaveLength(0);
-    const data: MarketDataClient = { name: 'Alpaca', feed: 'sip', host: 'h', getBars5: async () => BARS, getLatestTrades: async (s) => Object.fromEntries(s.map((x) => [x, { price: 258, tradeIso: new Date(ALERT).toISOString(), fetchedIso: new Date(ALERT).toISOString() }])) };
+    const data: MarketDataClient = { name: 'Alpaca', feed: 'sip', host: 'h', getBars5: async () => BARS, getBars1: async (_s, a, b) => minuteBarsBetween(BARS, a, b), getLatestTrades: async (s) => Object.fromEntries(s.map((x) => [x, { price: 258, tradeIso: new Date(ALERT).toISOString(), fetchedIso: new Date(ALERT).toISOString() }])) };
     const d: ProcessDeps = { store, data, log: () => {}, now: () => ALERT + 2000, sleep: async () => {} };
     const live = await processAlert({ strategy: 'RB_V1', symbol: 'IBM', direction: 'LONG', alert_name: 'RB v1 LONG Setup', alert_time: new Date(ALERT).toISOString() }, d);
     expect(live.kind).toBe('STORED');

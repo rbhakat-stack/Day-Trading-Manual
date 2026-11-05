@@ -69,6 +69,10 @@ export function observeContinuity(prev: ObservationMap, records: AutoAlertRecord
  * `obs` undefined = the caller does not track continuity (legacy engine callers and tests); the App always tracks it.
  */
 export function observationRefusal(rec: AutoAlertRecord, quote: LiveQuote | null, obs: ObservationMap | undefined, cfg: Limits): string | null {
+  // Step 3 · A — a snapshot completed late must come with server evidence that the entry trigger was not reached while
+  // RB waited; without it (UNVERIFIED) or with a crossing, no ticket is ever offered for this alert (fail closed).
+  const gap = rec.delayedReconstruction?.gap;
+  if (gap && gap.status !== 'NOT_CROSSED') return gap.status === 'CROSSED' ? `entry trigger reached during the delayed reconstruction — ${gap.reason}` : `trigger continuity during the delayed reconstruction is unverified — ${gap.reason}`;
   if (!obs) return null;
   const st = obs[rec.id];
   if (!st) return 'market data not yet observed in this browser';

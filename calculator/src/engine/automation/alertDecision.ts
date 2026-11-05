@@ -30,6 +30,41 @@ export interface QuoteSnapshot {
   tradeIso: string;
   /** When the server fetched it. */
   fetchedIso: string;
+  /** Step 3 · D — provenance of the price (absent on records stored before the eligible-price rule). */
+  conditions?: string[];
+  tape?: string;
+  /** LATEST = the provider's latest trade was eligible; LATEST_ELIGIBLE = newer ineligible prints were skipped. */
+  priceSource?: 'LATEST' | 'LATEST_ELIGIBLE';
+  /** The newer ineligible print that was NOT used (audit only). */
+  skipped?: { price: number; tradeIso: string; conditions: string[]; tape: string | null } | null;
+}
+
+/** Step 3 · A — one enrichment attempt (audit trail; the immutable snapshot is only ever the final complete one). */
+export interface EnrichmentAttempt {
+  attempt: number;
+  atIso: string;
+  outcome: 'OK' | 'SIGNAL_CANDLE_INCOMPLETE' | 'FETCH_FAILED';
+  detail: string;
+  /** Provisional values seen on an incomplete attempt — never used for a decision. */
+  provisional?: { bar5: { o: number; h: number; l: number; c: number; v: number } | null; minutes: string[] } | null;
+}
+
+/** Step 3 · A — evidence that the entry trigger was not crossed while a delayed reconstruction was pending. */
+export interface DelayedReconstruction {
+  firstAttemptIso: string;
+  finalIso: string;
+  attempts: number;
+  gap: {
+    status: 'NOT_CROSSED' | 'CROSSED' | 'UNVERIFIED';
+    direction: 'LONG' | 'SHORT';
+    entry: number;
+    fromIso: string;
+    toIso: string;
+    extreme: number | null;
+    crossedAtIso: string | null;
+    crossedPrice: number | null;
+    reason: string;
+  };
 }
 
 export interface AutoAlertRecord {
@@ -61,7 +96,19 @@ export interface AutoAlertRecord {
   firstProcessedIso?: string | null;
   /** Retry observability (not used for Decision Latency). */
   retry?: { count: number; lastProcessedIso: string; lastDurationMs: number };
+  /** Step 3 · A — machine-readable reason of a DATA_ERROR (absent = a market-data fetch failure). */
+  errorCode?: 'SIGNAL_CANDLE_INCOMPLETE' | 'SIGNAL_CANDLE_INCOMPLETE_FINAL';
+  /** Step 3 · A — earliest server time of the next scheduled attempt (absent = none scheduled). */
+  nextAttemptMs?: number | null;
+  /** Step 3 · A — every enrichment attempt and its outcome. */
+  enrichmentAudit?: EnrichmentAttempt[];
+  /** Step 3 · A — present when the snapshot was completed on a retry (after the first attempt). */
+  delayedReconstruction?: DelayedReconstruction | null;
 }
+
+/** Step 3 · A — retry schedule for an incomplete signal candle: ~30, 60, 120 s after the previous attempt (4 attempts). */
+export const CANDLE_RETRY_DELAYS_MS = [30_000, 60_000, 120_000] as const;
+export const CANDLE_MAX_ATTEMPTS = 1 + CANDLE_RETRY_DELAYS_MS.length;
 
 /* ───────────────────────── configuration ───────────────────────── */
 
@@ -355,7 +402,10 @@ export function decideAlert(a: DecideArgs): AlertDecision {
   if (tw) return out('NOT ELIGIBLE', tw.label, 'IGNORE', [tw.reason]);
 
   // 3 data failures
-  if (rec.status === 'DATA_ERROR') return out('DATA REVIEW REQUIRED', 'DATA ERROR — MANUAL REVIEW REQUIRED', 'DATA_REVIEW', rec.errors.length ? rec.errors : ['Market data could not be retrieved.']);
+  if (rec.status === 'DATA_ERROR') {
+    const detail = rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE' ? 'SIGNAL CANDLE INCOMPLETE — RETRY SCHEDULED' : rec.errorCode === 'SIGNAL_CANDLE_INCOMPLETE_FINAL' ? 'SIGNAL CANDLE INCOMPLETE — MANUAL REVIEW REQUIRED' : 'DATA ERROR — MANUAL REVIEW REQUIRED';
+    return out('DATA REVIEW REQUIRED', detail, 'DATA_REVIEW', rec.errors.length ? rec.errors : ['Market data could not be retrieved.']);
+  }
   if (!snap || incomplete.length || !snap.values) return out('DATA REVIEW REQUIRED', 'DATA INCOMPLETE — DO NOT TRADE', 'DATA_REVIEW', incomplete.map((i) => i.message));
 
   // 4 one live candidate / position per ticker

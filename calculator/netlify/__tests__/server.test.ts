@@ -6,7 +6,7 @@ import { assertReadOnlyDataRequest, BarCache, createAlpacaData, type MarketDataC
 import { redact } from '../lib/log';
 import { enrichRecord, processAlert, type ProcessDeps } from '../lib/processAlert';
 import { MemoryStore } from '../lib/store';
-import { daysUpTo, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
+import { daysUpTo, minuteBarsBetween, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
 import { etToEpoch } from '../../src/engine/automation/etTime';
 import type { Bar } from '../../src/engine/automation/indicators';
 
@@ -23,6 +23,10 @@ function fakeData(o: { bars?: Bar[]; fail?: string; price?: number } = {}): Mark
       calls.push(`bars:${symbol}`);
       if (o.fail) throw new Error(o.fail);
       return o.bars ?? BARS;
+    },
+    async getBars1(_symbol, a, b) {
+      if (o.fail) throw new Error(o.fail);
+      return minuteBarsBetween(o.bars ?? BARS, a, b); // Step 3 · A: complete 1-minute data for the signal candle
     },
     async getLatestTrades(symbols) {
       calls.push(`trades:${symbols.join(',')}`);
@@ -97,7 +101,7 @@ describe('Alpaca client is market-data only (no trading endpoints possible)', ()
     expect(url).toContain('page_token=p2');
   });
   it('bounded retries on 5xx / 429, none on 4xx', async () => {
-    const f = vi.fn().mockResolvedValueOnce(new Response('busy', { status: 503 })).mockResolvedValueOnce(ok({ trades: { GM: { t: '2026-10-30T14:15:05Z', p: 85.45 } } }));
+    const f = vi.fn().mockResolvedValueOnce(new Response('busy', { status: 503 })).mockResolvedValueOnce(ok({ trades: { GM: { t: '2026-10-30T14:15:05Z', p: 85.45, c: [' '], z: 'A' } } }));
     const c = createAlpacaData({ keyId: 'k', secretKey: 's', fetchImpl: f as never, attempts: 2 });
     expect((await c.getLatestTrades(['GM'])).GM.price).toBe(85.45);
     const g = vi.fn().mockResolvedValue(new Response('{"message":"subscription does not permit querying recent SIP data"}', { status: 403 }));
@@ -175,11 +179,15 @@ describe('processAlert', () => {
     const stored = await enrichRecord(tampered, { ...d, data: fakeData({ price: 1 }) });
     expect(stored.initialQuote?.price).toBe(106); // the stored OK record wins over a concurrent re-run
   });
-  it('the signal candle missing from the feed → OK record with an INCOMPLETE issue (fails closed in the app)', async () => {
+  // Revised for Step 3 · A (approved): was "→ OK record with an INCOMPLETE issue". A signal candle missing from the feed
+  // is indistinguishable from provider lag, so the record is not frozen: DATA_ERROR SIGNAL_CANDLE_INCOMPLETE, no snapshot,
+  // a bounded retry scheduled. Safety objective kept: no values invented, never actionable (fails closed in the app).
+  it('the signal candle missing from the feed → DATA_ERROR SIGNAL_CANDLE_INCOMPLETE, no snapshot, retry scheduled', async () => {
     const d = deps({ data: fakeData({ bars: BARS.filter((b) => b.t !== etToEpoch(D, '10:10')) }) });
     const out = await processAlert(body(), d);
-    expect(out.kind === 'STORED' && out.record.snapshot?.issues.map((i) => i.code)).toContain('SIGNAL_CANDLE_MISSING');
-    expect(out.kind === 'STORED' && out.record.snapshot?.values).toBeNull();
+    const rec = (out as Extract<typeof out, { kind: 'STORED' }>).record;
+    expect(rec).toMatchObject({ status: 'DATA_ERROR', errorCode: 'SIGNAL_CANDLE_INCOMPLETE', snapshot: null, initialQuote: null, nextAttemptMs: ALERT_MS + 2000 + 30_000 });
+    expect(rec.errors[0]).toMatch(/SIGNAL_CANDLE_INCOMPLETE: The 10:10–10:15 ET 5-minute candle is not yet in the market data/);
   });
   it('waits for the just-closed signal candle to settle before fetching', async () => {
     const waits: number[] = [];

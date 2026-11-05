@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_AUTOMATION, type AutoAlertRecord, type LiveQuote } from '../../src/engine/automation/alertDecision';
-import { daysUpTo, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
+import { daysUpTo, minuteBarsBetween, sessionBars } from '../../src/engine/automation/__tests__/fixtures';
 import { etToEpoch } from '../../src/engine/automation/etTime';
 import { buildQueue } from '../../src/engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
@@ -28,6 +28,7 @@ function fakeData(bars = BARS_UP): MarketDataClient {
   return {
     name: 'Alpaca', feed: 'sip', host: 'data.alpaca.markets',
     async getBars5() { return bars; },
+    async getBars1(_s, a, b) { return minuteBarsBetween(bars, a, b); }, // Step 3 · A
     async getLatestTrades(symbols) {
       return Object.fromEntries(symbols.map((s) => [s, { price: bars[bars.length - 2].c, tradeIso: new Date(etToEpoch(D, '10:15:05')).toISOString(), fetchedIso: new Date(etToEpoch(D, '10:15:06')).toISOString() }]));
     },

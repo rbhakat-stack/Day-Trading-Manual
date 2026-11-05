@@ -22,7 +22,7 @@ import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
-import { chaseKey, triggerKey, type TerminalEventMap } from './lifecycle/terminalEvents';
+import { chaseKey, observedSkippedCross, triggerKey, type TerminalEventMap } from './lifecycle/terminalEvents';
 import { applyTickerReservations, heldCandidateIds } from './lifecycle/tickerReservation';
 import { observationRefusal, type ObservationMap } from './lifecycle/observationContinuity';
 import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
@@ -279,7 +279,9 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow, blocked: blocked.get(rec.id) ?? null } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), q.terminal?.[triggerKey(rec.id)] ?? null);
+    // Step 3 · D — odd-lot evidence at/through the entry ends the alert on THIS pass (the executable price may still be below it).
+    const trigger = q.terminal?.[triggerKey(rec.id)] ?? observedSkippedCross(row, q.now, q.cfg);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), trigger);
     return row;
   });
 

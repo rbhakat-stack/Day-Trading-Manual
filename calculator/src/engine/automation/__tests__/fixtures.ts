@@ -95,3 +95,22 @@ export function toFive(min1: Bar[]): Bar[] {
   }
   return out;
 }
+
+/**
+ * Step 3 · A — five 1-minute bars per 5-minute bar whose aggregate equals it EXACTLY (first open, max high, min low, last
+ * close, Σ volume): a genuinely complete candle for the signal-candle completeness check. Synthetic.
+ */
+export function minutesOf(bars5: Bar[]): Bar[] {
+  const out: Bar[] = [];
+  for (const b of bars5) {
+    const q = Math.floor(b.v / 5), last = b.v - 4 * q;
+    out.push({ t: b.t, o: b.o, h: b.h, l: Math.min(b.o, b.h), c: b.h, v: q });
+    out.push({ t: b.t + 60_000, o: b.h, h: b.h, l: b.l, c: b.l, v: q });
+    out.push({ t: b.t + 120_000, o: b.l, h: b.l, l: b.l, c: b.l, v: q });
+    out.push({ t: b.t + 180_000, o: b.l, h: b.l, l: b.l, c: b.l, v: q });
+    out.push({ t: b.t + 240_000, o: b.l, h: Math.max(b.l, b.c), l: b.l, c: b.c, v: last });
+  }
+  return out;
+}
+/** 1-minute bars of `bars5` inside [startIso, endIso). */
+export const minuteBarsBetween = (bars5: Bar[], startIso: string, endIso: string): Bar[] => minutesOf(bars5).filter((m) => m.t >= Date.parse(startIso) && m.t < Date.parse(endIso));
