@@ -705,6 +705,7 @@ export default function App() {
             {liveSub === 'queue' && (
               <LiveQueuePage
                 rows={queue?.rows ?? []}
+                alertSnapshots={alertSnaps}
                 suggestions={queue?.suggestions ?? []}
                 now={clock}
                 enabled={autoCfg.enabled && !!autoToken}

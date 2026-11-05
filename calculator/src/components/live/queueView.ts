@@ -14,6 +14,10 @@ import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
 import type { QualityTier } from '../../engine/ranker/opportunityTypes';
 import type { HardFailCode } from '../../engine/rules';
+import { DEFAULT_AUTOMATION, quoteAges } from '../../engine/automation/alertDecision';
+import { fmtEt, mmss } from '../../engine/automation/etTime';
+import { SNAPSHOT_FINALIZE_MS, type AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
+import { RB_V1_DEFAULTS } from '../../engine/settings';
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'shadow' | 'elite' | 'muted';
 export interface Status { label: string; tone: Tone; detail: string }
@@ -320,5 +324,149 @@ export function detailFields(r: QueueRow) {
     issues: rec.snapshot?.issues ?? [],
     errors: rec.errors,
     portfolio: pf,
+  };
+}
+
+/* ───────────────────────── Live vs. alert-time comparison (display only) ───────────────────────── */
+//
+// Everything below READS existing values. Nothing is scored, decided, authorized or reconstructed. Alert-time values
+// come only from records that were genuinely written once at alert time:
+//   • the server record (immutable once status = OK): calcAtAlert (alert-time Calculator result), snapshot.issues;
+//   • this browser's write-once AlertTimeSnapshot (rbv1.v12.alertSnapshots.v1): v1.1 score / tier / decision.
+// A value that was not written at alert time is NOT CAPTURED — never the current value, never recomputed.
+
+/**
+ * A client snapshot counts as alert-time only if it was written while the alert was being processed: the snapshot
+ * freezes on the first complete pass and at the latest SNAPSHOT_FINALIZE_MS (60 s) after receipt while the app is
+ * open; 15 s covers poll/refresh scheduling. A snapshot written later (the app was opened after the alert) holds a
+ * later evaluation, so its values are shown as NOT CAPTURED. Display classification only — no trading rule.
+ */
+export const ALERT_CAPTURE_TOLERANCE_MS = SNAPSHOT_FINALIZE_MS + 15_000;
+
+export interface AlertField {
+  /** The recorded value (display text), or null = NOT CAPTURED. */
+  value: string | null;
+  /** Recorded numeric score (score field only). */
+  num?: number | null;
+  /** Recorded tier (tier field only). */
+  tier?: QualityTier | null;
+  /** Where the value comes from and when it was written (tooltip / provenance). */
+  source: string;
+  /** Epoch ms the value was written (null when not captured). */
+  at: number | null;
+}
+
+export interface AlertTimeAssessment {
+  /** The client snapshot is genuine for this alert (same alert ID, written at alert time). */
+  snapshotOk: boolean;
+  version: string;
+  score: AlertField;
+  tier: AlertField;
+  decision: AlertField;
+  executionState: AlertField;
+  action: AlertField;
+  dataStatus: AlertField;
+  chaseStatus: AlertField;
+  portfolioStatus: AlertField;
+}
+
+const notCaptured = (source: string): AlertField => ({ value: null, source, at: null });
+const sinceReceipt = (ms: number, rec: QueueRow['record']) => {
+  const s = Math.round((ms - rec.receivedMs) / 1000);
+  return s < 120 ? `${s} s after receipt` : `${Math.round(s / 60)} min after receipt`;
+};
+
+export function alertTimeAssessment(r: QueueRow, snap: AlertTimeSnapshot | null | undefined, version: string): AlertTimeAssessment {
+  const rec = r.record;
+  const genuine = !!snap && snap.recordId === rec.id && snap.frozenAtMs - rec.receivedMs <= ALERT_CAPTURE_TOLERANCE_MS;
+  const why = !snap
+    ? 'no alert-time snapshot is recorded in this browser for this alert (it is written while the app is open at alert time).'
+    : snap.recordId !== rec.id
+      ? 'the stored snapshot belongs to a different alert ID.'
+      : `this browser first wrote the snapshot at ${fmtEt(snap.frozenAtMs)}, ${sinceReceipt(snap.frozenAtMs, rec)} — the app was not open at alert time, so it holds a later evaluation, not the alert-time one.`;
+  const v11 = version === 'RB v1.1';
+  let score = notCaptured(`NOT CAPTURED — ${why}`);
+  let tier = notCaptured(`NOT CAPTURED — ${why}`);
+  let decision = notCaptured(`NOT CAPTURED — ${why}`);
+  if (genuine && snap) {
+    const src = `Write-once alert snapshot (${version}) for alert ${rec.id}, written ${fmtEt(snap.frozenAtMs)} (${sinceReceipt(snap.frozenAtMs, rec)})${snap.complete ? '' : ` · incomplete: ${snap.missing.join(', ')}`}`;
+    const total = v11 ? snap.v11.total : snap.v12?.total ?? null;
+    const t = (v11 ? snap.v11.tier : snap.v12?.tierOptionB ?? null) as QualityTier | null;
+    const first = v11 && r.candidate?.initialScore && r.candidate.initialScore.total === total ? r.candidate.initialScore.at : null;
+    score = { value: total === null ? 'NOT SCORED' : String(total), num: total, source: `${src}${first !== null ? ` · score first frozen ${fmtEt(first)}` : ''}${total === null ? ' · recorded as not scored' : ''}`, at: snap.frozenAtMs };
+    tier = { value: t ? TIER_SHORT[t] : 'NOT SCORED', tier: t, source: src, at: snap.frozenAtMs };
+    const d = v11 ? snap.v11.decision : snap.v12?.decision ?? null;
+    decision = d === null ? notCaptured(`NOT CAPTURED — the snapshot holds no ${version} decision.`) : { value: d, source: `${src}${v11 && snap.v11.detail ? ` · ${snap.v11.detail}` : ''}`, at: snap.frozenAtMs };
+  }
+  const c = rec.calcAtAlert;
+  const processed = Date.parse(rec.firstProcessedIso ?? rec.processedIso ?? '');
+  const action: AlertField = c
+    ? { value: c.headline, source: `Server Calculator result at alert processing (${c.action}; RB v1.1 rules, frozen defaults), recorded ${Number.isFinite(processed) ? fmtEt(processed) : 'at processing'} — immutable once the record is OK`, at: Number.isFinite(processed) ? processed : null }
+    : notCaptured('NOT CAPTURED — the server recorded no alert-time Calculator result (no usable market-data snapshot).');
+  const issues = rec.snapshot?.issues ?? [];
+  return {
+    snapshotOk: genuine,
+    version,
+    score,
+    tier,
+    decision,
+    action,
+    executionState: notCaptured('NOT CAPTURED — the execution state is evaluated live; no alert-time value is stored.'),
+    dataStatus: notCaptured(`NOT CAPTURED — no data-status value is stored at alert time. Server-recorded data-integrity issues at processing: ${issues.length ? issues.map((i) => i.code).join(', ') : 'none'}.`),
+    chaseStatus: notCaptured('NOT CAPTURED — the chase status is evaluated live; no alert-time value is stored (the alert-time Calculator result is shown as Alert Action).'),
+    portfolioStatus: notCaptured('NOT CAPTURED — the portfolio status is evaluated live against the current portfolio; no alert-time value is stored.'),
+  };
+}
+
+export interface ChangeSinceAlert {
+  score: string;
+  tier: string;
+  decision: string;
+  scoreDelta: number | null;
+}
+
+/** Display-only differences between the recorded alert-time values and the current ones (same strategy version). */
+export function changeSinceAlert(a: AlertTimeAssessment, cur: StrategyCell, currentDecision: string): ChangeSinceAlert {
+  const live = !cur.frozen && cur.score !== null;
+  let score: string;
+  let scoreDelta: number | null = null;
+  if (a.score.value === null) score = 'N/A — alert score not captured';
+  else if (a.score.num === null || a.score.num === undefined) score = 'N/A — not scored at alert time';
+  else if (!live) score = 'N/A — no live score now';
+  else {
+    scoreDelta = (cur.score as number) - a.score.num;
+    score = `${cur.score} − ${a.score.num} = ${scoreDelta > 0 ? '+' : scoreDelta < 0 ? '−' : ''}${Math.abs(scoreDelta)}`;
+  }
+  const curTier = live ? cur.tiers[0] ?? null : null;
+  const tier = a.tier.value === null ? 'NOT CAPTURED' : !live ? 'N/A — no live tier now' : a.tier.tier === curTier ? 'Unchanged' : `${a.tier.value} → ${curTier ? TIER_SHORT[curTier] : 'NOT SCORED'}`;
+  const decision = a.decision.value === null ? 'NOT CAPTURED' : a.decision.value === currentDecision ? 'Unchanged' : `${a.decision.value} → ${currentDecision}`;
+  return { score, tier, decision, scoreDelta };
+}
+
+/** Display-only: elapsed time inside the existing alert window (same alert time and window the lifecycle uses). */
+export function timeSinceAlert(r: QueueRow, now: number): { text: string; fraction: number | null; elapsed: boolean; detail: string } {
+  const a = r.record.alert;
+  const win = RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
+  const W = mmss(win);
+  const src = a.timeSource === 'RECEIVED' ? 'server receipt time' : 'TrendSpider payload alert time';
+  if (!Number.isFinite(a.alertTimeMs)) return { text: `UNAVAILABLE / ${W}`, fraction: null, elapsed: false, detail: 'No alert timestamp.' };
+  const ms = now - a.alertTimeMs;
+  if (ms < 0) return { text: `UNAVAILABLE / ${W}`, fraction: null, elapsed: false, detail: `The alert time (${src}, ${fmtEt(a.alertTimeMs)}) is ahead of this clock — elapsed time cannot be shown. Informational only.` };
+  if (ms >= win) return { text: `${W}+ / ${W}`, fraction: 1, elapsed: true, detail: `Alert window elapsed: ${Math.floor(ms / 60_000)} min since the alert (${src}, ${fmtEt(a.alertTimeMs)}). Informational only — the lifecycle decides expiry.` };
+  return { text: `${mmss(ms)} / ${W}`, fraction: ms / win, elapsed: false, detail: `Elapsed since the alert (${src}, ${fmtEt(a.alertTimeMs)}) within the ${RB_V1_DEFAULTS.alertWindowMinutes}-minute alert window. Informational only — never an authorization.` };
+}
+
+/** Display-only: age of the price observation RB is evaluating (the same two ages the existing freshness rule checks). */
+export function marketDataAge(r: QueueRow, now: number): { text: string; detail: string } {
+  const q = r.quote;
+  const ages = quoteAges(q, now);
+  if (!q || !ages) return { text: 'UNAVAILABLE', detail: 'No current price observation yet.' };
+  if (!Number.isFinite(ages.dataAgeSec) || ages.dataAgeSec < -DEFAULT_AUTOMATION.maxDataAgeSec) return { text: 'UNAVAILABLE', detail: 'The price receipt time is ahead of this clock by more than the existing clock tolerance — age cannot be shown.' };
+  // The evaluation clock ticks once per second, so a quote that arrived after the current tick is slightly newer than
+  // `now` (negative age, accepted by the existing freshness rule). It is shown as 0.0 s, with the exact offset.
+  if (ages.dataAgeSec < 0) return { text: '0.0 s', detail: `Current price ${q.price} arrived ${(-ages.dataAgeSec).toFixed(1)} s after this evaluation's clock tick (fetched ${q.fetchedIso}); its last trade (${q.tradeIso}) was ${ages.tradeAgeSec.toFixed(0)} s old at fetch. Informational only.` };
+  return {
+    text: `${ages.dataAgeSec.toFixed(1)} s`,
+    detail: `Current price ${q.price} received ${ages.dataAgeSec.toFixed(1)} s ago (fetched ${q.fetchedIso}); its last trade (${q.tradeIso}) was ${ages.tradeAgeSec.toFixed(0)} s old at fetch. Same two ages the existing data-freshness rule checks. Informational only.`,
   };
 }

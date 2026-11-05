@@ -1,3 +1,4 @@
+import type { AlertSnapshotMap } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { useState } from 'react';
 import { ticketString, type FreshnessBand, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
 import type { QueueOutput, QueueRow } from '../../engine/automation/liveQueue';
@@ -50,6 +51,8 @@ interface Props {
   pollMs?: number;
   /** CR-11 — retained alert-time snapshot history (90 days) and its CSV export. */
   history?: { count: number; onExport: () => void };
+  /** Write-once alert-time snapshots (read only; shown as the original recorded assessment). */
+  alertSnapshots?: AlertSnapshotMap;
   /** CR-12 — read-only broker feed (paper account), when enabled on the server. */
   broker?: BrokerFeed;
   /** Shared read-only reconciliation result (the same one the Journal sync uses); null when the feed is not live. */
@@ -81,7 +84,7 @@ export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], 
     + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
 }
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, alertSnapshots }: Props) {
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
   const layout = queueLayout(presentation ?? presentationFor(ACTIVE_LOGIC_VERSION), { v12MaxScore: shadow.maxScore });
@@ -139,7 +142,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
       )}
 
       {rows.length > 0 ? (
-        <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} />
+        <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} snapshots={alertSnapshots} />
       ) : (
         <Panel title="No alerts yet today">
           <p className="text-sm text-ink-400">Waiting for TrendSpider webhooks. A test alert can be sent as described in AUTOMATION.md.</p>

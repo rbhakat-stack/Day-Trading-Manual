@@ -20,6 +20,8 @@ import type { LiveActions } from './LiveQueuePage';
 import { ShadowPanel } from './ShadowV12';
 import { LocationAuditLine } from '../ranker/ScoreCard';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
+import type { AlertSnapshotMap, AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
+import { alertTimeAssessment, changeSinceAlert, marketDataAge, timeSinceAlert, type AlertField } from './queueView';
 
 /* ───────────────────────── badges ───────────────────────── */
 
@@ -149,9 +151,11 @@ export function QueueToolbar(props: {
 
 /* ───────────────────────── table ───────────────────────── */
 
-export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen }: {
+export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots }: {
   rows: QueueRow[]; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades;
   cols: ColumnGroups; open: Set<string>; setOpen: (ids: Set<string>) => void;
+  /** Write-once alert-time snapshots (read only, for the original-assessment row). */
+  snapshots?: AlertSnapshotMap;
 }) {
   const [asc, setAsc] = useState(false);
   const sorted = useMemo(() => [...rows].sort((a, b) => (asc ? 1 : -1) * (a.record.alert.alertTimeMs - b.record.alert.alertTimeMs) || a.record.id.localeCompare(b.record.id)), [rows, asc]);
@@ -248,7 +252,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                 {isOpen && (
                   <tr>
                     <td colSpan={span} className="border-t border-ink-700 bg-ink-900/40 px-3 py-3">
-                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} />
+                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} />
                     </td>
                   </tr>
                 )}
@@ -316,18 +320,52 @@ function Card({ label, mark, children, wide }: { label: string; mark: Freshness;
   return (
     <div className={`min-w-0 rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5 ${wide ? 'sm:col-span-2 lg:col-span-1' : ''}`} data-field={label}>
       <div className="flex items-start justify-between gap-1.5 text-[11px] leading-tight text-ink-300"><span className="min-w-0">{label}</span><span className="shrink-0"><Mark k={mark} /></span></div>
-      <div className="mt-0.5 text-[17px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{children}</div>
+      <div className="mt-0.5 text-[15px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{children}</div>
+    </div>
+  );
+}
+
+const LockIcon = () => (
+  <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-ink-500" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+);
+
+/** One original-assessment value. Shows the recorded value or NOT CAPTURED; its provenance is the tooltip. */
+function FrozenCard({ label, f, children }: { label: string; f: AlertField; children?: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5" data-field={label} data-captured={f.value === null ? 'NO' : 'YES'} title={f.source}>
+      <div className="flex items-start justify-between gap-1.5 text-[11px] leading-tight text-ink-400"><span className="min-w-0">{label}</span><LockIcon /></div>
+      <div className="mt-0.5 text-[14px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">
+        {f.value === null ? <span className="text-[11.5px] font-semibold tracking-wide text-ink-500">NOT CAPTURED</span> : children ?? <span className="text-ink-200">{f.value}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Row header cell: CURRENT (LIVE) — NOW, or AT ALERT (FROZEN) — ORIGINAL RECORDED ASSESSMENT. */
+function RowLabel({ kind, sub }: { kind: Freshness; sub: string }) {
+  const live = kind === 'LIVE';
+  return (
+    <div className={`col-span-2 flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 sm:col-span-4 lg:col-span-1 ${live ? 'border-[#2f9e6a] bg-[#0f2a1e]' : 'border-ink-600 bg-ink-850'}`} data-row-label={kind}>
+      {live
+        ? <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#3ee08f]" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>
+        : <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-[#9db8ff]" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>}
+      <div className="min-w-0 leading-tight">
+        <div className={`text-[11.5px] font-black uppercase tracking-wide ${live ? 'text-[#3ee08f]' : 'text-[#9db8ff]'}`}>{live ? 'CURRENT (LIVE)' : 'AT ALERT (FROZEN)'}</div>
+        <div className="text-[10px] uppercase tracking-wide text-ink-400">{sub}</div>
+      </div>
     </div>
   );
 }
 
 /**
- * The ACTIVE strategy's decision, statuses and trade plan in one place. Every value is the one the existing queue
- * already renders (same helpers and expressions as the table and the detail panels); nothing is recomputed here.
+ * The ACTIVE strategy's decision, statuses and trade plan in one place, with the ORIGINAL recorded assessment beneath
+ * the current one. Every current value is the one the existing queue already renders (same helpers and expressions);
+ * every original value is read from a genuinely recorded alert-time source, else NOT CAPTURED. The original row and
+ * the change strip are informational only — the current Final execution state is the sole authority.
  */
-function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore }: {
+function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore, now, snapshot }: {
   r: QueueRow; f: ReturnType<typeof detailFields>; active: StrategyColumn; dec: Status; ex: Status; ds: Status; cs: Status; ps: Status;
-  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number;
+  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number; now: number; snapshot: AlertTimeSnapshot | null;
 }) {
   const a = r.record.alert;
   const lc = r.lifecycle;
@@ -340,7 +378,13 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   const finalText = lc ? lc.finalActionability : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`;
   const finalToneKey: Tone = lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone;
   const orderTone = (t: string | null) => (t && /^BUY/.test(t) ? 'text-long' : t && /^SELL/.test(t) ? 'text-short' : 'text-ink-100');
+  const maxPts = active.version === 'RB v1.2' ? maxScore : 100;
+  const at = alertTimeAssessment(r, snapshot, active.version);
+  const chg = changeSinceAlert(at, cell, r.decision.decision);
+  const tsa = timeSinceAlert(r, now);
+  const mda = marketDataAge(r, now);
   const small = 'text-[11px] leading-tight text-ink-300';
+  const rowGrid = 'grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-[minmax(0,0.85fr)_repeat(8,minmax(0,1fr))]';
   const supporting: [string, string, Freshness][] = [
     ['Dollar risk (planned)', money(f.plannedRisk), planMark],
     ['ATR (signal)', p(f.atr, 4), 'FROZEN'],
@@ -352,22 +396,33 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
     ['Portfolio slots', f.portfolio ? `${f.portfolio.slotsUsed} / ${f.portfolio.maxPositions} used` : '—', 'LIVE'],
     ['Portfolio heat', f.portfolio ? `${money(f.portfolio.heatCommitted)} / ${money(f.portfolio.heatLimit, 0)}` : '—', 'LIVE'],
   ];
+  const deltaTone = chg.scoreDelta === null ? 'border-ink-600 text-ink-200' : chg.scoreDelta < 0 ? 'border-[#7a2a36] bg-[#2a1118] text-[#ff8a9a]' : chg.scoreDelta > 0 ? 'border-[#2f9e6a] bg-[#0f2a1e] text-[#3ee08f]' : 'border-ink-600 text-ink-200';
   return (
     <section className="min-w-0 rounded-xl border-2 border-[#3d7bff] bg-ink-900 p-2.5" data-decision-panel={r.record.id} aria-label={`${active.version} (${active.role}) — Trade Decision & Order`}>
       <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-[20px] font-black leading-none tracking-tight text-ink-100">{a.symbol}</span>
         <SidePill side={a.direction} />
         <h3 className="text-[14px] font-semibold text-ink-100"><span className="text-[#5b9bff]">{active.version}</span> ({active.role}) — Trade Decision &amp; Order</h3>
-        <p className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10.5px] text-ink-400" data-legend="live-frozen">
-          <span><Mark k="LIVE" /> can change while RB re-evaluates the alert</span>
-          <span><Mark k="FROZEN" /> captured with the original alert / trade plan</span>
-        </p>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+          <span className="flex items-center gap-2" title={tsa.detail} data-field="Time Since Alert">
+            <span className="text-ink-300">Time Since Alert:</span>
+            <b className="tabular-nums text-ink-100">{tsa.text}</b>
+            {tsa.fraction !== null && (
+              <span className="block h-1.5 w-20 overflow-hidden rounded bg-ink-700" aria-hidden="true"><span className={`block h-full ${tsa.elapsed ? 'bg-ink-500' : 'bg-[#5b9bff]'}`} style={{ width: `${Math.round(tsa.fraction * 100)}%` }} /></span>
+            )}
+          </span>
+          <span className="flex items-center gap-1.5" title={mda.detail} data-field="Market Data Age">
+            <span className="text-ink-300">Market Data Age:</span>
+            <b className="tabular-nums text-ink-100">{mda.text}</b>
+          </span>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5" data-row-group="decision">
+      <div className={rowGrid} data-row-group="live">
+        <RowLabel kind="LIVE" sub="— Now" />
         <Card label="Score" mark={scoreMark}>
           <span className={cell.tiers[0] && !cell.frozen ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? '—'}</span>
-          <span className="text-[12px] font-semibold text-ink-400"> / {active.version === 'RB v1.2' ? maxScore : 100}</span>
+          <span className="text-[12px] font-semibold text-ink-400"> / {maxPts}</span>
           {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
         </Card>
         <Card label="Tier" mark={scoreMark}><TierPill t={cell.tiers[0] ?? null} /></Card>
@@ -375,18 +430,40 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
         <Card label="Current execution state" mark="LIVE"><span className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</span></Card>
         <Card label="Final execution state (Final Actionability)" mark="LIVE" wide>
           <span className={TONE_TEXT[finalToneKey]} title={lc?.reason}>{finalText}</span>
-          {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[11px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
+          {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[10.5px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
         </Card>
+        <Card label="Data status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
+        <Card label="Chase status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
+        <Card label="Portfolio status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
       </div>
 
-      <div className="mt-1.5 grid gap-1.5 sm:grid-cols-3" data-row-group="checks">
-        <Card label="Data status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
-        <Card label="Chase status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
-        <Card label="Portfolio status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
+      <div className={`mt-1.5 ${rowGrid}`} data-row-group="frozen" title="Original recorded assessment — for comparison only; never an authorization">
+        <RowLabel kind="FROZEN" sub={at.snapshotOk && at.score.at !== null ? `Original recorded assessment · ${fmtEt(at.score.at)}` : 'Original recorded assessment'} />
+        <FrozenCard label="Alert Score" f={at.score}>
+          <span className="text-ink-200">{at.score.value}</span>{at.score.num !== null && at.score.num !== undefined && <span className="text-[12px] font-semibold text-ink-500"> / {maxPts}</span>}
+        </FrozenCard>
+        <FrozenCard label="Alert Tier" f={at.tier}>{at.tier.tier ? <TierPill t={at.tier.tier} /> : <span className="text-ink-300">{at.tier.value}</span>}</FrozenCard>
+        <FrozenCard label="Alert Decision" f={at.decision} />
+        <FrozenCard label="Alert Execution state" f={at.executionState} />
+        <FrozenCard label="Alert Action" f={at.action} />
+        <FrozenCard label="Alert Data Status" f={at.dataStatus} />
+        <FrozenCard label="Alert Chase Status" f={at.chaseStatus} />
+        <FrozenCard label="Alert Portfolio status" f={at.portfolioStatus} />
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-ink-700 bg-ink-850 px-2.5 py-1 text-[12px]" data-row-group="change" title="Display only — differences between the recorded alert-time values and the current ones (same strategy version). Never an authorization.">
+        <span className="font-semibold text-ink-200">Change Since Alert:</span>
+        <span className={`rounded-md border px-2 py-0.5 font-semibold tabular-nums ${deltaTone}`} data-field="Score change">Score: {chg.score}</span>
+        <span className="rounded-md border border-ink-600 px-2 py-0.5 font-semibold text-ink-200" data-field="Tier change">Tier: {chg.tier}</span>
+        <span className="rounded-md border border-ink-600 px-2 py-0.5 font-semibold text-ink-200" data-field="Decision change" title={`Recorded ${active.version} decision values (raw). Current raw decision: ${r.decision.decision}; the Decision card shows the queue's existing badge for it.`}>Decision: {chg.decision}</span>
+        <p className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10.5px] text-ink-400" data-legend="live-frozen">
+          <span><Mark k="LIVE" /> can change while RB re-evaluates the alert</span>
+          <span><Mark k="FROZEN" /> captured with the original alert / trade plan</span>
+        </p>
       </div>
 
       <div className="mt-1.5 rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5" data-row-group="order">
-        <div className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'alert-time plan'})</span>}<Mark k={planMark} /></div>
+        <div className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'Original Plan'})</span>}<Mark k={planMark} /></div>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
           <div data-field="Entry"><dt className={small}>Entry</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-ink-100">{p(f.entry)}</dd></div>
           <div data-field="Stop"><dt className={small}>Stop</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-[#ff6b7f]">{p(f.stop)}</dd></div>
@@ -404,12 +481,11 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
           </div>
         ))}
       </dl>
-
     </section>
   );
 }
 
-export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades }) {
+export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null }) {
   const f = detailFields(r);
   const s = r.record.snapshot;
   const v = s?.values;
@@ -435,7 +511,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
   return (
     <div className="sticky left-3 w-[calc(100cqw-1.5rem)] min-w-0 space-y-2 font-sans" data-details={r.record.id}>
       {active && (
-        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} />
+        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} />
       )}
       {comparison.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-3 py-1.5 text-[13px]" data-comparison="shadow">
