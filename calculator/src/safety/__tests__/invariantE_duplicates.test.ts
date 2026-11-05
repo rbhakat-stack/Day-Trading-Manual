@@ -27,10 +27,13 @@ describe('S1 · E · NCLH sequence', () => {
     const blank = recs.filter((r) => snaps[r.id]?.v11.decision === 'NOT ELIGIBLE' && snaps[r.id]?.v11.total === null && passes.some((p) => p.row(r.id)?.decision.detail === 'DUPLICATE / EXISTING CANDIDATE')).map((r) => r.id);
     expect(blank).toEqual([]);
   });
-  it('characterization: a blocked alert gets its candidate only after the earlier one goes stale (≈ 5 minutes late)', () => {
+  // Revised for the approved D4 policy (was: "a blocked alert gets its candidate only after the earlier one goes stale
+  // (≈ 5 minutes late)" — the defective cascade). Safety objective kept: no late candidate is ever created from a block.
+  it('the 11:50:08 NCLH alert gets its own candidate at its first evaluation (never ≈ 5 minutes late)', () => {
     const r = recs.find((x) => x.id.startsWith('NCLH-L-115008'))!;
     const created = passes.find((p) => p.state.candidates.some((c) => c.id === r.id))!;
-    expect(created.now - r.receivedMs).toBeGreaterThan(4 * 60_000);
+    expect(created.now - firstRelease(r.id)!.now).toBeLessThanOrEqual(3000);
+    expect(created.now - r.receivedMs).toBeLessThan(60_000);
   });
   it('the Ranker and Queue never authorize two NCLH entries at the same instant (no duplicate recommendations)', () => {
     for (const p of passes) {

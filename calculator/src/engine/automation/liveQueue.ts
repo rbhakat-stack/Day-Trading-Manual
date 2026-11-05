@@ -9,8 +9,8 @@
  *
  * Alerts are processed independently and ranked together; nothing is decided by arrival order.
  */
-import { rankCandidates, snapshotOf, type RankedCandidate, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
-import type { Candidate, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
+import { rankCandidates, snapshotOf, type PeerEfficiency, type RankedCandidate, type RankOptions, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
+import type { Candidate, FrozenCapitalEfficiency, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
 import type { RbSettings } from '../settings';
 import type { TradeResult } from '../tradeCalculator';
@@ -22,7 +22,8 @@ import { decideAlertV12, type V12Decision } from './v12/decideAlertV12';
 import { decideActive, decideShadow } from './v12/dispatch';
 import { shadowRanking } from './v12/v12Ranking';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
-import { chaseKey, type TerminalEventMap } from './lifecycle/terminalEvents';
+import { chaseKey, triggerKey, type TerminalEventMap } from './lifecycle/terminalEvents';
+import { applyTickerReservations, heldCandidateIds } from './lifecycle/tickerReservation';
 import { observationRefusal, type ObservationMap } from './lifecycle/observationContinuity';
 import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
@@ -72,7 +73,8 @@ export interface QueueRow {
   lifecycle: Lifecycle;
   /**
    * Set when the alert is blocked as DUPLICATE / EXISTING CANDIDATE: who blocks it and why, plus a v1.1 diagnostic
-   * plan and score (same formulas, alert-time price, scored alone, never ranked or allocated). NOT ACTIONABLE —
+   * plan and score (same formulas, alert-time price, capital efficiency against the contemporaneous peer pool, never
+   * ranked, allocated or reserving the ticker). NOT ACTIONABLE —
    * diagnostics only; frozen into the alert-time snapshot on the first pass and read back from it afterwards.
    */
   blocked?: BlockedDiagnostic | null;
@@ -188,27 +190,41 @@ export function buildQueue(q: QueueInput): QueueOutput {
   );
   // Portfolio exposure seen by the allocator: broker-verified closes release capacity; uncertain data releases nothing.
   const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now, knownEntries: q.knownBrokerEntries, knownPositions: q.knownBrokerPositions, maxPositionValue: q.rk.portfolio.maxPositionValue });
-  const ranking = rankCandidates(candidates.filter((c) => !dataBlocked.has(c.id)), exp.positions, q.rk, today, window, exp.exclude);
-  const display = dataBlocked.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude) : ranking;
+  // D3 — capital efficiency: peers are the contemporaneous competing candidates (inside their own alert window), never
+  // untrusted-data or terminally latched ones; a candidate's component is frozen at its first valid scoring and read back.
+  const latched = new Set(q.records.map((r) => r.id).filter((id) => !!(q.terminal?.[id] || q.terminal?.[chaseKey(id)] || q.terminal?.[triggerKey(id)])));
+  // D4 — challengers of a ticker held by a live incumbent never take part in the allocation (they cannot take the
+  // incumbent's capital, slot or correlation allowance); like untrusted-data alerts they are scored for display only.
+  const held = heldCandidateIds(candidates, q.terminal, q.now);
+  const sidelined = held.size ? new Set([...dataBlocked, ...held]) : dataBlocked;
+  const peerOpts: RankOptions = { peerNow: q.now, peerExclude: new Set([...sidelined, ...latched]), useFrozenCapitalEfficiency: true };
+  const ranking = rankCandidates(candidates.filter((c) => !sidelined.has(c.id)), exp.positions, q.rk, today, window, exp.exclude, peerOpts);
+  const display = sidelined.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude, peerOpts) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
-  for (const r of display.ranked) if (dataBlocked.has(r.candidate.id)) rankedById.set(r.candidate.id, { ...r, rank: null });
+  for (const r of display.ranked) if (sidelined.has(r.candidate.id)) rankedById.set(r.candidate.id, { ...r, rank: null });
 
-  // Diagnostic scores of blocked alerts: each scored ALONE with the existing ranker (same v1.1 formula), so it never
-  // competes for capital, a slot, heat or correlation and never changes the real ranking above.
+  // Diagnostic scores of blocked alerts: the existing ranker (same v1.1 formula) on the diagnostic candidate alone, with
+  // the same contemporaneous peer pool for capital efficiency (D3) — it never competes for capital, a slot, heat or
+  // correlation, never reserves the ticker and never changes the real ranking above.
   for (const [id, dc] of toScore) {
-    const r = rankCandidates([dc], exp.positions, q.rk, today, window, exp.exclude).ranked[0];
+    const r = rankCandidates([dc], exp.positions, q.rk, today, window, exp.exclude, { peerNow: q.now, extraPeers: ranking.peerPool ?? [] }).ranked[0];
     const b = blocked.get(id)!;
     blocked.set(id, { ...b, plan: { entry: dc.entry, stop: dc.stop, target: dc.target, shares: dc.shares, positionValue: dc.positionValue, plannedRisk: dc.plannedRisk, expectedReward: dc.expectedReward, orderType: dc.orderType }, score: r?.total ?? null, tier: r?.tier ?? null });
   }
 
-  // Freeze the initial score the first time an automated candidate is completely scored (never rewritten).
+  // Freeze the initial score the first time an automated candidate is completely scored (never rewritten), and (D3) its
+  // capital-efficiency component from the same evaluation, with the peer pool it was computed against.
   candidates = candidates.map((c) => {
     const r = rankedById.get(c.id);
-    if (c.source === 'AUTO' && !c.initialScore && r && r.total !== null) {
-      changed = true;
-      return { ...c, initialScore: snapshotOf(r, q.now, q.rk, window, q.strategyVersion) };
+    if (c.source !== 'AUTO' || !r || r.total === null) return c;
+    let next = c;
+    if (!c.initialScore) next = { ...next, initialScore: snapshotOf(r, q.now, q.rk, window, q.strategyVersion) };
+    if (!c.frozenCapitalEfficiency) {
+      const fz = freezeCapitalEfficiency(r, (sidelined.has(c.id) ? display : ranking).peerPool ?? [], q.now, !!c.initialScore, q.rk.minCandidatesForRelative);
+      if (fz) next = { ...next, frozenCapitalEfficiency: fz };
     }
-    return c;
+    if (next !== c) changed = true;
+    return next;
   });
 
   // RB v1.2 SHADOW (comparison only): pre-pass → which qualified records reach scoring → v1.2 ranking pass over
@@ -263,14 +279,27 @@ export function buildQueue(q: QueueInput): QueueOutput {
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow, blocked: blocked.get(rec.id) ?? null } as QueueRow;
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg));
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), q.terminal?.[triggerKey(rec.id)] ?? null);
     return row;
   });
 
-  return { candidates, rows: sortRows(rows), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added, entries: exp.entries, brokerPositions: exp.brokerPositions, entriesSource: exp.entriesSource } };
+  // D4 — at most one actionable alert per ticker: the incumbent authorized alert keeps it; others are HELD (lifecycle only).
+  return { candidates, rows: sortRows(applyTickerReservations(rows, q.terminal, q.now)), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added, entries: exp.entries, brokerPositions: exp.brokerPositions, entriesSource: exp.entriesSource } };
 }
 
-const SECTION_ORDER = ['ACTION_NOW', 'HIGH_PRIORITY', 'DATA_REVIEW', 'SCORING', 'ACTIVE', 'WATCHLIST', 'IGNORE', 'CLOSED'];
+/** D3 — the capital-efficiency component of this first valid scoring evaluation, with its provenance (null = not scored). */
+function freezeCapitalEfficiency(r: RankedCandidate, pool: PeerEfficiency[], now: number, late: boolean, minRelative: number): FrozenCapitalEfficiency | null {
+  const k = r.components.find((x) => x.key === 'capitalEfficiency');
+  if (!k || k.missing || k.na || !(k.max > 0) || !(r.candidate.positionValue > 0)) return null;
+  const peers = pool.filter((p) => p.id !== r.candidate.id).map((p) => p.id);
+  return {
+    base: Math.round(((k.points * 10) / k.max) * 1000) / 1000, points: k.points, efficiency: r.candidate.expectedReward / r.candidate.positionValue,
+    peerCount: peers.length + 1, peers, method: peers.length + 1 < minRelative ? 'NEUTRAL' : 'PERCENTILE',
+    summary: k.summary, calc: [...k.calc], positives: [...k.positives], negatives: [...k.negatives], atMs: now, atEt: etParts(now).hhmmss, late,
+  };
+}
+
+const SECTION_ORDER =['ACTION_NOW', 'HIGH_PRIORITY', 'DATA_REVIEW', 'SCORING', 'ACTIVE', 'WATCHLIST', 'IGNORE', 'CLOSED'];
 
 /** Global order: section, then the ranker's rank, then score, then freshness (newer first), then arrival time. */
 export function sortRows(rows: QueueRow[]): QueueRow[] {

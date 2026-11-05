@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_AUTOMATION, releasedIds, ticketString, type AutoAlertRecord, type LiveQuote } from '../alertDecision';
 import { buildQueue, type QueueInput } from '../liveQueue';
 import { inputsFromRecord } from '../autoCandidate';
+import { queueOffersOrder } from '../lifecycle/executionState';
 import { cloneRankerDefaults } from '../../ranker/rankerSettings';
 import type { Candidate, ManualPosition } from '../../ranker/opportunityTypes';
 import { RB_V1_DEFAULTS } from '../../settings';
@@ -271,15 +272,17 @@ describe('micro-batching', () => {
 });
 
 describe('duplicates — one live candidate / position per ticker', () => {
-  it('a second fresh alert for the same ticker → DUPLICATE / EXISTING CANDIDATE', () => {
+  // Revised for the approved D4 policy (was: "a second fresh alert for the same ticker → DUPLICATE / EXISTING CANDIDATE"
+  // while the first is merely NEW). Safety objective kept: never two actionable alerts for the ticker.
+  it('a second fresh alert for the same ticker is evaluated on its own, but never actionable at the same time as the first', () => {
     const a = strong('XYZ');
     const b = recordWith({ symbol: 'XYZ', direction: 'LONG', alertIso: '2026-10-30T10:20:04-04:00', price: 100.95, values: {} });
     const first = run([a]);
     const out = run([a, b], { candidates: first.candidates, now: Date.parse('2026-10-30T10:21:00-04:00') });
-    expect(row(out, 'XYZ').record.id).toBe(a.id);
     const second = out.rows.find((x) => x.record.id === b.id)!;
-    expect(second.decision).toMatchObject({ decision: 'NOT ELIGIBLE', detail: 'DUPLICATE / EXISTING CANDIDATE', ticket: null });
-    expect(out.candidates.filter((c) => c.ticker === 'XYZ')).toHaveLength(1);
+    expect(second.decision.detail).not.toBe('DUPLICATE / EXISTING CANDIDATE');
+    expect(out.candidates.filter((c) => c.ticker === 'XYZ')).toHaveLength(2);
+    expect(out.rows.filter((x) => x.record.alert.symbol === 'XYZ' && queueOffersOrder(x)).map((x) => x.record.id)).toEqual([a.id]);
   });
   it('an opposite-direction alert while a position exists is also a duplicate (never reverse)', () => {
     const a = strong('XYZ');

@@ -192,6 +192,8 @@ export interface Candidate {
   // ── lifecycle ──
   status: LifecycleStatus;
   initialScore: ScoreSnapshot | null; // frozen; never rewritten
+  /** D3 — capital-efficiency component frozen at the first valid scoring evaluation (automated candidates; never rewritten). */
+  frozenCapitalEfficiency?: FrozenCapitalEfficiency;
   entryScore: ScoreSnapshot | null; // optional; captured when FILLED
   finalScore?: ScoreSnapshot | null; // captured when the candidate reaches a terminal status
   actualFill: number | null;
@@ -222,6 +224,32 @@ export interface ManualPosition {
   status: 'OPEN' | 'CLOSED';
   /** A working broker entry order (not yet a position): counted as PENDING (reserved), not deployed. */
   pending?: boolean;
+}
+
+/**
+ * D3 — the capital-efficiency component as computed (existing formula) at the candidate's first valid scoring evaluation,
+ * against the contemporaneous peer pool (competing candidates inside their own alert window; data-review and terminal
+ * candidates excluded). Read back instead of being recomputed, so the score never moves because unrelated candidates
+ * enter or leave the pool. Provenance: instant, peers, method and the exact calculation lines.
+ */
+export interface FrozenCapitalEfficiency {
+  /** 0–10 base of the existing formula (percentile or neutral 6); points = base × weight ÷ 10. */
+  base: number;
+  points: number;
+  efficiency: number;
+  /** Candidates in the percentile, including itself. */
+  peerCount: number;
+  /** Other candidate ids in the pool at that instant. */
+  peers: string[];
+  method: 'PERCENTILE' | 'NEUTRAL';
+  summary: string;
+  calc: string[];
+  positives: string[];
+  negatives: string[];
+  atMs: number;
+  atEt: string;
+  /** True when this build first scored a candidate whose alert-time score an earlier build had already frozen. */
+  late: boolean;
 }
 
 export interface ComponentScore {

@@ -339,7 +339,8 @@ export default function App() {
   );
   const rankerExposure = useMemo(() => exposureFor(candidates), [exposureFor, candidates]);
   const ranking = useMemo(
-    () => rankCandidates(candidates, rankerExposure.positions, rankerSettings, today, strategy, rankerExposure.exclude),
+    // D3 — the frozen capital-efficiency component (Live Queue, first valid scoring) is read, never recomputed.
+    () => rankCandidates(candidates, rankerExposure.positions, rankerSettings, today, strategy, rankerExposure.exclude, { useFrozenCapitalEfficiency: true }),
     [candidates, rankerExposure, rankerSettings, today, strategy],
   );
   // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).

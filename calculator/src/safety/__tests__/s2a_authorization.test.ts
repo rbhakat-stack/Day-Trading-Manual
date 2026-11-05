@@ -106,9 +106,11 @@ describe('S2a · 8 · BSX LONG 12:20:06 — Queue 81 / Ranker 85 (historical fix
   const ID = 'BSX-L-122006-77deee';
   const ps = runApp(FX.records, fixtureSteps(FX));
   const p = ps.find((x) => et(x.now) === '12:26:49')!;
-  it('the discrepancy is preserved for diagnosis (81 vs 85), but the authoritative refusal wins: no TRADE NOW', () => {
-    expect([p.row(ID)!.ranked!.total, p.ranked(ID)!.total]).toEqual([81, 85]);
-    expect(p.rawRanked(ID)!.recommendation).toMatch(/^TRADE NOW/);
+  // Revised for the approved D3 policy (was: "the discrepancy is preserved for diagnosis (81 vs 85)"): the discrepancy
+  // no longer exists — both surfaces read the frozen capital efficiency. The authoritative refusal still wins.
+  it('both surfaces now agree (81 vs 81, frozen capital efficiency) and the authoritative refusal wins: no TRADE NOW', () => {
+    expect([p.row(ID)!.ranked!.total, p.ranked(ID)!.total]).toEqual([81, 81]);
+    expect(p.rawRanked(ID)!.recommendation ?? '').not.toMatch(/^TRADE NOW/);
     expect(rankerAuthorizes(p.ranked(ID))).toBe(false);
     expect(queueAuthorizes(p.row(ID))).toBe(false);
   });

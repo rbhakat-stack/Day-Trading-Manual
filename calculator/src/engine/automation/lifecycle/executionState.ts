@@ -24,6 +24,8 @@ export type ExecutionState =
   | 'ACTIVE'
   | 'LATE — REVIEW'
   | 'CHASED'
+  | 'MISSED — TRIGGER CROSSED'
+  | 'HELD — TICKER RESERVED'
   | 'EXPIRED — STALE'
   | 'SETUP FAILED'
   | 'ENTRY WINDOW CLOSED'
@@ -74,6 +76,10 @@ export interface Lifecycle {
   chaseLatched?: { observedAtMs: number; price: number; entry: number | null; distanceAtr: number | null; thresholdAtr: number | null; quoteTradeIso: string } | null;
   /** S2a.2 — a READY ticket withheld for missing observation-continuity or time evidence (the reason). */
   observationWithheld?: string | null;
+  /** D — confirmed missed trigger crossing recorded from a reliable observation (evidence; null/absent = none). */
+  triggerMissed?: { observedAtMs: number; price: number; entry: number | null; quoteTradeIso: string } | null;
+  /** D4 — this alert's ticket is withheld because another alert of the ticker holds the reservation (null/absent = none). */
+  heldBy?: { recordId: string; alertTimeMs: number; authorizedAtMs: number | null; untilMs: number } | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
   frozenV12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null } | null;
   gates: GateSequence;
@@ -203,8 +209,41 @@ export function neverEligible(row: QueueRow, snap: AlertTimeSnapshot | null): { 
  *   • otherwise, whenever the active decision carries a ticket (a revival after the chase), withholds it: CHASED · NO TRADE.
  * Without a live ticket the existing labels are kept, so nothing changes for alerts that could not be traded anyway.
  */
-export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null, observationRefusal: string | null = null): Lifecycle {
-  return withObservation(withChase(row, snap, deriveLifecycleBase(row, snap, now, eod, terminal, portfolioGate), chase), row, observationRefusal);
+export function deriveLifecycle(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, eod: EodStatus, terminal: TerminalEvent | null = null, portfolioGate: string | null = null, chase: TerminalEvent | null = null, observationRefusal: string | null = null, trigger: TerminalEvent | null = null): Lifecycle {
+  return withObservation(withChase(row, snap, withTrigger(row, snap, now, deriveLifecycleBase(row, snap, now, eod, terminal, portfolioGate), trigger, chase), chase), row, observationRefusal);
+}
+
+/** The alert was a tradeable setup at alert time (not never-actionable), read from the frozen snapshot when present. */
+function eligibleAtAlert(row: QueueRow, snap: AlertTimeSnapshot | null): boolean {
+  const d = snap ? snap.v11 : row.decision;
+  if (d.decision === 'SKIP' || d.decision === 'DATA REVIEW REQUIRED') return false;
+  if (d.decision === 'NOT ELIGIBLE' && !TIME_DRIVEN.includes(d.detail) && !closedAfterAlert(row, d.detail)) return false;
+  return row.record.status === 'OK';
+}
+
+/**
+ * D — terminal MISSED TRIGGER. A confirmed crossing of the entry trigger before any order was submitted ends the alert:
+ * a later pullback below the trigger can never make it READY again. Like the chase, it never touches broker / user states
+ * (SUBMITTED, IN POSITION, CLOSED — the broker governs a submitted order), keeps an earlier SETUP FAILED as the terminal
+ * reason, leaves the existing expiry label after the alert window, and leaves alerts that were never actionable with
+ * their own reason (evidence attached). A chase observed at the same instant is the more specific reason (withChase).
+ */
+function withTrigger(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, lc: Lifecycle, trig: TerminalEvent | null, chase: TerminalEvent | null): Lifecycle {
+  if (trig?.kind !== 'TRIGGER_CROSSED') return lc;
+  const triggerMissed = { observedAtMs: trig.observedAtMs, price: trig.price, entry: trig.entry ?? null, quoteTradeIso: trig.quoteTradeIso };
+  if (['SUBMITTED', 'IN POSITION', 'CLOSED'].includes(lc.executionState)) return { ...lc, triggerMissed };
+  if (lc.setupFailed && lc.setupFailed.observedAtMs <= trig.observedAtMs) return { ...lc, triggerMissed };
+  const expiresAt = snap?.expiresAtMs ?? row.record.alert.alertTimeMs + RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
+  if (now >= expiresAt) return { ...lc, triggerMissed };
+  if (!eligibleAtAlert(row, snap) && !row.decision.ticket) return { ...lc, triggerMissed };
+  if (chase?.kind === 'CHASED' && chase.observedAtMs <= trig.observedAtMs) return { ...lc, triggerMissed };
+  const frozen = snap ? snap.v11.total : row.candidate?.initialScore?.total ?? null;
+  return {
+    ...lc,
+    executionState: 'MISSED — TRIGGER CROSSED', finalActionability: 'NO TRADE', terminal: true, entryWindowClosed: false, portfolioUnverified: false, triggerMissed,
+    reason: `MISSED — a trade at ${trig.price} reached the ${trig.entry ?? '—'} entry trigger at ${etParts(trig.observedAtMs).hhmmss} ET before any order was submitted. Terminal: no new entry from this alert (a later pullback does not revive it); a new TrendSpider alert is required.`,
+    score: frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' },
+  };
 }
 
 /**
@@ -222,6 +261,8 @@ function withChase(row: QueueRow, snap: AlertTimeSnapshot | null, lc: Lifecycle,
   const chaseLatched = { observedAtMs: chase.observedAtMs, price: chase.price, entry: chase.entry ?? null, distanceAtr: chase.distanceAtr ?? null, thresholdAtr: chase.thresholdAtr ?? null, quoteTradeIso: chase.quoteTradeIso };
   if (['SUBMITTED', 'IN POSITION', 'CLOSED'].includes(lc.executionState)) return { ...lc, chaseLatched };
   if (lc.setupFailed && lc.setupFailed.observedAtMs <= chase.observedAtMs) return { ...lc, chaseLatched };
+  // D — an earlier confirmed missed trigger stays the terminal reason (first terminal reason wins).
+  if (lc.executionState === 'MISSED — TRIGGER CROSSED') return { ...lc, chaseLatched };
   if (!row.decision.ticket && !lc.setupFailed) return { ...lc, chaseLatched };
   const frozen = snap ? snap.v11.total : row.candidate?.initialScore?.total ?? null;
   const dist = chase.distanceAtr !== undefined ? ` (${chase.distanceAtr.toFixed(2)} ATR, limit ${chase.thresholdAtr ?? RB_V1_DEFAULTS.chaseThresholdAtr} ATR)` : '';
@@ -317,7 +358,7 @@ const NEW_ENTRY = ['NEW', 'WATCHLIST'];
 /** The Queue's own "order to place" predicate (the same flags its action cards and buttons use), plus the S2a chase. */
 export function queueOffersOrder(r: QueueRow): boolean {
   const lc = r.lifecycle;
-  return !!r.decision.ticket && !!lc && lc.finalActionability === 'READY' && !lc.entryWindowClosed && !lc.setupFailed && !lc.portfolioUnverified && !lc.chaseLatched && !lc.observationWithheld;
+  return !!r.decision.ticket && !!lc && lc.finalActionability === 'READY' && !lc.entryWindowClosed && !lc.setupFailed && !lc.portfolioUnverified && !lc.chaseLatched && !lc.observationWithheld && !lc.triggerMissed && !lc.heldBy;
 }
 
 export function executionAuthorizations(rows: QueueRow[], now: number): Record<string, ExecutionAuthorization> {

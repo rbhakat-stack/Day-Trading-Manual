@@ -93,7 +93,7 @@ export function runApp(records: AutoAlertRecord[], steps: Step[], o: RunOpts = {
     frozen = freezeAlertSnapshots(frozen, q.rows, now, 91).map;
     terminal = latchTerminalEvents(terminal, q.rows, now, DEFAULT_AUTOMATION).map;
     const ex = reconcileExposure(candidates, positions, null, { classify, conservativeRisk: RK.portfolio.accountEquity * RK.portfolio.riskPerTradePct, now, maxPositionValue: RK.portfolio.maxPositionValue });
-    const ranking = rankCandidates(candidates, ex.positions, RK, etParts(now).date, STRATEGY, ex.exclude);
+    const ranking = rankCandidates(candidates, ex.positions, RK, etParts(now).date, STRATEGY, ex.exclude, { useFrozenCapitalEfficiency: true }); // mirrors App.tsx
     const view = gateRankingByAuthorization(ranking, executionAuthorizations(q.rows, now), now, DEFAULT_AUTOMATION.maxDataAgeSec * 1000);
     const byId = new Map(q.rows.map((r) => [r.record.id, r]));
     const rk = new Map(view.ranked.map((r) => [r.candidate.id, r]));

@@ -66,20 +66,25 @@ describe('S1 · D · BSX LONG 12:20:06 — Queue 81 vs Ranker 85 at 12:26:49 (hi
   const FX = loadFixture('bsx-1220-peers');
   const passes = runApp(FX.records, fixtureSteps(FX));
   const ID = 'BSX-L-122006-77deee';
-  // The instant of the audit observation (12:26:49), else the first instant at which the two totals differ.
-  const p = passes.find((x) => et(x.now) === '12:26:49' && x.row(ID)?.ranked?.total !== x.ranked(ID)?.total) ?? passes.find((x) => x.row(ID)?.ranked?.total != null && x.ranked(ID)?.total != null && x.row(ID)!.ranked!.total !== x.ranked(ID)!.total)!;
-  it('characterization: same instant, same state — the totals differ only by capital efficiency (6 vs 10)', () => {
+  // The instant of the audit observation (12:26:49).
+  const p = passes.find((x) => et(x.now) === '12:26:49')!;
+  // Revised for the approved D3 policy (were: "the totals differ only by capital efficiency (6 vs 10)" and "the Queue
+  // excludes the DATA REVIEW peer, the Ranker counts it" — the defect itself). Both surfaces now read the component
+  // frozen at BSX's first valid scoring against the contemporaneous eligible pool.
+  it('same instant, same state — both surfaces report 81, with the same frozen capital efficiency (6/10)', () => {
     const q = p.row(ID)!.ranked!;
     const r = p.ranked(ID)!;
-    expect([q.total, r.total]).toEqual([81, 85]);
+    expect([q.total, r.total]).toEqual([81, 81]);
     const qc = comps(q), rc = comps(r);
-    expect(Object.keys(qc).filter((k) => qc[k] !== rc[k])).toEqual(['capitalEfficiency']);
-    expect([qc.capitalEfficiency, rc.capitalEfficiency]).toEqual([6, 10]);
+    expect(Object.keys(qc).filter((k) => qc[k] !== rc[k])).toEqual([]);
+    expect([qc.capitalEfficiency, rc.capitalEfficiency]).toEqual([6, 6]);
   });
-  it('characterization: cause — the Queue excludes the DATA REVIEW peer NCLH 12:25:20 (2 peers → neutral 6/10); the Ranker counts it (3 peers → percentile 10/10)', () => {
+  it('cause removed — the DATA REVIEW peer NCLH 12:25:20 is not part of BSX\'s frozen peer pool, and neither surface recomputes it', () => {
     expect(p.row('NCLH-L-122520-d40c0b')!.decision.decision).toBe('DATA REVIEW REQUIRED');
-    expect(p.row(ID)!.ranked!.components.find((k) => k.key === 'capitalEfficiency')!.calc.join(' ')).toMatch(/Only 2 candidate/);
-    expect(p.ranked(ID)!.components.find((k) => k.key === 'capitalEfficiency')!.calc.join(' ')).toMatch(/Percentile among 3 candidates/);
+    const f = p.state.candidates.find((c) => c.id === ID)!.frozenCapitalEfficiency!;
+    expect(f.peers).not.toContain('NCLH-L-122520-d40c0b');
+    expect(f.atMs).toBeLessThan(Date.parse('2026-11-04T12:25:20-05:00'));
+    for (const k of [p.row(ID)!.ranked!, p.ranked(ID)!]) expect(k.components.find((x) => x.key === 'capitalEfficiency')!.calc.join(' ')).toMatch(/FROZEN at the first valid scoring/);
   });
   it('[DEFECT D3] the two surfaces report the same strategy score for the same alert at the same instant', () => {
     expect(p.ranked(ID)!.total).toBe(p.row(ID)!.ranked!.total);

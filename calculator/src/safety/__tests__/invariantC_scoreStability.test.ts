@@ -67,8 +67,23 @@ describe('S1 · C · BSX LONG 13:00:15 — frozen 82 (WATCHLIST) and later live 
   it('characterization: frozen alert-time v1.1 is below the 85 trade threshold', () => {
     expect(ps[ps.length - 1].state.frozen[ID].v11).toMatchObject({ total: 82, tier: 'WATCHLIST' });
   });
-  it('characterization: under the current live model the Queue nevertheless authorizes it in several separate windows', () => {
-    expect(windows).toBeGreaterThanOrEqual(2);
+  // Revised for the approved D policy (was: "under the current live model the Queue nevertheless authorizes it in several
+  // separate windows" — every one of those windows came after the entry trigger had already been crossed). A confirmed
+  // crossing of the 46.46 trigger at 13:00:36 ET (fresh prints at/through it until ≈ 13:02) is terminal: the alert is
+  // never authorized afterwards, even when the live score later reaches ≥ 85 on a pullback.
+  it('the confirmed trigger crossing at 13:00:36 is latched (fresh print ≥ 46.46) and the alert is never authorized after it', () => {
+    const ev = ps[ps.length - 1].state.terminal[`${ID}|TRIGGER`];
+    expect(ev).toMatchObject({ kind: 'TRIGGER_CROSSED', entry: 46.46 });
+    expect(ev.price).toBeGreaterThanOrEqual(46.46);
+    expect(et(ev.observedAtMs)).toBe('13:00:36');
+    expect(ps.filter((p) => p.now >= ev.observedAtMs && queueAuthorizes(p.row(ID))).map((p) => et(p.now))).toEqual([]);
+    expect(windows).toBe(0); // the live score never reached 85 before the crossing (82 / 6-point frozen capital efficiency)
+  });
+  it('after the crossing the lifecycle is MISSED — TRIGGER CROSSED (terminal) on every pass inside the window, even at a live score ≥ 85', () => {
+    const ev = ps[ps.length - 1].state.terminal[`${ID}|TRIGGER`];
+    const after = ps.filter((p) => p.now > ev.observedAtMs && p.now < ev.alertTimeMs + 600_000 && p.row(ID));
+    expect(after.some((p) => (p.row(ID)!.ranked?.total ?? 0) >= 85)).toBe(true);
+    for (const p of after) expect(p.row(ID)!.lifecycle.executionState).toBe('MISSED — TRIGGER CROSSED');
   });
   it('characterization: every authorization coincides with a live score ≥ 85 (the live tier, not the frozen tier, decides)', () => {
     ps.forEach((p, i) => { if (auth[i]) expect(p.row(ID)!.ranked!.total).toBeGreaterThanOrEqual(85); });

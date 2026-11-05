@@ -93,7 +93,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const [open, setOpen] = useState<Set<string>>(new Set());
   const stronger = suggestions.filter((s) => s.kind === 'STRONGER');
   // Tickets the execution layer withholds (15:30 cutoff, terminal SETUP FAILED) are never shown as orders to place.
-  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && !r.lifecycle?.portfolioUnverified && !r.lifecycle?.chaseLatched && !r.lifecycle?.observationWithheld);
+  const actionable = rows.filter((r) => r.decision.ticket && !r.lifecycle?.entryWindowClosed && !r.lifecycle?.setupFailed && !r.lifecycle?.portfolioUnverified && !r.lifecycle?.chaseLatched && !r.lifecycle?.observationWithheld && !r.lifecycle?.triggerMissed && !r.lifecycle?.heldBy);
   // CR-13 — v1.1 tickets past the 15:30 entry cutoff: shown as historical, never as an order to place.
   const cutoff = rows.filter((r) => r.lifecycle?.entryWindowClosed);
   if (!enabled) {

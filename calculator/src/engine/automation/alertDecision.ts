@@ -169,7 +169,6 @@ export function releasedIds(records: Pick<AutoAlertRecord, 'id' | 'receivedMs' |
 /* ───────────────────────── duplicates ───────────────────────── */
 
 const ACTIVE: LifecycleStatus[] = ['PENDING', 'FILLED'];
-const LIVE: LifecycleStatus[] = ['NEW', 'WATCHLIST'];
 
 /** Why a new alert is blocked by an existing candidate of the same ticker (RB candidate status, not live broker data). */
 export type CandidateBlockKind = 'PENDING_ORDER' | 'OPEN_POSITION' | 'LIVE_CANDIDATE' | 'WATCHED_CANDIDATE';
@@ -187,13 +186,14 @@ export interface CandidateBlock {
 }
 
 /**
- * One position or pending order per ticker, and one live candidate per ticker (RB v1 never pyramids).
+ * One position or pending order per ticker (RB v1 never pyramids): a PENDING / FILLED candidate of the ticker blocks a
+ * new alert in either direction. The block is frozen with the alert-time snapshot, so a blocked alert stays blocked.
  *
- * Evaluated AS OF THE NEW ALERT'S OWN TIME: an earlier NEW / WATCHLIST candidate blocks it when that candidate's alert
- * was less than the alert window (10 min) before this alert. The answer therefore does not drift with the clock: an
- * alert blocked on arrival stays blocked (it never becomes a late candidate that would in turn block the next alert),
- * and the same records give the same result whenever the app first sees them. PENDING / FILLED candidates always
- * block (any direction). An earlier candidate that is stale or finished (skipped, canceled, closed …) never blocks.
+ * D4 — an earlier NEW / WATCHLIST candidate does NOT block: a candidate that merely exists (skip, below threshold,
+ * data review, never authorized …) reserves nothing, and every distinct alert is evaluated on its own. Same-ticker
+ * actionable candidates are arbitrated in the execution layer instead (lifecycle/tickerReservation: the incumbent
+ * authorized candidate keeps the ticker; never two simultaneous authorizations). The LIVE_CANDIDATE / WATCHED_CANDIDATE
+ * kinds remain only for blocks frozen by earlier builds (read back from the snapshot, never revived).
  */
 export function blockingCandidate(rec: AutoAlertRecord, candidates: Candidate[]): CandidateBlock | null {
   const at = rec.alert.alertTimeMs;
@@ -210,15 +210,7 @@ export function blockingCandidate(rec: AutoAlertRecord, candidates: Candidate[])
         : `${sym} has an open position in RB: candidate ${active.id} (alert ${hhmmss(alertMsOf(active))} ET) is FILLED. RB v1 never pyramids.`,
     };
   }
-  const windowMs = RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
-  const live = same.find((c) => LIVE.includes(c.status) && alertMsOf(c) < at && freshness(alertMsOf(c), at).band !== 'STALE');
-  if (!live) return null;
-  const until = alertMsOf(live) + windowMs;
-  const watched = live.status === 'WATCHLIST';
-  return {
-    id: live.id, kind: watched ? 'WATCHED_CANDIDATE' : 'LIVE_CANDIDATE', status: live.status, alertMs: alertMsOf(live), untilMs: until,
-    reason: `${sym} already has an earlier ${watched ? 'watched' : 'live (not submitted)'} candidate ${live.id} (alert ${hhmmss(alertMsOf(live))} ET) that holds the ticker until ${hhmmss(until)} ET. RB v1 keeps one live candidate per ticker and never pyramids; this alert is calculated for diagnostics only — NOT ACTIONABLE.`,
-  };
+  return null;
 }
 
 /** The id of the candidate that makes `rec` a DUPLICATE / EXISTING CANDIDATE, or null (see blockingCandidate). */

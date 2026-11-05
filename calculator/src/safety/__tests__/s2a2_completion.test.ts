@@ -61,14 +61,29 @@ describe('S2a.2 · 1 · observation continuity (VRSK LONG 10:35:09, real SIP fix
     const after = runApp(FX.records, all.slice(idx('10:35:12') + 2), { ...OBS, start });
     expect(neverAuthorized(after).every((t) => t < '10:35:14')).toBe(true); // only before the chase; never after it
   });
-  it('the withheld state is the existing DATA REVIEW / NO TICKET, with a reason that does not claim a chase', () => {
+  // Revised for the approved D policy (was: the first ticket-bearing row after the late open is DATA REVIEW). In this
+  // fixture the late-opened tab's own first quote is a fresh trade after the alert at 201.42, through the 201.26 entry:
+  // an OBSERVED crossing, which is now terminal (MISSED). Safety objective kept: never READY, and never a claim of an
+  // UNOBSERVED chase or failure; without an observed crossing the existing DATA REVIEW / NO TICKET withholding applies.
+  it('the withheld state never claims an unobserved chase or failure (DATA REVIEW without evidence; MISSED only from an observed crossing)', () => {
     const ps = runApp(FX.records, all.slice(idx('10:36:45')), OBS);
     const r = ps.find((p) => p.row(ID)?.decision.ticket)!.row(ID)!;
     expect(r.decision.ticket).not.toBeNull();
-    expect(r.lifecycle).toMatchObject({ executionState: 'DATA REVIEW', finalActionability: 'NO TICKET' });
-    expect(r.lifecycle.reason).toMatch(/not observed continuously/i);
+    expect(queueAuthorizes(r)).toBe(false);
     expect(r.lifecycle.reason).not.toMatch(/^CHASED|was beyond the|SETUP FAILED —/); // never claims an unobserved chase or failure
-    expect(r.lifecycle.reason).toMatch(/not evidence that the setup failed or was chased/);
+    expect(r.lifecycle).toMatchObject({ executionState: 'MISSED — TRIGGER CROSSED', finalActionability: 'NO TRADE' });
+    const ev = ps[ps.length - 1].state.terminal[`${ID}|TRIGGER`];
+    expect(ev.observedAtMs).toBeGreaterThanOrEqual(all[idx('10:36:45')].now); // observed by this tab
+    expect(Date.parse(ev.quoteTradeIso)).toBeGreaterThanOrEqual(FX.records[0].receivedMs); // a trade after the alert
+    expect(ev.price).toBeGreaterThanOrEqual(ev.entry!);
+    // no crossing observed → the existing DATA REVIEW / NO TICKET withholding, unchanged
+    const rec = LONG();
+    const before = runApp([rec], observedSteps(100.95, 0.05, 2), OBS);
+    const start = JSON.parse(JSON.stringify(before[before.length - 1].state)) as State;
+    const w = runApp([rec], observedSteps(100.95, 2.05, 5), { ...OBS, start }).find((p) => p.row(rec.id)?.decision.ticket)!.row(rec.id)!;
+    expect(w.lifecycle).toMatchObject({ executionState: 'DATA REVIEW', finalActionability: 'NO TICKET' });
+    expect(w.lifecycle.reason).toMatch(/not observed continuously/i);
+    expect(w.lifecycle.reason).toMatch(/not evidence that the setup failed or was chased/);
   });
 });
 

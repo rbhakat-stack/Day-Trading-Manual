@@ -38,6 +38,7 @@ import {
   type Candidate,
   type ComponentKey,
   type ComponentScore,
+  type FrozenCapitalEfficiency,
   type HardRule,
   type ManualPosition,
   type QualityTier,
@@ -114,6 +115,40 @@ export interface RankingResult {
   ranked: RankedCandidate[];
   portfolio: PortfolioSnapshot;
   suggestions: ReplacementSuggestion[];
+  /** D3 — the capital-efficiency peer pool used on this evaluation (only when `RankOptions` limit the pool). */
+  peerPool?: PeerEfficiency[];
+}
+
+export interface PeerEfficiency { id: string; efficiency: number }
+
+/**
+ * D3 — capital-efficiency peer pool and frozen component (opt-in; callers that pass nothing rank exactly as before).
+ *   peerNow     peers are only candidates still inside their own alert window at this instant (PENDING orders kept);
+ *   peerExclude ids that never count as peers (data review / untrusted data, latched terminal events);
+ *   extraPeers  peers for a diagnostic evaluation (efficiency only — never ranked, allocated or reserved);
+ *   useFrozenCapitalEfficiency  a candidate's frozen component (first valid scoring) replaces the recomputed one.
+ */
+export interface RankOptions {
+  peerNow?: number;
+  peerExclude?: ReadonlySet<string>;
+  extraPeers?: PeerEfficiency[];
+  useFrozenCapitalEfficiency?: boolean;
+}
+
+const efficiencyOf = (c: Candidate) => clean(c.expectedReward / c.positionValue);
+
+/** The frozen capital-efficiency component in place of the recomputed one (same formula output, never recomputed). */
+function frozenComponent(k: ComponentScore, fz: FrozenCapitalEfficiency): ComponentScore {
+  const points = round1((Math.max(0, Math.min(fz.base, 10)) * k.max) / 10);
+  const peers = fz.peers.length ? ` (${fz.peers.join(', ')})` : '';
+  return {
+    ...k,
+    points,
+    summary: fz.summary,
+    calc: [...fz.calc, `FROZEN at the first valid scoring evaluation ${fz.atEt} ET against ${fz.peerCount} candidate(s) incl. itself${peers}${fz.late ? ' — first scored by this build after the alert-time score was frozen' : ''}; not recomputed as other candidates enter or leave the pool`],
+    positives: fz.positives,
+    negatives: fz.negatives,
+  };
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
@@ -337,6 +372,7 @@ export function rankCandidates(
   w: StrategyRules = DEFAULT_STRATEGY_RULES,
   /** Candidate ids that hold NO portfolio exposure (broker-confirmed closed); they are still ranked and listed. */
   exposureExclude?: ReadonlySet<string>,
+  opts?: RankOptions,
 ): RankingResult {
   // Exposure set for every portfolio snapshot below; identical to `candidates` when nothing is excluded.
   const exposure = exposureExclude?.size ? candidates.filter((c) => !exposureExclude.has(c.id)) : candidates;
@@ -356,11 +392,28 @@ export function rankCandidates(
 
   // Peers for relative capital efficiency: competing, strategy-eligible, complete candidates only.
   const competes = (x: (typeof pre)[number]) => (POOL_STATUSES.includes(x.c.status) || x.c.status === 'PENDING') && !x.strategyFails.length && !x.missing.length;
-  const peerEff = pre.filter(competes).map((x) => clean(x.c.expectedReward / x.c.positionValue));
+  const peerEff = pre.filter(competes).map((x) => efficiencyOf(x.c));
+  // D3 — opt-in contemporaneous pool: competing candidates still inside their own alert window, minus excluded ids;
+  // a candidate's own efficiency is always part of its own peer set (as in the existing formula).
+  const limited = !!opts && (opts.peerNow !== undefined || !!opts.peerExclude || !!opts.extraPeers);
+  const windowMs = RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
+  const inWindow = (c: Candidate) => opts?.peerNow === undefined || c.status === 'PENDING' || opts.peerNow - (c.alertMs ?? c.createdAt) < windowMs;
+  const pool: PeerEfficiency[] | undefined = limited
+    ? [
+        ...pre.filter((x) => competes(x) && inWindow(x.c) && !opts?.peerExclude?.has(x.c.id)).map((x) => ({ id: x.c.id, efficiency: efficiencyOf(x.c) })),
+        ...(opts?.extraPeers ?? []).filter((p) => !pre.some((x) => x.c.id === p.id)),
+      ]
+    : undefined;
+  const peersFor = (c: Candidate) => (pool ? [...pool.filter((p) => p.id !== c.id).map((p) => p.efficiency), efficiencyOf(c)] : peerEff);
+  const componentsFor = (c: Candidate, pf: PortfolioSnapshot) => {
+    const comps = scoreComponents(c, pf, peersFor(c), s);
+    const fz = opts?.useFrozenCapitalEfficiency ? c.frozenCapitalEfficiency : undefined;
+    return fz ? comps.map((k) => (k.key === 'capitalEfficiency' && !k.missing ? frozenComponent(k, fz) : k)) : comps;
+  };
 
   // Step 3 — score only strategy-eligible, complete candidates
   const scored = pre.map((x) => {
-    const components = applyNA(scoreComponents(x.c, x.pf, peerEff, s), hardFailNA(x.c, x.strategyFails));
+    const components = applyNA(componentsFor(x.c, x.pf), hardFailNA(x.c, x.strategyFails));
     const canScore = !x.strategyFails.length && !x.missing.length;
     const setup = canScore ? Math.min(70, sumKeys(components, SETUP_KEYS)) : null;
     const fit = canScore ? Math.min(30, sumKeys(components, FIT_KEYS)) : null;
@@ -447,7 +500,7 @@ export function rankCandidates(
   const group = (r: RankedCandidate) => (r.rank !== null ? 0 : r.candidate.status === 'FILLED' ? 1 : r.total !== null ? 2 : 3);
   ranked.sort((a, b) => group(a) - group(b) || (a.rank ?? 0) - (b.rank ?? 0) || (b.total ?? -1) - (a.total ?? -1) || a.candidate.createdAt - b.candidate.createdAt || a.candidate.id.localeCompare(b.candidate.id));
 
-  return { ranked, portfolio, suggestions: replacementSuggestions(ranked, exposure, positions, s, peerEff) };
+  return { ranked, portfolio, suggestions: replacementSuggestions(ranked, exposure, positions, s, componentsFor), ...(pool ? { peerPool: pool } : {}) };
 }
 
 /**
@@ -455,7 +508,7 @@ export function rankCandidates(
  * that is blocked only by capital / slots / heat. Never for FILLED positions. Never automatic.
  * The new candidate is re-scored as if the pending order's capital were released (fair comparison).
  */
-function replacementSuggestions(ranked: RankedCandidate[], candidates: Candidate[], positions: ManualPosition[], s: RankerSettings, peerEff: number[]): ReplacementSuggestion[] {
+function replacementSuggestions(ranked: RankedCandidate[], candidates: Candidate[], positions: ManualPosition[], s: RankerSettings, componentsFor: (c: Candidate, pf: PortfolioSnapshot) => ComponentScore[]): ReplacementSuggestion[] {
   const pendings = ranked
     .filter((r) => r.candidate.status === 'PENDING' && r.total !== null)
     .sort((a, b) => (a.total as number) - (b.total as number) || a.candidate.id.localeCompare(b.candidate.id));
@@ -468,7 +521,7 @@ function replacementSuggestions(ranked: RankedCandidate[], candidates: Candidate
       const without = buildPortfolio(positions, candidates.filter((c) => c.id !== p.candidate.id), s, x.candidate.id);
       const f = checkFit(asClassified(x.candidate), without, s, { maxPositions: without.maxPositions, heatLimit: without.heatLimit, maxPositionValue: without.maxPositionValue });
       if (!(f.slotOk && f.capitalOk && f.sizeOk && f.heatOk && f.correlationOk)) continue;
-      const xTotal = round1(scoreComponents(x.candidate, without, peerEff, s).reduce((a, c) => a + c.points, 0));
+      const xTotal = round1(componentsFor(x.candidate, without).reduce((a, c) => a + c.points, 0));
       if (xTotal < s.grades.high) continue; // absolute threshold first
       const diff = round1(xTotal - (p.total as number));
       if (diff <= 0) continue;

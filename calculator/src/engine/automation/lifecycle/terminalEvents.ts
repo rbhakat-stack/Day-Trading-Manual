@@ -18,14 +18,23 @@
  * alert is recorded once; a later pullback can never re-authorize that alert. It is stored in the same map under
  * `chaseKey(recordId)` — never the record-id key — so a build without S2a ignores it, and SETUP FAILED is still recorded
  * independently (no evidence is suppressed).
+ *
+ * D — terminal MISSED TRIGGER, same evidence standard: the first reliable observation that a fresh trade printed AT OR
+ * THROUGH the frozen entry trigger (LONG ≥ entry, SHORT ≤ entry — the price at which the planned stop order would have
+ * triggered) while no order was submitted for the alert. Stored under `triggerKey(recordId)`.
+ *
+ * D4 — first AUTHORIZATION (not terminal; write-once evidence for ticker arbitration): the instant the Live Queue first
+ * offered the alert as an order to place. Stored under `authorizedKey(recordId)`. The incumbent of a ticker is the alert
+ * with the earliest such record (lifecycle/tickerReservation). A build without these keys ignores them (rollback-safe).
  */
 import { RB_V1_DEFAULTS } from '../../settings';
 import { quoteAges, type AutomationConfig } from '../alertDecision';
 import type { QueueRow } from '../liveQueue';
+import { queueOffersOrder } from './executionState';
 
 export interface TerminalEvent {
   recordId: string;
-  kind: 'SETUP_FAILED' | 'CHASED';
+  kind: 'SETUP_FAILED' | 'CHASED' | 'TRIGGER_CROSSED' | 'AUTHORIZED';
   direction: 'LONG' | 'SHORT';
   alertTimeMs: number;
   observedAtMs: number;
@@ -43,6 +52,10 @@ export type TerminalEventMap = Record<string, TerminalEvent>;
 
 /** Map key of the S2a terminal chase (kept apart from the record-id key used by SETUP FAILED). */
 export const chaseKey = (recordId: string) => `${recordId}|CHASED`;
+/** Map key of the terminal missed-trigger crossing. */
+export const triggerKey = (recordId: string) => `${recordId}|TRIGGER`;
+/** Map key of the first authorization (D4 ticker arbitration evidence; not a terminal event). */
+export const authorizedKey = (recordId: string) => `${recordId}|AUTHORIZED`;
 
 const UNSUBMITTED = ['NEW', 'WATCHLIST'];
 
@@ -92,6 +105,37 @@ export function observedChase(r: QueueRow, now: number, cfg: Pick<AutomationConf
   };
 }
 
+/**
+ * D — the confirmed missed trigger to record for this row now, or null. Same evidence rules as the chase: OK record not
+ * under DATA REVIEW, no submitted / filled order, inside the alert window, a fresh quote (existing freshness rules) whose
+ * last trade is not older than the alert, the calculator's own crossing of the frozen entry, and the observed price itself
+ * at or through the frozen entry. Missing, stale or pre-alert data never latches anything.
+ */
+export function observedTriggerCross(r: QueueRow, now: number, cfg: Pick<AutomationConfig, 'maxDataAgeSec' | 'maxTradeAgeSec'>): TerminalEvent | null {
+  if (r.record.status !== 'OK' || !r.live?.chase?.crossed || !r.quote || !r.candidate) return null;
+  if (r.decision.section === 'DATA_REVIEW') return null;
+  if (!UNSUBMITTED.includes(r.candidate.status)) return null;
+  if (now - r.record.alert.alertTimeMs >= RB_V1_DEFAULTS.alertWindowMinutes * 60_000) return null;
+  const ages = quoteAges(r.quote, now);
+  if (!ages || ages.dataAgeSec > cfg.maxDataAgeSec || ages.tradeAgeSec > cfg.maxTradeAgeSec) return null;
+  const tradeMs = Date.parse(r.quote.tradeIso);
+  if (!Number.isFinite(tradeMs) || tradeMs < r.record.receivedMs) return null; // an observation from before the alert
+  const { entry, stop } = r.candidate;
+  const atr = r.record.snapshot?.values?.atr;
+  if (!(entry > 0) || !(stop > 0)) return null;
+  // Belt and braces: the observed price itself must be at or through the frozen entry trigger.
+  const L = r.record.alert.direction === 'LONG';
+  if (L ? r.quote.price < entry : r.quote.price > entry) return null;
+  const distanceAtr = atr && atr > 0 ? Math.round(((L ? r.quote.price - entry : entry - r.quote.price) / atr) * 1000) / 1000 : undefined;
+  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso, entry, distanceAtr };
+}
+
+/** D4 — the first authorization of this row (the Queue offers it as an order to place now), or null. */
+export function observedAuthorization(r: QueueRow, now: number): TerminalEvent | null {
+  if (!queueOffersOrder(r) || !r.candidate || !r.quote) return null;
+  return { recordId: r.record.id, kind: 'AUTHORIZED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop: r.candidate.stop, quoteTradeIso: r.quote.tradeIso, entry: r.candidate.entry };
+}
+
 /** Write-once: existing events are never changed or removed (same object returned when nothing new is latched). */
 export function latchTerminalEvents(prev: TerminalEventMap, rows: QueueRow[], now: number, cfg: Pick<AutomationConfig, 'maxDataAgeSec' | 'maxTradeAgeSec'>): { map: TerminalEventMap; changed: boolean } {
   let map = prev;
@@ -110,6 +154,24 @@ export function latchTerminalEvents(prev: TerminalEventMap, rows: QueueRow[], no
       if (ev) {
         if (map === prev) map = { ...prev };
         map[ck] = ev;
+      }
+    }
+    // D — confirmed missed trigger (evidence recorded independently; the lifecycle keeps the first terminal reason).
+    const tk = triggerKey(r.record.id);
+    if (!prev[tk]) {
+      const ev = observedTriggerCross(r, now, cfg);
+      if (ev) {
+        if (map === prev) map = { ...prev };
+        map[tk] = ev;
+      }
+    }
+    // D4 — first authorization (incumbent evidence for ticker arbitration).
+    const ak = authorizedKey(r.record.id);
+    if (!prev[ak]) {
+      const ev = observedAuthorization(r, now);
+      if (ev) {
+        if (map === prev) map = { ...prev };
+        map[ak] = ev;
       }
     }
   }
