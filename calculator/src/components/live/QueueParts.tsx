@@ -164,7 +164,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
   const th = 'whitespace-nowrap px-1.5 py-2 text-[12.5px] font-semibold text-ink-200';
   const edge = (c: StrategyColumn) => (c.role === 'ACTIVE' ? 'border-ink-600' : 'border-dashed border-[#6a46b8]/70');
   return (
-    <div className="overflow-x-auto rounded-xl border border-ink-700 bg-ink-850">
+    <div className="overflow-x-auto rounded-xl border border-ink-700 bg-ink-850 [container-type:inline-size]">
       <table className="w-full min-w-[1300px] font-sans text-[13px] tabular-nums">
         <thead className="bg-ink-900">
           <tr className="text-center">
@@ -314,9 +314,9 @@ function Mark({ k }: { k: Freshness }) {
 
 function Card({ label, mark, children, wide }: { label: string; mark: Freshness; children: ReactNode; wide?: boolean }) {
   return (
-    <div className={`rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 ${wide ? 'sm:col-span-2 xl:col-span-1' : ''}`} data-field={label}>
-      <div className="flex items-center justify-between gap-2 text-[12px] text-ink-300"><span>{label}</span><Mark k={mark} /></div>
-      <div className="mt-0.5 text-[20px] font-bold leading-tight tabular-nums">{children}</div>
+    <div className={`min-w-0 rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5 ${wide ? 'sm:col-span-2 lg:col-span-1' : ''}`} data-field={label}>
+      <div className="flex items-start justify-between gap-1.5 text-[11px] leading-tight text-ink-300"><span className="min-w-0">{label}</span><span className="shrink-0"><Mark k={mark} /></span></div>
+      <div className="mt-0.5 text-[17px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{children}</div>
     </div>
   );
 }
@@ -340,7 +340,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   const finalText = lc ? lc.finalActionability : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`;
   const finalToneKey: Tone = lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone;
   const orderTone = (t: string | null) => (t && /^BUY/.test(t) ? 'text-long' : t && /^SELL/.test(t) ? 'text-short' : 'text-ink-100');
-  const small = 'text-[12px] text-ink-300';
+  const small = 'text-[11px] leading-tight text-ink-300';
   const supporting: [string, string, Freshness][] = [
     ['Dollar risk (planned)', money(f.plannedRisk), planMark],
     ['ATR (signal)', p(f.atr, 4), 'FROZEN'],
@@ -353,17 +353,21 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
     ['Portfolio heat', f.portfolio ? `${money(f.portfolio.heatCommitted)} / ${money(f.portfolio.heatLimit, 0)}` : '—', 'LIVE'],
   ];
   return (
-    <section className="sticky left-0 max-w-[calc(100vw-4rem)] rounded-xl border-2 border-[#3d7bff] bg-ink-900 p-3 sm:p-4" data-decision-panel={r.record.id} aria-label={`${active.version} (${active.role}) — Trade Decision & Order`}>
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <span className="text-[26px] font-black tracking-tight text-ink-100">{a.symbol}</span>
+    <section className="min-w-0 rounded-xl border-2 border-[#3d7bff] bg-ink-900 p-2.5" data-decision-panel={r.record.id} aria-label={`${active.version} (${active.role}) — Trade Decision & Order`}>
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-[20px] font-black leading-none tracking-tight text-ink-100">{a.symbol}</span>
         <SidePill side={a.direction} />
-        <h3 className="text-[16px] font-semibold text-ink-100"><span className="text-[#5b9bff]">{active.version}</span> ({active.role}) — Trade Decision &amp; Order</h3>
+        <h3 className="text-[14px] font-semibold text-ink-100"><span className="text-[#5b9bff]">{active.version}</span> ({active.role}) — Trade Decision &amp; Order</h3>
+        <p className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10.5px] text-ink-400" data-legend="live-frozen">
+          <span><Mark k="LIVE" /> can change while RB re-evaluates the alert</span>
+          <span><Mark k="FROZEN" /> captured with the original alert / trade plan</span>
+        </p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5" data-row-group="decision">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5" data-row-group="decision">
         <Card label="Score" mark={scoreMark}>
           <span className={cell.tiers[0] && !cell.frozen ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? '—'}</span>
-          <span className="text-[14px] font-semibold text-ink-400"> / {active.version === 'RB v1.2' ? maxScore : 100}</span>
+          <span className="text-[12px] font-semibold text-ink-400"> / {active.version === 'RB v1.2' ? maxScore : 100}</span>
           {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
         </Card>
         <Card label="Tier" mark={scoreMark}><TierPill t={cell.tiers[0] ?? null} /></Card>
@@ -371,40 +375,36 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
         <Card label="Current execution state" mark="LIVE"><span className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</span></Card>
         <Card label="Final execution state (Final Actionability)" mark="LIVE" wide>
           <span className={TONE_TEXT[finalToneKey]} title={lc?.reason}>{finalText}</span>
-          {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[11.5px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
+          {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[11px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
         </Card>
       </div>
 
-      <div className="mt-2 grid gap-2 sm:grid-cols-3" data-row-group="checks">
-        <Card label="Data status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
-        <Card label="Chase status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
-        <Card label="Portfolio status" mark="LIVE"><span className={`text-[16px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
+      <div className="mt-1.5 grid gap-1.5 sm:grid-cols-3" data-row-group="checks">
+        <Card label="Data status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
+        <Card label="Chase status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
+        <Card label="Portfolio status" mark="LIVE"><span className={`text-[15px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
       </div>
 
-      <div className="mt-2 rounded-lg border border-ink-600 bg-ink-850 px-3 py-2" data-row-group="order">
-        <div className="mb-1 flex items-center gap-2 text-[13px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'alert-time plan'})</span>}<Mark k={planMark} /></div>
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 lg:grid-cols-5">
-          <div data-field="Entry"><dt className={small}>Entry</dt><dd className="text-[24px] font-bold tabular-nums text-ink-100">{p(f.entry)}</dd></div>
-          <div data-field="Stop"><dt className={small}>Stop</dt><dd className="text-[24px] font-bold tabular-nums text-[#ff6b7f]">{p(f.stop)}</dd></div>
-          <div data-field="Target"><dt className={small}>Target</dt><dd className="text-[24px] font-bold tabular-nums text-[#3ee08f]">{p(f.target)}</dd></div>
-          <div data-field="Quantity"><dt className={small}>Quantity</dt><dd className="text-[24px] font-bold tabular-nums text-ink-100">{f.shares === null ? '—' : String(f.shares)}</dd></div>
-          <div data-field="Execution Type"><dt className={small}>Execution Type</dt><dd><span className={`inline-block rounded-md border border-ink-500 bg-ink-800 px-2.5 py-1 text-[18px] font-black uppercase tracking-wide ${orderTone(f.orderType)}`}>{f.orderType ?? '—'}</span></dd></div>
+      <div className="mt-1.5 rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5" data-row-group="order">
+        <div className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'alert-time plan'})</span>}<Mark k={planMark} /></div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+          <div data-field="Entry"><dt className={small}>Entry</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-ink-100">{p(f.entry)}</dd></div>
+          <div data-field="Stop"><dt className={small}>Stop</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-[#ff6b7f]">{p(f.stop)}</dd></div>
+          <div data-field="Target"><dt className={small}>Target</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-[#3ee08f]">{p(f.target)}</dd></div>
+          <div data-field="Quantity"><dt className={small}>Quantity</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-ink-100">{f.shares === null ? '—' : String(f.shares)}</dd></div>
+          <div data-field="Execution Type"><dt className={small}>Execution Type</dt><dd><span className={`mt-0.5 inline-block rounded-md border border-ink-500 bg-ink-800 px-2 py-0.5 text-[16px] font-black uppercase tracking-wide ${orderTone(f.orderType)}`}>{f.orderType ?? '—'}</span></dd></div>
         </dl>
       </div>
 
-      <dl className="mt-2 grid gap-x-6 gap-y-1 rounded-lg border border-ink-700 px-3 py-2 text-[12.5px] sm:grid-cols-2 xl:grid-cols-3" data-row-group="supporting">
+      <dl className="mt-1.5 grid gap-x-5 rounded-lg border border-ink-700 px-2.5 py-1 text-[12px] leading-[18px] sm:grid-cols-2 lg:grid-cols-3" data-row-group="supporting">
         {supporting.map(([k, v, m]) => (
-          <div key={k} className="flex items-baseline justify-between gap-2 border-b border-ink-800 py-0.5" data-field={k}>
-            <dt className="text-ink-300">{k}</dt>
-            <dd className="text-right tabular-nums text-ink-100">{v}<Mark k={m} /></dd>
+          <div key={k} className="flex min-w-0 items-baseline justify-between gap-2 border-b border-ink-800 py-px" data-field={k}>
+            <dt className="shrink-0 text-ink-300">{k}</dt>
+            <dd className="min-w-0 text-right tabular-nums text-ink-100 [overflow-wrap:anywhere]">{v}<Mark k={m} /></dd>
           </div>
         ))}
       </dl>
 
-      <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-400" data-legend="live-frozen">
-        <span><Mark k="LIVE" /> can change while RB re-evaluates the alert</span>
-        <span><Mark k="FROZEN" /> captured with the original alert / trade plan</span>
-      </p>
     </section>
   );
 }
@@ -433,12 +433,12 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades 
   const lc = r.lifecycle;
   const ex = executionBadge(r);
   return (
-    <div className="space-y-3 font-sans" data-details={r.record.id}>
+    <div className="sticky left-3 w-[calc(100cqw-1.5rem)] min-w-0 space-y-2 font-sans" data-details={r.record.id}>
       {active && (
         <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} />
       )}
       {comparison.length > 0 && (
-        <div className="sticky left-0 flex max-w-[calc(100vw-4rem)] flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-4 py-2 text-[13px]" data-comparison="shadow">
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-3 py-1.5 text-[13px]" data-comparison="shadow">
           {comparison.map((c) => {
             const cell = c.cell(r);
             return (
