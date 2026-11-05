@@ -234,6 +234,9 @@ describe('Step 3 · A — trigger continuity across a delayed reconstruction (re
     const entry = await carrEntry();
     const rec = await delayed('CARR', 0, [print('2026-11-05T15:06:30Z', entry, [' ', 'I'])]);
     expect(rec.delayedReconstruction!.gap).toMatchObject({ status: 'CROSSED', crossedPrice: entry, crossedAtIso: '2026-11-05T15:06:30Z' });
+    // Step 5 · provenance and wording: an odd lot, its conditions and its print time
+    expect(rec.delayedReconstruction!.gap).toMatchObject({ crossedVia: 'ODD_LOT_TRADE', crossedConditions: [' ', 'I'], crossedTape: 'A' });
+    expect(rec.delayedReconstruction!.gap.reason).toBe(`an odd-lot trade at ${entry} [regular I] printed at 10:06:30 ET, at or through the ${entry} entry, during the delayed reconstruction.`);
   });
   it('an average-price / derivatively priced print at/through the entry is NOT trigger evidence; the complete trade record proves NOT_CROSSED', async () => {
     const entry = await carrEntry();
@@ -245,6 +248,8 @@ describe('Step 3 · A — trigger continuity across a delayed reconstruction (re
     const g = rec.delayedReconstruction!.gap;
     expect(g.status).toBe('CROSSED');
     expect(g.crossedPrice!).toBeLessThanOrEqual(g.entry); // SHORT: at or through the entry
+    expect(g.crossedVia).toBe('MINUTE_BAR'); // Step 5 · provenance: proven by a complete 1-minute bar
+    expect(g.reason).toMatch(/^the 1-minute bar 10:0\d–10:0\d ET reached [\d.]+ \(its low\), at or through the [\d.]+ entry, during the delayed reconstruction\.$/);
   });
 });
 

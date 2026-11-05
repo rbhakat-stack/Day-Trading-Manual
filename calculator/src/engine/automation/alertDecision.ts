@@ -63,6 +63,10 @@ export interface DelayedReconstruction {
     extreme: number | null;
     crossedAtIso: string | null;
     crossedPrice: number | null;
+    /** Provenance of a crossing (Step 5 · wording; absent on earlier records). */
+    crossedVia?: 'MINUTE_BAR' | 'ELIGIBLE_TRADE' | 'ODD_LOT_TRADE' | null;
+    crossedConditions?: string[] | null;
+    crossedTape?: string | null;
     reason: string;
   };
 }

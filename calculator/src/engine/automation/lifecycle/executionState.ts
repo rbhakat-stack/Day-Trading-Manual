@@ -15,7 +15,8 @@ import { etParts } from '../etTime';
 import type { QueueRow } from '../liveQueue';
 import type { AlertTimeSnapshot } from './alertTimeSnapshot';
 import type { AutoAlertRecordV12 } from '../v12/audit';
-import type { TerminalEvent } from './terminalEvents';
+import type { TerminalEvent, TriggerEvidenceInfo } from './terminalEvents';
+import { conditionText } from '../signalCompleteness';
 import { PORTFOLIO_UNVERIFIED } from './portfolioExposure';
 
 export type ExecutionState =
@@ -77,7 +78,7 @@ export interface Lifecycle {
   /** S2a.2 — a READY ticket withheld for missing observation-continuity or time evidence (the reason). */
   observationWithheld?: string | null;
   /** D — confirmed missed trigger crossing recorded from a reliable observation (evidence; null/absent = none). */
-  triggerMissed?: { observedAtMs: number; price: number; entry: number | null; quoteTradeIso: string } | null;
+  triggerMissed?: { observedAtMs: number; price: number; entry: number | null; quoteTradeIso: string; evidence?: TriggerEvidenceInfo | null } | null;
   /** D4 — this alert's ticket is withheld because another alert of the ticker holds the reservation (null/absent = none). */
   heldBy?: { recordId: string; alertTimeMs: number; authorizedAtMs: number | null; untilMs: number } | null;
   /** Frozen alert-time v1.2 score and tiers from the snapshot (null = no snapshot yet; total null = genuinely unscored). */
@@ -222,6 +223,30 @@ function eligibleAtAlert(row: QueueRow, snap: AlertTimeSnapshot | null): boolean
 }
 
 /**
+ * Step 5 · wording only — what the MISSED evidence was, with the market's print time kept apart from the time RB observed
+ * it. Reads only the event's provenance; nothing here affects eligibility or the terminal state.
+ */
+export function missedEvidenceText(trig: TerminalEvent, row: QueueRow): string {
+  const hms = (iso: string) => etParts(Date.parse(iso)).hhmmss;
+  const hm = (ms: number) => etParts(ms).hhmm;
+  const entry = trig.entry ?? '—';
+  const ev = trig.evidence;
+  const conds = conditionText(ev?.conditions);
+  const observed = ev?.source === 'DELAYED_RECONSTRUCTION'
+    ? (row.record.delayedReconstruction?.finalIso ? `established when the late reconstruction completed at ${hms(row.record.delayedReconstruction.finalIso)} ET` : 'established when the late reconstruction completed')
+    : `observed by RB at ${etParts(trig.observedAtMs).hhmmss} ET`;
+  if (!ev) return `MISSED — a trade at ${trig.price} printed at ${hms(trig.quoteTradeIso)} ET reached the ${entry} entry trigger before any order was submitted (${observed}).`;
+  if (ev.kind === 'MINUTE_BAR') {
+    const t = Date.parse(ev.atIso);
+    return `MISSED — the 1-minute bar ${hm(t)}–${hm(t + 60_000)} ET reached ${trig.price} (its ${trig.direction === 'LONG' ? 'high' : 'low'}), at or through the ${entry} entry trigger, before any order could be submitted (${observed}).`;
+  }
+  if (ev.kind === 'ODD_LOT_TRADE') {
+    return `MISSED — an odd-lot trade at ${trig.price}${conds} printed at ${hms(ev.atIso)} ET, at or through the ${entry} entry trigger, before any order was submitted (${observed}). Odd lots never set RB's price; RB conservatively treats one at the trigger as the trigger having been reached.`;
+  }
+  return `MISSED — an eligible trade at ${trig.price}${conds} printed at ${hms(ev.atIso)} ET, at or through the ${entry} entry trigger, before any order was submitted (${observed}).`;
+}
+
+/**
  * D — terminal MISSED TRIGGER. A confirmed crossing of the entry trigger before any order was submitted ends the alert:
  * a later pullback below the trigger can never make it READY again. Like the chase, it never touches broker / user states
  * (SUBMITTED, IN POSITION, CLOSED — the broker governs a submitted order), keeps an earlier SETUP FAILED as the terminal
@@ -230,7 +255,7 @@ function eligibleAtAlert(row: QueueRow, snap: AlertTimeSnapshot | null): boolean
  */
 function withTrigger(row: QueueRow, snap: AlertTimeSnapshot | null, now: number, lc: Lifecycle, trig: TerminalEvent | null, chase: TerminalEvent | null): Lifecycle {
   if (trig?.kind !== 'TRIGGER_CROSSED') return lc;
-  const triggerMissed = { observedAtMs: trig.observedAtMs, price: trig.price, entry: trig.entry ?? null, quoteTradeIso: trig.quoteTradeIso };
+  const triggerMissed = { observedAtMs: trig.observedAtMs, price: trig.price, entry: trig.entry ?? null, quoteTradeIso: trig.quoteTradeIso, evidence: trig.evidence ?? null };
   if (['SUBMITTED', 'IN POSITION', 'CLOSED'].includes(lc.executionState)) return { ...lc, triggerMissed };
   if (lc.setupFailed && lc.setupFailed.observedAtMs <= trig.observedAtMs) return { ...lc, triggerMissed };
   const expiresAt = snap?.expiresAtMs ?? row.record.alert.alertTimeMs + RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
@@ -241,7 +266,7 @@ function withTrigger(row: QueueRow, snap: AlertTimeSnapshot | null, now: number,
   return {
     ...lc,
     executionState: 'MISSED — TRIGGER CROSSED', finalActionability: 'NO TRADE', terminal: true, entryWindowClosed: false, portfolioUnverified: false, triggerMissed,
-    reason: `MISSED — a trade at ${trig.price} reached the ${trig.entry ?? '—'} entry trigger at ${etParts(trig.observedAtMs).hhmmss} ET before any order was submitted. Terminal: no new entry from this alert (a later pullback does not revive it); a new TrendSpider alert is required.`,
+    reason: `${missedEvidenceText(trig, row)} Terminal: no new entry from this alert (a later pullback does not revive it); a new TrendSpider alert is required.`,
     score: frozen !== null ? { value: frozen, basis: 'FROZEN — REFERENCE ONLY', rank: 'NOT RANKED' } : { value: null, basis: 'NONE', rank: 'NOT RANKED' },
   };
 }

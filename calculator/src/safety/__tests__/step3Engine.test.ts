@@ -9,6 +9,7 @@ import type { AutoAlertRecord, DelayedReconstruction } from '../../engine/automa
 import { triggerKey } from '../../engine/automation/lifecycle/terminalEvents';
 import { queueAuthorizes, rankerAuthorizes, runApp, synthQuote, type Pass, type Step } from './harness';
 import { at, LONG, T0 } from './synthetic';
+import { etParts } from '../../engine/automation/etTime';
 
 /** Fresh quotes every 3 s (the app's real price polling; the S2a.2 continuity limit is 8 s). */
 const poll = (from: number, to: number, price: number): Step[] => {
@@ -122,5 +123,67 @@ describe('Step 3 · A — a snapshot completed late (requirements 9–11)', () =
     const plan = (r: typeof a) => [r.candidate!.entry, r.candidate!.stop, r.candidate!.target, r.candidate!.shares, r.candidate!.plannedRisk, r.ranked!.total];
     expect(plan(b)).toEqual(plan(a));
     expect(b.shadow).toEqual(a.shadow);
+  });
+});
+
+describe('Step 5 · MISSED wording and provenance (presentation only — eligibility and terminal behaviour unchanged)', () => {
+  const hms = (ms: number) => etParts(ms).hhmmss;
+  const missedRow = (ps: Pass[], id: string) => ps.find((p) => p.row(id)?.lifecycle.executionState === 'MISSED — TRIGGER CROSSED')!.row(id)!;
+
+  it('eligible trade: names an ELIGIBLE trade, its conditions and the market print time, kept apart from RB\'s observation time', () => {
+    const rec = LONG();
+    const cross = (m: number) => ({ now: at(m), quotes: { AAA: { ...synthQuote(101.05, at(m), 500, 1500), conditions: [' ', 'F'], tape: 'A', priceSource: 'LATEST' as const, skipped: null } } });
+    const ps = runApp([rec], [...poll(0.1, 1, 100.95), cross(1.05), ...poll(1.1, 3, 100.95)]);
+    const ev = ps[ps.length - 1].state.terminal[triggerKey(rec.id)];
+    expect(ev.evidence).toMatchObject({ kind: 'ELIGIBLE_TRADE', conditions: [' ', 'F'], tape: 'A', source: 'LIVE_QUOTE' });
+    const r = missedRow(ps, rec.id);
+    const printed = hms(at(1.05) - 2000), observed = hms(at(1.05));
+    expect(printed).not.toBe(observed);
+    expect(r.lifecycle.reason).toContain(`an eligible trade at 101.05 [regular F] printed at ${printed} ET, at or through the 101.02 entry trigger`);
+    expect(r.lifecycle.reason).toContain(`(observed by RB at ${observed} ET)`);
+    expect(r.lifecycle.triggerMissed!.evidence!.kind).toBe('ELIGIBLE_TRADE');
+  });
+
+  it('odd lot: names an ODD-LOT trade, its print time and that odd lots never set the price; same terminal outcome as before', () => {
+    const rec = LONG();
+    const odd = (m: number) => ({ now: at(m), quotes: { AAA: { ...synthQuote(100.95, at(m)), conditions: [' '], tape: 'A', priceSource: 'LATEST_ELIGIBLE' as const, skipped: { price: 101.03, tradeIso: new Date(at(m) - 800).toISOString(), conditions: [' ', 'I'], tape: 'A' } } } });
+    const ps = runApp([rec], [...poll(0.1, 1, 100.95), odd(1.05), ...poll(1.1, 3, 100.95)]);
+    const r = ps.find((p) => p.now === at(1.05))!.row(rec.id)!;
+    expect(r.lifecycle).toMatchObject({ executionState: 'MISSED — TRIGGER CROSSED', finalActionability: 'NO TRADE', terminal: true });
+    expect(r.lifecycle.reason).toContain(`an odd-lot trade at 101.03 [regular I] printed at ${hms(at(1.05) - 800)} ET`);
+    expect(r.lifecycle.reason).toContain('Odd lots never set RB\'s price');
+    expect(r.lifecycle.reason).not.toContain('eligible trade');
+    expect(authorized(ps.filter((p) => p.now >= at(1.05)), rec.id)).toEqual([]);
+  });
+
+  it('1-minute bar during a delayed reconstruction: names the bar and its high, and when the late reconstruction established it — never "a trade"', () => {
+    const { after, rec } = run('CROSSED', { observe: true });
+    const r = missedRow(after, rec.id);
+    expect(r.lifecycle.reason).toMatch(/MISSED — the 1-minute bar \d\d:\d\d–\d\d:\d\d ET reached 101\.05 \(its high\), at or through the 101\.02 entry trigger/);
+    expect(r.lifecycle.reason).toContain(`established when the late reconstruction completed at ${hms(at(3.5))} ET`);
+    expect(r.lifecycle.reason).not.toMatch(/a trade at/);
+    expect(authorized(after, rec.id)).toEqual([]);
+  });
+
+  it('odd-lot trade found by a delayed reconstruction: named as an odd lot with its print time', () => {
+    const rec = LONG();
+    const base = completed(rec, 'CROSSED');
+    const g = { ...base.delayedReconstruction!.gap, crossedVia: 'ODD_LOT_TRADE' as const, crossedConditions: ['@', 'I'], crossedTape: 'C', crossedAtIso: new Date(at(2) + 7_250).toISOString() };
+    const r2 = { ...base, delayedReconstruction: { ...base.delayedReconstruction!, gap: g } };
+    const before = runApp([waiting(rec)], poll(0.1, 3.4, 100.95));
+    const after = runApp([r2], poll(3.5, 6, 100.95), { start: before[before.length - 1].state });
+    const r = missedRow(after, rec.id);
+    expect(r.lifecycle.reason).toContain(`an odd-lot trade at 101.05 [regular I] printed at ${hms(at(2) + 7_250)} ET`);
+    expect(r.lifecycle.reason).toContain('established when the late reconstruction completed');
+  });
+
+  it('an event stored by the previous build (no provenance) keeps a neutral wording with the print time; still terminal, never authorized', () => {
+    const rec = LONG();
+    const legacy = { recordId: rec.id, kind: 'TRIGGER_CROSSED' as const, direction: 'LONG' as const, alertTimeMs: rec.alert.alertTimeMs, observedAtMs: at(1), price: 101.05, stop: 100, quoteTradeIso: new Date(at(1) - 1500).toISOString(), entry: 101.02 };
+    const pre = runApp([rec], poll(0.1, 0.5, 100.95));
+    const st = { ...pre[pre.length - 1].state, terminal: { ...pre[pre.length - 1].state.terminal, [triggerKey(rec.id)]: legacy } };
+    const ps = runApp([rec], poll(1.1, 3, 100.95), { start: st });
+    expect(ps[0].row(rec.id)!.lifecycle.reason).toContain(`MISSED — a trade at 101.05 printed at ${hms(at(1) - 1500)} ET reached the 101.02 entry trigger before any order was submitted (observed by RB at ${hms(at(1))} ET)`);
+    expect(authorized(ps, rec.id)).toEqual([]);
   });
 });

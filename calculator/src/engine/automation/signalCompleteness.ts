@@ -22,7 +22,7 @@
  */
 import type { Bar } from './indicators';
 import { etParts, etToEpoch } from './etTime';
-import { isTriggerEvidence, type ConditionedTrade } from './tradeEligibility';
+import { isEligibleTrade, isTriggerEvidence, type ConditionedTrade } from './tradeEligibility';
 
 const MIN = 60_000;
 const FIVE = 5 * MIN;
@@ -79,8 +79,15 @@ export interface DelayedTriggerEvidence {
   /** First evidence at / through the entry (null unless CROSSED). */
   crossedAtIso: string | null;
   crossedPrice: number | null;
+  /** How the crossing was established (provenance only; null unless CROSSED). */
+  crossedVia?: 'MINUTE_BAR' | 'ELIGIBLE_TRADE' | 'ODD_LOT_TRADE' | null;
+  crossedConditions?: string[] | null;
+  crossedTape?: string | null;
   reason: string;
 }
+
+/** "[regular F I]" — trade conditions as text (" " / "@" are a regular sale). */
+export const conditionText = (c: string[] | null | undefined): string => (c?.length ? ` [${c.map((x) => (x === ' ' || x === '@' || x === '' ? 'regular' : x)).join(' ')}]` : '');
 
 export function delayedTriggerEvidence(o: {
   direction: 'LONG' | 'SHORT';
@@ -105,15 +112,20 @@ export function delayedTriggerEvidence(o: {
   }
   // 2) every trade print of the delay: eligible or odd-lot prints at/through the entry are trigger evidence
   //    (tradeEligibility.isTriggerEvidence); proving NOT crossed needs the COMPLETE trade record of the delay.
-  let tradeHit: { at: number; iso: string; p: number } | null = null;
+  let tradeHit: { at: number; iso: string; p: number; c: string[] | null; z: string | null; eligible: boolean } | null = null;
   if (o.trades) {
     for (const t of o.trades.filter((x) => isTriggerEvidence(x) && Date.parse(x.t) >= o.signalEndMs && Date.parse(x.t) <= o.fetchedMs).sort((x, y) => Date.parse(x.t) - Date.parse(y.t))) {
       seen(t.p);
-      if (at(t.p)) { tradeHit = { at: Date.parse(t.t), iso: t.t, p: t.p }; break; }
+      if (at(t.p)) { tradeHit = { at: Date.parse(t.t), iso: t.t, p: t.p, c: t.c ?? null, z: t.z ?? null, eligible: isEligibleTrade(t) }; break; }
     }
   }
-  const hit = barHit && (!tradeHit || barHit.at <= tradeHit.at) ? { iso: new Date(barHit.at).toISOString(), p: barHit.p, how: `the 1-minute bar ${etParts(barHit.at).hhmm} ET` } : tradeHit ? { iso: tradeHit.iso, p: tradeHit.p, how: `a trade at ${etParts(tradeHit.at).hhmmss} ET` } : null;
-  if (hit) return { status: 'CROSSED', ...base, extreme, crossedAtIso: hit.iso, crossedPrice: hit.p, reason: `${hit.how} reached ${hit.p} (entry ${o.entry}) during the delay.` };
+  const side = L ? 'high' : 'low';
+  const hit = barHit && (!tradeHit || barHit.at <= tradeHit.at)
+    ? { iso: new Date(barHit.at).toISOString(), p: barHit.p, via: 'MINUTE_BAR' as const, c: null, z: null, how: `the 1-minute bar ${etParts(barHit.at).hhmm}–${etParts(barHit.at + MIN).hhmm} ET reached ${barHit.p} (its ${side})` }
+    : tradeHit
+      ? { iso: tradeHit.iso, p: tradeHit.p, via: tradeHit.eligible ? 'ELIGIBLE_TRADE' as const : 'ODD_LOT_TRADE' as const, c: tradeHit.c, z: tradeHit.z, how: `${tradeHit.eligible ? 'an eligible trade' : 'an odd-lot trade'} at ${tradeHit.p}${conditionText(tradeHit.c)} printed at ${etParts(tradeHit.at).hhmmss} ET` }
+      : null;
+  if (hit) return { status: 'CROSSED', ...base, extreme, crossedAtIso: hit.iso, crossedPrice: hit.p, crossedVia: hit.via, crossedConditions: hit.c, crossedTape: hit.z, reason: `${hit.how}, at or through the ${o.entry} entry, during the delayed reconstruction.` };
   if (!o.trades) return { status: 'UNVERIFIED', ...base, extreme, crossedAtIso: null, crossedPrice: null, reason: `The trades between ${etParts(o.signalEndMs).hhmmss} and ${etParts(o.fetchedMs).hhmmss} ET could not be retrieved completely — whether the ${o.entry} trigger was reached during the delay cannot be proven.` };
   return { status: 'NOT_CROSSED', ...base, extreme, crossedAtIso: null, crossedPrice: null, reason: `The ${o.entry} entry was not reached between ${etParts(o.signalEndMs).hhmmss} and ${etParts(o.fetchedMs).hhmmss} ET (every trade print of the delay checked, odd lots included).` };
 }

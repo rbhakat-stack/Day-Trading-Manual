@@ -47,6 +47,18 @@ export interface TerminalEvent {
   entry?: number;
   distanceAtr?: number;
   thresholdAtr?: number;
+  /** TRIGGER_CROSSED only (Step 5 · wording): what the crossing evidence was. Provenance only — never read for eligibility. */
+  evidence?: TriggerEvidenceInfo;
+}
+
+export interface TriggerEvidenceInfo {
+  kind: 'ELIGIBLE_TRADE' | 'ODD_LOT_TRADE' | 'MINUTE_BAR';
+  /** When the market printed it (trade time), or the start of the 1-minute bar. */
+  atIso: string;
+  conditions?: string[] | null;
+  tape?: string | null;
+  /** LIVE_QUOTE = seen on a price poll; DELAYED_RECONSTRUCTION = found by the server when a late snapshot completed. */
+  source: 'LIVE_QUOTE' | 'DELAYED_RECONSTRUCTION';
 }
 
 export type TerminalEventMap = Record<string, TerminalEvent>;
@@ -128,7 +140,10 @@ export function observedTriggerCross(r: QueueRow, now: number, cfg: Pick<Automat
   const L = r.record.alert.direction === 'LONG';
   if (L ? r.quote.price < entry : r.quote.price > entry) return null;
   const distanceAtr = atr && atr > 0 ? Math.round(((L ? r.quote.price - entry : entry - r.quote.price) / atr) * 1000) / 1000 : undefined;
-  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso, entry, distanceAtr };
+  return {
+    recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: r.quote.price, stop, quoteTradeIso: r.quote.tradeIso, entry, distanceAtr,
+    evidence: { kind: 'ELIGIBLE_TRADE', atIso: r.quote.tradeIso, conditions: r.quote.conditions ?? null, tape: r.quote.tape ?? null, source: 'LIVE_QUOTE' },
+  };
 }
 
 /**
@@ -149,7 +164,10 @@ export function observedSkippedCross(r: QueueRow, now: number, cfg: Pick<Automat
   const { entry, stop } = r.candidate;
   const L = r.record.alert.direction === 'LONG';
   if (!(entry > 0) || (L ? s.price < entry : s.price > entry)) return null;
-  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: s.price, stop, quoteTradeIso: s.tradeIso, entry };
+  return {
+    recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: now, price: s.price, stop, quoteTradeIso: s.tradeIso, entry,
+    evidence: { kind: 'ODD_LOT_TRADE', atIso: s.tradeIso, conditions: s.conditions, tape: s.tape, source: 'LIVE_QUOTE' },
+  };
 }
 
 /** Step 3 · A — the crossing the server proved during a delayed reconstruction (before any order could exist), or null. */
@@ -157,7 +175,10 @@ export function delayedCrossing(r: QueueRow): TerminalEvent | null {
   const g = r.record.delayedReconstruction?.gap;
   if (r.record.status !== 'OK' || g?.status !== 'CROSSED' || g.crossedPrice === null || !g.crossedAtIso) return null;
   if (r.candidate && !UNSUBMITTED.includes(r.candidate.status)) return null;
-  return { recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: Date.parse(g.crossedAtIso), price: g.crossedPrice, stop: r.candidate?.stop ?? NaN, quoteTradeIso: g.crossedAtIso, entry: g.entry };
+  return {
+    recordId: r.record.id, kind: 'TRIGGER_CROSSED', direction: r.record.alert.direction, alertTimeMs: r.record.alert.alertTimeMs, observedAtMs: Date.parse(g.crossedAtIso), price: g.crossedPrice, stop: r.candidate?.stop ?? NaN, quoteTradeIso: g.crossedAtIso, entry: g.entry,
+    evidence: { kind: g.crossedVia ?? 'MINUTE_BAR', atIso: g.crossedAtIso, conditions: g.crossedConditions ?? null, tape: g.crossedTape ?? null, source: 'DELAYED_RECONSTRUCTION' },
+  };
 }
 
 /** D4 — the first authorization of this row (the Queue offers it as an order to place now), or null. */
