@@ -10,11 +10,11 @@
  * Alerts are processed independently and ranked together; nothing is decided by arrival order.
  */
 import { rankCandidates, snapshotOf, type RankedCandidate, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
-import type { Candidate, ManualPosition } from '../ranker/opportunityTypes';
+import type { Candidate, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
 import type { RbSettings } from '../settings';
 import type { TradeResult } from '../tradeCalculator';
-import { existingCandidateFor, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type LiveQuote } from './alertDecision';
+import { blockingCandidate, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type CandidateBlock, type LiveQuote } from './alertDecision';
 import { candidateFromRecord, livePatch, liveState, type Classification } from './autoCandidate';
 import { etParts } from './etTime';
 import type { AutoAlertRecordV12, V12Audit } from './v12/audit';
@@ -70,7 +70,25 @@ export interface QueueRow {
   shadow: V12Decision | null;
   /** v1.2 execution layer (CR-04/05/06/07/10/13): presentation of the decisions above; never feeds back into them. */
   lifecycle: Lifecycle;
+  /**
+   * Set when the alert is blocked as DUPLICATE / EXISTING CANDIDATE: who blocks it and why, plus a v1.1 diagnostic
+   * plan and score (same formulas, alert-time price, scored alone, never ranked or allocated). NOT ACTIONABLE —
+   * diagnostics only; frozen into the alert-time snapshot on the first pass and read back from it afterwards.
+   */
+  blocked?: BlockedDiagnostic | null;
 }
+
+export interface BlockedDiagnostic {
+  block: CandidateBlock;
+  plan: { entry: number; stop: number; target: number; shares: number; positionValue: number; plannedRisk: number; expectedReward: number; orderType: string } | null;
+  score: number | null;
+  tier: QualityTier | null;
+  /** COMPUTED on this pass (first evaluation) or FROZEN (read back from the alert-time snapshot). */
+  source: 'COMPUTED' | 'FROZEN';
+}
+
+/** Detail of the DUPLICATE decision; a snapshot frozen with it means the alert was blocked at alert time. */
+const DUPLICATE_DETAIL = 'DUPLICATE / EXISTING CANDIDATE';
 
 export interface QueueOutput {
   candidates: Candidate[];
@@ -91,6 +109,8 @@ export function buildQueue(q: QueueInput): QueueOutput {
   const window: StrategyRules = { entryWindowStart: q.rb.entryWindowStart, entryWindowEnd: q.rb.entryWindowEnd, chaseThresholdAtr: q.rb.chaseThresholdAtr };
   const dup = new Map<string, string | null>();
   const lives = new Map<string, TradeResult | null>();
+  const blocked = new Map<string, BlockedDiagnostic>();
+  const toScore = new Map<string, Candidate>(); // diagnostic candidates of blocked alerts (never added to `candidates`)
 
   // Oldest first, so an earlier alert owns the ticker before a later duplicate is considered.
   const recs = [...q.records].sort((a, b) => a.alert.alertTimeMs - b.alert.alertTimeMs || a.receivedMs - b.receivedMs);
@@ -100,9 +120,27 @@ export function buildQueue(q: QueueInput): QueueOutput {
     const quote = q.quotes[rec.alert.symbol] ?? null;
     const existing = byId.get(rec.id);
     if (!existing) {
-      const d = existingCandidateFor(rec, candidates, q.now);
-      dup.set(rec.id, d);
-      if (d) continue;
+      // A blocked alert stays blocked: the block is decided as of the alert's own time, and an alert whose alert-time
+      // snapshot already recorded the block (also by an earlier app version) is never turned into a late candidate.
+      const snap = q.frozen?.[rec.id];
+      const frozenBlocked = snap?.blocked ?? null;
+      const legacyBlocked = !frozenBlocked && snap?.v11.detail === DUPLICATE_DETAIL;
+      const block: CandidateBlock | null = frozenBlocked?.block
+        ?? blockingCandidate(rec, candidates)
+        ?? (legacyBlocked ? { id: 'ALERT-TIME DUPLICATE', kind: 'LIVE_CANDIDATE', status: 'NEW', alertMs: 0, untilMs: null, reason: `${rec.alert.symbol} was blocked at alert time by an earlier candidate (recorded before the blocking candidate was stored). It stays blocked — a blocked alert is never revived. NOT ACTIONABLE.` } : null);
+      dup.set(rec.id, block ? block.id : null);
+      if (block) {
+        if (frozenBlocked) {
+          blocked.set(rec.id, { block, plan: frozenBlocked.plan, score: frozenBlocked.score, tier: frozenBlocked.tier as QualityTier | null, source: 'FROZEN' });
+        } else {
+          blocked.set(rec.id, { block, plan: null, score: null, tier: null, source: 'COMPUTED' });
+          // Diagnostic only: the alert-time price recorded by the server (else the current quote), alert-time clock.
+          const dprice = rec.initialQuote?.price ?? quote?.price;
+          const dc = dprice ? candidateFromRecord(rec, dprice, rec.alert.alertTimeMs, q.rb, q.classify(rec.alert.symbol)) : null;
+          if (dc) toScore.set(rec.id, dc);
+        }
+        continue;
+      }
       const price = quote?.price ?? rec.initialQuote?.price;
       if (!price) continue;
       const c = candidateFromRecord(rec, price, q.now, q.rb, q.classify(rec.alert.symbol));
@@ -154,6 +192,14 @@ export function buildQueue(q: QueueInput): QueueOutput {
   const display = dataBlocked.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
   for (const r of display.ranked) if (dataBlocked.has(r.candidate.id)) rankedById.set(r.candidate.id, { ...r, rank: null });
+
+  // Diagnostic scores of blocked alerts: each scored ALONE with the existing ranker (same v1.1 formula), so it never
+  // competes for capital, a slot, heat or correlation and never changes the real ranking above.
+  for (const [id, dc] of toScore) {
+    const r = rankCandidates([dc], exp.positions, q.rk, today, window, exp.exclude).ranked[0];
+    const b = blocked.get(id)!;
+    blocked.set(id, { ...b, plan: { entry: dc.entry, stop: dc.stop, target: dc.target, shares: dc.shares, positionValue: dc.positionValue, plannedRisk: dc.plannedRisk, expectedReward: dc.expectedReward, orderType: dc.orderType }, score: r?.total ?? null, tier: r?.tier ?? null });
+  }
 
   // Freeze the initial score the first time an automated candidate is completely scored (never rewritten).
   candidates = candidates.map((c) => {
@@ -212,10 +258,11 @@ export function buildQueue(q: QueueInput): QueueOutput {
       cfg: q.cfg,
       parityMismatches: q.parity[rec.id] ?? [],
       duplicateOf: dup.get(rec.id) ?? null,
+      duplicateReason: blocked.get(rec.id)?.block.reason ?? null,
       window,
     }, v12Inputs);
     const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
-    const row = { record: rec, candidate, ranked, live, quote, decision, shadow } as QueueRow;
+    const row = { record: rec, candidate, ranked, live, quote, decision, shadow, blocked: blocked.get(rec.id) ?? null } as QueueRow;
     row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg));
     return row;
   });

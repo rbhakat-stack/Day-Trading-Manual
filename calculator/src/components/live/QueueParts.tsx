@@ -233,11 +233,11 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                   })}
                   {cols.trade && (
                     <>
-                      <td className={`${td} text-ink-100`}>{p(f.entry)}</td>
-                      <td className={`${td} text-ink-100`}>{p(f.stop)}</td>
-                      <td className={`${td} text-ink-100`}>{p(f.target)}</td>
-                      <td className={`${td} text-ink-100`}>{f.shares ?? '—'}</td>
-                      <td className={`${td} text-ink-100`}>{money(f.plannedRisk)}</td>
+                      <td className={`${td} ${f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'text-ink-500 line-through' : 'text-ink-100'}`} title={f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'NOT ACTIONABLE — diagnostic of an alert blocked as duplicate' : undefined}>{p(f.entry)}</td>
+                      <td className={`${td} ${f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'text-ink-500 line-through' : 'text-ink-100'}`}>{p(f.stop)}</td>
+                      <td className={`${td} ${f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'text-ink-500 line-through' : 'text-ink-100'}`}>{p(f.target)}</td>
+                      <td className={`${td} ${f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'text-ink-500 line-through' : 'text-ink-100'}`}>{f.shares ?? '—'}</td>
+                      <td className={`${td} ${f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'text-ink-500 line-through' : 'text-ink-100'}`}>{money(f.plannedRisk)}</td>
                       <td className={`${td} text-ink-100`}>{p(f.currentPrice)}</td>
                     </>
                   )}
@@ -373,7 +373,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   const ch = f.chase;
   // Markers follow the real source: the score shown is frozen only when the presenter shows the alert-time value.
   const scoreMark: Freshness = cell.frozen ? 'FROZEN' : 'LIVE';
-  const planMark: Freshness = f.planSource === 'CANDIDATE' ? 'FROZEN' : 'LIVE';
+  const planMark: Freshness = f.planSource === 'CANDIDATE' || f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'FROZEN' : 'LIVE';
   // Same expression as the existing "Final execution state (Final Actionability)" row (the reason is shown below it).
   const finalText = lc ? lc.finalActionability : fin.ticket ? 'READY — TICKET' : `NO TICKET – ${fin.label}`;
   const finalToneKey: Tone = lc ? (lc.finalActionability === 'READY' ? 'ok' : lc.finalActionability === 'NO TRADE' ? 'bad' : 'muted') : finTone;
@@ -463,7 +463,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
       </div>
 
       <div className="mt-1.5 rounded-lg border border-ink-600 bg-ink-850 px-2.5 py-1.5" data-row-group="order">
-        <div className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : 'Original Plan'})</span>}<Mark k={planMark} /></div>
+        <div className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold text-ink-100">Order Details {f.planSource && <span className="font-normal text-ink-400">({f.planSource === 'LIVE_PLAN' ? 'live calculator plan — no candidate yet' : f.planSource === 'BLOCKED_DIAGNOSTIC' ? 'diagnostic only' : 'Original Plan'})</span>}<Mark k={planMark} />{f.planSource === 'BLOCKED_DIAGNOSTIC' && <span className="rounded border border-[#7a2a36] px-1.5 py-0.5 text-[10.5px] font-black uppercase tracking-wide text-[#ff8a9a]" title={r.blocked?.block.reason}>NOT ACTIONABLE — blocked as duplicate</span>}</div>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
           <div data-field="Entry"><dt className={small}>Entry</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-ink-100">{p(f.entry)}</dd></div>
           <div data-field="Stop"><dt className={small}>Stop</dt><dd className="text-[22px] font-bold leading-tight tabular-nums text-[#ff6b7f]">{p(f.stop)}</dd></div>

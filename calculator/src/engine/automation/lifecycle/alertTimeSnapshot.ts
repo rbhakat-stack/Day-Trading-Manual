@@ -9,6 +9,7 @@
  * separate execution state (executionState.ts), never this snapshot.
  */
 import type { QueueRow } from '../liveQueue';
+import type { CandidateBlock } from '../alertDecision';
 import type { AutoAlertRecordV12 } from '../v12/audit';
 import { RB_V1_DEFAULTS } from '../../settings';
 import { etParts } from '../etTime';
@@ -36,9 +37,20 @@ export interface AlertTimeSnapshot {
   ohlc: { open: number; high: number; low: number; close: number; atr: number } | null;
   indicators: { rvol: number | null; rsi: number | null; vwap: number | null; ema9: number | null; ema20: number | null; close15m: number | null; ema20_15m: number | null } | null;
   trade: { entry: number; stop: number; target: number; shares: number; positionValue: number; plannedRisk: number; expectedReward: number; orderType: string } | null;
-  v11: { total: number | null; tier: string | null; decision: string; detail: string; components: Record<string, number> | null };
+  /** `diagnostic`: the score is a NOT ACTIONABLE diagnostic of an alert blocked as DUPLICATE (scored alone, never ranked). */
+  v11: { total: number | null; tier: string | null; decision: string; detail: string; components: Record<string, number> | null; diagnostic?: boolean };
   v12: { total: number | null; max: number; tierOptionA: string | null; tierOptionB: string | null; decision: string | null } | null;
   provenance: { provider: string; feed: string; marketDataThroughIso: string | null; rulesVersion: string; scoringVersion: string | null; strategyVersion: string | null; recordStatus: string };
+  /**
+   * Present when the alert was blocked as DUPLICATE / EXISTING CANDIDATE at alert time: the blocking candidate and the
+   * NOT ACTIONABLE diagnostic plan / score calculated then. Optional (absent on older snapshots and unblocked alerts).
+   */
+  blocked?: {
+    block: CandidateBlock;
+    plan: { entry: number; stop: number; target: number; shares: number; positionValue: number; plannedRisk: number; expectedReward: number; orderType: string } | null;
+    score: number | null;
+    tier: string | null;
+  };
 }
 
 export type AlertSnapshotMap = Record<string, AlertTimeSnapshot>;
@@ -64,6 +76,7 @@ export function buildAlertTimeSnapshot(row: QueueRow, now: number, v12Max: numbe
   const firstTier = init ? init.tier : row.ranked?.strategyEligible ? row.ranked.tier : null;
   const missing = missingParts(row);
   const s12 = row.shadow?.score ?? null;
+  const bd = row.blocked ?? null;
   return {
     schema: ALERT_SNAPSHOT_SCHEMA,
     recordId: rec.id,
@@ -80,14 +93,16 @@ export function buildAlertTimeSnapshot(row: QueueRow, now: number, v12Max: numbe
     latency: alertLatency(rec),
     ohlc: v ? { open: v.open, high: v.high, low: v.low, close: v.close, atr: v.atr } : null,
     indicators: v ? { rvol: v.rvol ?? null, rsi: v.rsi ?? null, vwap: v.vwap ?? null, ema9: v.ema9 ?? null, ema20: v.ema20 ?? null, close15m: v.close15m ?? null, ema20_15m: v.ema20_15m ?? null } : null,
-    trade: c ? { entry: c.entry, stop: c.stop, target: c.target, shares: c.shares, positionValue: c.positionValue, plannedRisk: c.plannedRisk, expectedReward: c.expectedReward, orderType: c.orderType } : null,
+    trade: c ? { entry: c.entry, stop: c.stop, target: c.target, shares: c.shares, positionValue: c.positionValue, plannedRisk: c.plannedRisk, expectedReward: c.expectedReward, orderType: c.orderType } : bd?.plan ? { ...bd.plan } : null,
     v11: {
-      total: firstTotal ?? null,
-      tier: firstTier ?? null,
+      total: firstTotal ?? (bd ? bd.score : null),
+      tier: firstTier ?? (bd ? bd.tier : null),
       decision: row.decision.decision,
       detail: row.decision.detail,
       components: init ? { ...init.components } : row.ranked?.total != null ? Object.fromEntries(row.ranked.components.map((k) => [k.key, k.points])) : null,
+      ...(bd ? { diagnostic: true } : {}),
     },
+    ...(bd ? { blocked: { block: bd.block, plan: bd.plan ? { ...bd.plan } : null, score: bd.score, tier: bd.tier } } : {}),
     v12: a ? { total: s12?.total ?? null, max: v12Max, tierOptionA: s12?.tierOptionA ?? null, tierOptionB: s12?.tierOptionB ?? null, decision: row.shadow?.decision ?? null } : null,
     provenance: {
       provider: rec.provider?.name ?? '',

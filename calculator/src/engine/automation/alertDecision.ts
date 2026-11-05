@@ -171,17 +171,59 @@ export function releasedIds(records: Pick<AutoAlertRecord, 'id' | 'receivedMs' |
 const ACTIVE: LifecycleStatus[] = ['PENDING', 'FILLED'];
 const LIVE: LifecycleStatus[] = ['NEW', 'WATCHLIST'];
 
+/** Why a new alert is blocked by an existing candidate of the same ticker (RB candidate status, not live broker data). */
+export type CandidateBlockKind = 'PENDING_ORDER' | 'OPEN_POSITION' | 'LIVE_CANDIDATE' | 'WATCHED_CANDIDATE';
+export interface CandidateBlock {
+  /** The candidate (= earlier alert record id for automated candidates) that holds the ticker. */
+  id: string;
+  kind: CandidateBlockKind;
+  status: LifecycleStatus;
+  /** Alert time of the blocking candidate. */
+  alertMs: number;
+  /** When a live / watched candidate stops holding the ticker (its 10-minute alert window); null = until it closes. */
+  untilMs: number | null;
+  /** Precise, user-facing rejection reason. */
+  reason: string;
+}
+
 /**
- * One position or pending order per ticker, and one live candidate per ticker. Returns the id of the existing
- * candidate that makes `rec` a DUPLICATE / EXISTING CANDIDATE, or null. An earlier candidate that is stale or
- * finished (skipped, canceled, closed …) does not block a new, fresh alert.
+ * One position or pending order per ticker, and one live candidate per ticker (RB v1 never pyramids).
+ *
+ * Evaluated AS OF THE NEW ALERT'S OWN TIME: an earlier NEW / WATCHLIST candidate blocks it when that candidate's alert
+ * was less than the alert window (10 min) before this alert. The answer therefore does not drift with the clock: an
+ * alert blocked on arrival stays blocked (it never becomes a late candidate that would in turn block the next alert),
+ * and the same records give the same result whenever the app first sees them. PENDING / FILLED candidates always
+ * block (any direction). An earlier candidate that is stale or finished (skipped, canceled, closed …) never blocks.
  */
-export function existingCandidateFor(rec: AutoAlertRecord, candidates: Candidate[], now: number): string | null {
-  const same = candidates.filter((c) => c.ticker === rec.alert.symbol && c.id !== rec.id && !c.archived && c.date === etParts(rec.alert.alertTimeMs).date);
+export function blockingCandidate(rec: AutoAlertRecord, candidates: Candidate[]): CandidateBlock | null {
+  const at = rec.alert.alertTimeMs;
+  const sym = rec.alert.symbol;
+  const same = candidates.filter((c) => c.ticker === sym && c.id !== rec.id && !c.archived && c.date === etParts(at).date);
+  const hhmmss = (ms: number) => etParts(ms).hhmmss;
   const active = same.find((c) => ACTIVE.includes(c.status));
-  if (active) return active.id;
-  const live = same.find((c) => LIVE.includes(c.status) && freshness(alertMsOf(c), now).band !== 'STALE' && alertMsOf(c) < rec.alert.alertTimeMs);
-  return live ? live.id : null;
+  if (active) {
+    const pending = active.status === 'PENDING';
+    return {
+      id: active.id, kind: pending ? 'PENDING_ORDER' : 'OPEN_POSITION', status: active.status, alertMs: alertMsOf(active), untilMs: null,
+      reason: pending
+        ? `${sym} has a pending order in RB: candidate ${active.id} (alert ${hhmmss(alertMsOf(active))} ET) is marked ORDER SUBMITTED. RB v1 never pyramids.`
+        : `${sym} has an open position in RB: candidate ${active.id} (alert ${hhmmss(alertMsOf(active))} ET) is FILLED. RB v1 never pyramids.`,
+    };
+  }
+  const windowMs = RB_V1_DEFAULTS.alertWindowMinutes * 60_000;
+  const live = same.find((c) => LIVE.includes(c.status) && alertMsOf(c) < at && freshness(alertMsOf(c), at).band !== 'STALE');
+  if (!live) return null;
+  const until = alertMsOf(live) + windowMs;
+  const watched = live.status === 'WATCHLIST';
+  return {
+    id: live.id, kind: watched ? 'WATCHED_CANDIDATE' : 'LIVE_CANDIDATE', status: live.status, alertMs: alertMsOf(live), untilMs: until,
+    reason: `${sym} already has an earlier ${watched ? 'watched' : 'live (not submitted)'} candidate ${live.id} (alert ${hhmmss(alertMsOf(live))} ET) that holds the ticker until ${hhmmss(until)} ET. RB v1 keeps one live candidate per ticker and never pyramids; this alert is calculated for diagnostics only — NOT ACTIONABLE.`,
+  };
+}
+
+/** The id of the candidate that makes `rec` a DUPLICATE / EXISTING CANDIDATE, or null (see blockingCandidate). */
+export function existingCandidateFor(rec: AutoAlertRecord, candidates: Candidate[], _now?: number): string | null {
+  return blockingCandidate(rec, candidates)?.id ?? null;
 }
 
 function alertMsOf(c: Candidate): number {
@@ -269,6 +311,8 @@ export interface DecideArgs {
   cfg: AutomationConfig;
   parityMismatches: string[];
   duplicateOf: string | null;
+  /** Precise reason for a DUPLICATE / EXISTING CANDIDATE block (blockingCandidate); absent = the generic text. */
+  duplicateReason?: string | null;
   window?: { entryWindowStart: string; entryWindowEnd: string };
 }
 
@@ -323,7 +367,7 @@ export function decideAlert(a: DecideArgs): AlertDecision {
   if (!snap || incomplete.length || !snap.values) return out('DATA REVIEW REQUIRED', 'DATA INCOMPLETE — DO NOT TRADE', 'DATA_REVIEW', incomplete.map((i) => i.message));
 
   // 4 one live candidate / position per ticker
-  if (a.duplicateOf) return out('NOT ELIGIBLE', 'DUPLICATE / EXISTING CANDIDATE', 'IGNORE', [`${rec.alert.symbol} already has a live candidate, pending order or position. RB v1 never pyramids.`], null, ['DUPLICATE']);
+  if (a.duplicateOf) return out('NOT ELIGIBLE', 'DUPLICATE / EXISTING CANDIDATE', 'IGNORE', [a.duplicateReason ?? `${rec.alert.symbol} already has a live candidate, pending order or position. RB v1 never pyramids.`], null, ['DUPLICATE']);
 
   // 5 data trust
   const mism: string[] = [...review.map((i) => i.message), ...a.parityMismatches.map((m) => `Data parity: ${m}`)];

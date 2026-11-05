@@ -79,6 +79,10 @@ const PRESENTERS: Record<string, Presenter> = {
       if (sc?.basis === 'FROZEN — REFERENCE ONLY' && sc.value !== null && USER_LIFECYCLE.includes(r.lifecycle.executionState) && (r.ranked?.total ?? null) !== null) {
         return { score: sc.value, tiers: [(r.lifecycle.alertTimeTier as QualityTier | null) ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true, frozenLabel: 'Alert-time · frozen', live: r.ranked?.total ?? null };
       }
+      // Blocked as DUPLICATE: the alert's own diagnostic score (scored alone, never ranked) — NOT ACTIONABLE.
+      if (r.blocked) {
+        return { score: r.blocked.score ?? sc?.value ?? null, tiers: [r.blocked.tier ?? ((r.lifecycle?.alertTimeTier as QualityTier | null) ?? null)], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true, frozenLabel: 'NOT ACTIONABLE · diagnostic' };
+      }
       if (sc?.basis === 'FROZEN — REFERENCE ONLY' && (r.ranked?.total ?? null) === null) {
         return { score: sc.value, tiers: [(r.lifecycle.alertTimeTier as QualityTier | null) ?? null], decision: role === 'ACTIVE' ? r.decision.decision : null, frozen: true };
       }
@@ -294,6 +298,8 @@ export function detailFields(r: QueueRow) {
   const m = a?.signalMapping;
   const plan = r.live?.plan;
   const c = r.candidate;
+  // Alert blocked as DUPLICATE: its NOT ACTIONABLE diagnostic plan (no candidate, no live plan).
+  const bp = !c && !plan ? r.blocked?.plan ?? null : null;
   const ch = r.live?.chase ?? null;
   const pf = r.ranked?.portfolio ?? null;
   const parity = (r.shadow?.warnings ?? []).filter((w) => w.startsWith('PARITY'));
@@ -306,15 +312,15 @@ export function detailFields(r: QueueRow) {
     mappedCandle: m?.label ?? null,
     lagSec: m?.lagSec ?? null,
     mappingStatus: m?.status ?? null,
-    entry: c?.entry ?? plan?.entry ?? null,
-    stop: c?.stop ?? plan?.stop ?? null,
-    target: c?.target ?? plan?.target ?? null,
-    shares: c?.shares ?? plan?.shares ?? null,
-    plannedRisk: c?.plannedRisk ?? plan?.maxLoss ?? null,
+    entry: c?.entry ?? plan?.entry ?? bp?.entry ?? null,
+    stop: c?.stop ?? plan?.stop ?? bp?.stop ?? null,
+    target: c?.target ?? plan?.target ?? bp?.target ?? null,
+    shares: c?.shares ?? plan?.shares ?? bp?.shares ?? null,
+    plannedRisk: c?.plannedRisk ?? plan?.maxLoss ?? bp?.plannedRisk ?? null,
     /** The plan's own order instruction (same object as entry / stop / target / shares; never inferred from the side). */
-    orderType: c?.orderType ?? plan?.orderType ?? null,
+    orderType: c?.orderType ?? plan?.orderType ?? bp?.orderType ?? null,
     /** Where the plan values above come from: the candidate's frozen plan, or (no candidate) the live calculator plan. */
-    planSource: c ? ('CANDIDATE' as const) : plan ? ('LIVE_PLAN' as const) : null,
+    planSource: c ? ('CANDIDATE' as const) : plan ? ('LIVE_PLAN' as const) : bp ? ('BLOCKED_DIAGNOSTIC' as const) : null,
     atr: rec.snapshot?.values?.atr ?? null,
     currentPrice: r.quote?.price ?? c?.currentPrice ?? null,
     chase: ch,
