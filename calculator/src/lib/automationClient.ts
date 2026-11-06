@@ -274,17 +274,17 @@ export function useBrokerHistory(enabled: boolean, token: string, dates: string[
 }
 
 /** Server feature flags from rb-health (read-only). null = unknown (not loaded / failed) — treated as OFF. */
-export function useServerFlags(enabled: boolean, token: string, pollMs = 300_000): { cr15: boolean | null; rvolV1Observation: boolean | null } {
-  const [s, setS] = useState<{ cr15: boolean | null; rvolV1Observation: boolean | null }>({ cr15: null, rvolV1Observation: null });
+export function useServerFlags(enabled: boolean, token: string, pollMs = 300_000): { cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null } {
+  const [s, setS] = useState<{ cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null }>({ cr15: null, rvolV1Observation: null, referenceScores: null });
   useEffect(() => {
-    if (!enabled || !token) { setS({ cr15: null, rvolV1Observation: null }); return; }
+    if (!enabled || !token) { setS({ cr15: null, rvolV1Observation: null, referenceScores: null }); return; }
     let stop = false;
     const tick = async () => {
       try {
         const h = await checkHealth(token);
-        if (!stop) setS({ cr15: h.config?.cr15Enabled === true, rvolV1Observation: h.config?.rvolV1ObservationEnabled === true });
+        if (!stop) setS({ cr15: h.config?.cr15Enabled === true, rvolV1Observation: h.config?.rvolV1ObservationEnabled === true, referenceScores: h.config?.referenceScoresEnabled === true });
       } catch {
-        if (!stop) setS({ cr15: null, rvolV1Observation: null });
+        if (!stop) setS({ cr15: null, rvolV1Observation: null, referenceScores: null });
       }
     };
     void tick();

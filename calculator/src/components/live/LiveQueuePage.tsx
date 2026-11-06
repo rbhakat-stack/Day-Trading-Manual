@@ -1,5 +1,6 @@
 import { RvolObservationBanner } from './RvolObservationPanel';
 import type { RvolObservationRun } from '../../engine/automation/rvolObservation';
+import type { ReferenceEntry } from '../../lib/referenceScoreHook';
 import type { AlertSnapshotMap } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { useState } from 'react';
 import { ticketString, type FreshnessBand, type TrendSpiderTicket } from '../../engine/automation/alertDecision';
@@ -53,6 +54,8 @@ interface Props {
   pollMs?: number;
   /** RVOL POLICY V1 — OBSERVATION ONLY (display; absent or DISABLED = nothing rendered). */
   rvolObservation?: RvolObservationRun;
+  /** PHASE C — reference scores (null / absent = flag OFF). */
+  referenceScores?: ReadonlyMap<string, ReferenceEntry> | null;
   /** CR-11 — retained alert-time snapshot history (90 days) and its CSV export. */
   history?: { count: number; onExport: () => void };
   /** Write-once alert-time snapshots (read only; shown as the original recorded assessment). */
@@ -88,7 +91,7 @@ export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], 
     + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
 }
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, alertSnapshots, rvolObservation }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, alertSnapshots, rvolObservation, referenceScores }: Props) {
   const rvolObsById = new Map((rvolObservation?.observations ?? []).map((o) => [o.recordId, o]));
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
@@ -148,7 +151,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
 
       {rvolObservation && <RvolObservationBanner run={rvolObservation} />}
       {rows.length > 0 ? (
-        <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} snapshots={alertSnapshots} rvolObservations={rvolObsById} />
+        <QueueTable rows={shown} now={now} actions={actions} layout={layout} maxScore={shadow.maxScore} optionAGrades={shadow.optionAGrades} cols={cols} open={open} setOpen={setOpen} snapshots={alertSnapshots} rvolObservations={rvolObsById} referenceScores={referenceScores ?? null} />
       ) : (
         <Panel title="No alerts yet today">
           <p className="text-sm text-ink-400">Waiting for TrendSpider webhooks. A test alert can be sent as described in AUTOMATION.md.</p>

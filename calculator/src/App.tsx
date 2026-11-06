@@ -26,6 +26,7 @@ import { ParityView } from './components/live/ParityView';
 import { HistoricalSipTest } from './components/live/HistoricalSipTest';
 import { buildQueue, type QueueInput } from './engine/automation/liveQueue';
 import { useRvolObservation } from './lib/rvolObservationHook';
+import { useReferenceScores } from './lib/referenceScoreHook';
 import { inputsFromRecord } from './engine/automation/autoCandidate';
 import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
 import { etParts } from './engine/automation/etTime';
@@ -423,6 +424,8 @@ export default function App() {
   const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
   // RVOL POLICY V1 — OBSERVATION ONLY (server flag, default OFF). Deferred after the authoritative queue; display only.
   const rvolObservation = useRvolObservation(serverFlags.rvolV1Observation === true, queueInput, queue);
+  // PHASE C — reference-only scores and mismatch diagnostics (server flag, default OFF). Display only.
+  const referenceScores = useReferenceScores(serverFlags.referenceScores === true, queue, clock);
   // Saved only when you change it (a browser that never uses CR-15 gets no new storage key).
   const [cr15Mode, setCr15ModeState] = useState<Cr15Mode>(() => load<Cr15Mode>(AUTO_KEYS.cr15Mode, 'OFF'));
   const setCr15Mode = useCallback((m: Cr15Mode) => { setCr15ModeState(m); save(AUTO_KEYS.cr15Mode, m); }, []);
@@ -730,6 +733,7 @@ export default function App() {
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
                 rvolObservation={rvolObservation}
+                referenceScores={referenceScores}
               />
             )}
             {liveSub === 'parity' && (

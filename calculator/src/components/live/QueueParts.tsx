@@ -20,6 +20,8 @@ import type { LiveActions } from './LiveQueuePage';
 import { ShadowPanel } from './ShadowV12';
 import { LocationAuditLine } from '../ranker/ScoreCard';
 import { RvolObservationPanel } from './RvolObservationPanel';
+import type { ReferenceEntry } from '../../lib/referenceScoreHook';
+import { REFERENCE_LABEL } from '../../engine/automation/referenceScore';
 import type { RvolV1Observation } from '../../engine/automation/rvolObservation';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
 import type { AlertSnapshotMap, AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
@@ -46,6 +48,19 @@ const SidePill = ({ side }: { side: 'LONG' | 'SHORT' }) => <Pill s={{ label: sid
 const SCORE_TEXT: Record<Tone, string> = { ok: 'text-[#3ee08f]', elite: 'text-[#3ee08f]', info: 'text-[#3ee08f]', shadow: 'text-[#ffc542]', warn: 'text-[#ffc542]', muted: 'text-[#ff6b7f]', bad: 'text-[#ff6b7f]' };
 const TONE_TEXT: Record<Tone, string> = { ok: 'text-[#3ee08f]', warn: 'text-[#ffc542]', bad: 'text-[#ff6b7f]', info: 'text-[#9db8ff]', shadow: 'text-[#d9c8ff]', elite: 'text-[#d9c8ff]', muted: 'text-ink-200' };
 
+/** PHASE C — shown only where the authoritative score is empty and the flag is ON. Never a decision. */
+function RefScore({ e }: { e: ReferenceEntry | null | undefined }) {
+  if (!e) return <>—</>;
+  if (e.view.kind === 'UNAVAILABLE') return <span className="text-ink-400" title={e.view.reasons.join(' · ')}>—<span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Score unavailable</span></span>;
+  if (e.view.kind !== 'REFERENCE') return <>—</>;
+  const c = e.captured;
+  const shown = c ? c.total : e.view.total;
+  const when = c ? `${c.reconstructed ? 'RECONSTRUCTED / DIAGNOSTIC — computed' : 'captured at first evaluation'} ${fmtEt(c.atMs)} (this session; not stored)` : 'live reference';
+  return <span className="text-ink-400" title={`${REFERENCE_LABEL} · ${when}${c && c.total !== e.view.total ? ` · now ${e.view.total}` : ''}`}>{shown}<span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Reference only</span></span>;
+}
+function MismatchNote({ e }: { e: ReferenceEntry | null | undefined }) {
+  return e?.mismatch.label ? <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={e.mismatch.checks.filter((c) => c.status !== 'PASS').map((c) => `${c.indicator}: ${c.status}`).join(' · ')}>{e.mismatch.label}</span> : null;
+}
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 const money = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : usd(x, dp));
 const qualText = (q: Status) => (q.label === 'QUALIFIED' ? 'YES' : q.label === '—' ? '—' : 'NO');
@@ -153,13 +168,15 @@ export function QueueToolbar(props: {
 
 /* ───────────────────────── table ───────────────────────── */
 
-export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots, rvolObservations }: {
+export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots, rvolObservations, referenceScores }: {
   rows: QueueRow[]; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades;
   cols: ColumnGroups; open: Set<string>; setOpen: (ids: Set<string>) => void;
   /** Write-once alert-time snapshots (read only, for the original-assessment row). */
   snapshots?: AlertSnapshotMap;
   /** RVOL POLICY V1 — OBSERVATION ONLY, by record id (display only). */
   rvolObservations?: ReadonlyMap<string, RvolV1Observation>;
+  /** PHASE C — reference scores and mismatch diagnostics by record id (null / absent = flag OFF, existing presentation). */
+  referenceScores?: ReadonlyMap<string, ReferenceEntry> | null;
 }) {
   const [asc, setAsc] = useState(false);
   const sorted = useMemo(() => [...rows].sort((a, b) => (asc ? 1 : -1) * (a.record.alert.alertTimeMs - b.record.alert.alertTimeMs) || a.record.id.localeCompare(b.record.id)), [rows, asc]);
@@ -221,7 +238,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                     return (
                       <Fragment key={c.version}>
                         <td className={`${td} border-l ${edge(c)} text-[15px] font-bold ${cell.frozen ? 'text-ink-400' : tone}`} title={cell.frozen ? (cell.frozenLabel ? `Frozen alert-time score${cell.live != null ? ` — current re-evaluation ${cell.live} (live)` : ''}` : 'Frozen alert-time score — reference only · NOT RANKED') : undefined}>
-                          {cell.score ?? '—'}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}</span>}
+                          {cell.score ?? (c.role === 'ACTIVE' && referenceScores ? <RefScore e={referenceScores.get(r.record.id)} /> : '—')}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}</span>}
                           {cell.frozen && cell.live != null && <span className="block text-[10px] font-normal text-ink-500">now {cell.live} (live)</span>}
                         </td>
                         {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}><TierPill t={t} /></td>)}
@@ -248,7 +265,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                   {cols.safety && (
                     <>
                       <td className={td}><Pill s={chaseStatus(r)} title={chaseStatus(r).detail} /></td>
-                      <td className={td}><Pill s={dataStatus(r)} title={dataStatus(r).detail} /></td>
+                      <td className={td}><Pill s={dataStatus(r)} title={dataStatus(r).detail} />{referenceScores && <MismatchNote e={referenceScores.get(r.record.id)} />}</td>
                       <td className={td}><Pill s={portfolioStatus(r)} title={portfolioStatus(r).detail} /></td>
                     </>
                   )}
@@ -256,7 +273,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                 {isOpen && (
                   <tr>
                     <td colSpan={span} className="border-t border-ink-700 bg-ink-900/40 px-3 py-3">
-                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} rvolObservation={rvolObservations?.get(r.record.id) ?? null} />
+                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} rvolObservation={rvolObservations?.get(r.record.id) ?? null} reference={referenceScores ? referenceScores.get(r.record.id) ?? null : undefined} />
                     </td>
                   </tr>
                 )}
@@ -367,9 +384,9 @@ function RowLabel({ kind, sub }: { kind: Freshness; sub: string }) {
  * every original value is read from a genuinely recorded alert-time source, else NOT CAPTURED. The original row and
  * the change strip are informational only — the current Final execution state is the sole authority.
  */
-function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore, now, snapshot }: {
+function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore, now, snapshot, reference }: {
   r: QueueRow; f: ReturnType<typeof detailFields>; active: StrategyColumn; dec: Status; ex: Status; ds: Status; cs: Status; ps: Status;
-  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number; now: number; snapshot: AlertTimeSnapshot | null;
+  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number; now: number; snapshot: AlertTimeSnapshot | null; reference?: ReferenceEntry | null;
 }) {
   const a = r.record.alert;
   const lc = r.lifecycle;
@@ -425,7 +442,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
       <div className={rowGrid} data-row-group="live">
         <RowLabel kind="LIVE" sub="— Now" />
         <Card label="Score" mark={scoreMark}>
-          <span className={cell.tiers[0] && !cell.frozen ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? '—'}</span>
+          <span className={cell.tiers[0] && !cell.frozen ? SCORE_TEXT[scoreTone(cell.tiers[0])] : 'text-ink-100'}>{cell.score ?? (reference !== undefined ? <RefScore e={reference} /> : '—')}</span>
           <span className="text-[12px] font-semibold text-ink-400"> / {maxPts}</span>
           {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
         </Card>
@@ -436,7 +453,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
           <span className={TONE_TEXT[finalToneKey]} title={lc?.reason}>{finalText}</span>
           {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[10.5px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
         </Card>
-        <Card label="Data status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span></Card>
+        <Card label="Data status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span><MismatchNote e={reference} /></Card>
         <Card label="Chase status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
         <Card label="Portfolio status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
       </div>
@@ -489,7 +506,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   );
 }
 
-export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null, rvolObservation = null }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null; rvolObservation?: RvolV1Observation | null }) {
+export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null, rvolObservation = null, reference }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null; rvolObservation?: RvolV1Observation | null; reference?: ReferenceEntry | null }) {
   const f = detailFields(r);
   const s = r.record.snapshot;
   const v = s?.values;
@@ -515,7 +532,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
   return (
     <div className="sticky left-3 w-[calc(100cqw-1.5rem)] min-w-0 space-y-2 font-sans" data-details={r.record.id}>
       {active && (
-        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} />
+        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} reference={reference} />
       )}
       {comparison.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-3 py-1.5 text-[13px]" data-comparison="shadow">
@@ -602,6 +619,18 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
       </div>
 
       <RvolObservationPanel o={rvolObservation} />
+      {reference && (reference.mismatch.count > 0 || reference.view.kind === 'REFERENCE' || reference.view.kind === 'UNAVAILABLE') && (
+        <div className="rounded-lg border border-ink-700 bg-ink-850 p-2.5 text-[12.5px]">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">Indicator diagnostics{reference.mismatch.headline ? ` — ${reference.mismatch.headline}` : ''}</p>
+          {reference.view.kind === 'REFERENCE' && (
+            <p className="text-warn">{REFERENCE_LABEL}: {reference.captured?.total ?? reference.view.total} / 100 (setup {reference.captured?.setup ?? reference.view.setup} + fit {reference.captured?.fit ?? reference.view.fit}) · existing component formulas, hard-failed components 0 by the existing N/A rule · hard rules: {reference.view.hardFails.join(', ') || '—'}{reference.captured ? ` · ${reference.captured.reconstructed ? 'RECONSTRUCTED / DIAGNOSTIC' : 'captured at first evaluation'} ${fmtEt(reference.captured.atMs)} (this session; not stored)` : ''}</p>
+          )}
+          {reference.view.kind === 'REFERENCE' && <KV rows={reference.view.components.map((k) => [k.label, `${k.points} / ${k.max}${k.na ? ` — ${k.na}` : ''}`] as [string, string])} />}
+          {reference.view.kind === 'UNAVAILABLE' && <p className="text-ink-400">SCORE UNAVAILABLE — {reference.view.reasons.join(' · ')}</p>}
+          {reference.mismatch.checks.length > 0 && <KV rows={reference.mismatch.checks.map((c) => [`${c.indicator} — ${c.status}`, `${c.required} · RB ${c.rbValue} · TrendSpider actual ${c.trendspiderActual} · blocks: ${c.blocks} · ${c.reason}`] as [string, string])} />}
+          <p className="text-ink-400">The decision above is unchanged and is the only authority; a reference score never authorizes a trade.</p>
+        </div>
+      )}
 
       <details className="rounded-lg border border-ink-700 bg-ink-850 p-2.5 text-[12.5px]">
         <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-ink-400">More detail — indicators, hard rules, score breakdown, provenance, shadow comparison</summary>

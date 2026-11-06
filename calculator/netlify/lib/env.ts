@@ -44,5 +44,7 @@ export function configStatus() {
     cr15Enabled: env('RB_CR15_CROSSDAY_RECONCILIATION_ENABLED') === 'true',
     /** RVOL policy V1 OBSERVATION panel — display only, never affects decisions (default OFF; absent = OFF). */
     rvolV1ObservationEnabled: env('RB_RVOL_V1_OBSERVATION_ENABLED') === 'true',
+    /** Phase C reference-only scores and indicator mismatch diagnostics — display only (default OFF; absent = OFF). */
+    referenceScoresEnabled: env('RB_REFERENCE_SCORES_ENABLED') === 'true',
   };
 }
