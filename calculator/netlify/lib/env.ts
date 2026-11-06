@@ -42,5 +42,7 @@ export function configStatus() {
     brokerSyncEnabled: env('RB_BROKER_SYNC_ENABLED') === 'true',
     /** CR-15 cross-day Journal reconciliation — server kill switch (default OFF; the client also needs its own opt-in). */
     cr15Enabled: env('RB_CR15_CROSSDAY_RECONCILIATION_ENABLED') === 'true',
+    /** RVOL policy V1 OBSERVATION panel — display only, never affects decisions (default OFF; absent = OFF). */
+    rvolV1ObservationEnabled: env('RB_RVOL_V1_OBSERVATION_ENABLED') === 'true',
   };
 }

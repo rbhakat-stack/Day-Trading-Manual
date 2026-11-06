@@ -10,7 +10,7 @@ import FX from './rvol-v1-observation-2026-11-06.json';
 import type { AutoAlertRecord, LiveQuote } from '../alertDecision';
 import { DEFAULT_AUTOMATION } from '../alertDecision';
 import { buildQueue, type QueueInput, type QueueRow } from '../liveQueue';
-import { observeRvolPolicyV1, RVOL_V1_OBSERVATION_ENABLED } from '../rvolObservation';
+import { observeRvolPolicyV1, RVOL_V1_OBSERVATION_DEFAULT } from '../rvolObservation';
 import { applyRvolPolicyV1, evaluateRvolPolicyV1 } from '../rvolPolicyV1';
 import { cloneRankerDefaults } from '../../ranker/rankerSettings';
 import { classifyScore } from '../../ranker/candidateRanker';
@@ -36,7 +36,7 @@ const run = (q: QueueInput) => {
 const key = (r: QueueRow) => JSON.stringify([r.decision.decision, r.decision.detail, r.decision.ticket, r.ranked?.total ?? null, r.ranked?.tier ?? null, r.candidate]);
 
 describe('isolation', () => {
-  it('flag defaults OFF', () => expect(RVOL_V1_OBSERVATION_ENABLED).toBe(false));
+  it('flag defaults OFF', () => expect(RVOL_V1_OBSERVATION_DEFAULT).toBe(false));
   it('production QueueOutput is identical with and without computing the observation; results are immutable', () => {
     const recs = [byId('FTNT-S-1030'), byId('CARR'), byId('CTVA'), byId('Q-L')];
     const q = input(recs);
@@ -47,7 +47,7 @@ describe('isolation', () => {
     expect(Object.isFrozen(obs)).toBe(true);
     if (obs.length) expect(Object.isFrozen(obs[0].v1)).toBe(true);
   });
-  it('source guard: no authoritative module imports the policy or the observation; the panel is not mounted', () => {
+  it('source guard: no engine / Netlify module imports the policy or the observation; UI importers are exactly the display path', () => {
     const root = join(__dirname, '..', '..', '..', '..');
     const files: string[] = [];
     const walk = (d: string) => { for (const n of readdirSync(d)) { const p = join(d, n); if (statSync(p).isDirectory()) { if (n !== '__tests__' && n !== 'node_modules') walk(p); } else if (/\.(ts|tsx|mts)$/.test(n)) files.push(p); } };
@@ -57,8 +57,10 @@ describe('isolation', () => {
     const rel = (f: string) => relative(root, f).split(sep).join('/');
     const importers = (re: RegExp) => files.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(importers(/from '[^']*rvolPolicyV1'/)).toEqual(['src/engine/automation/rvolObservation.ts']);
-    expect(importers(/from '[^']*rvolObservation'/)).toEqual(['src/components/live/RvolObservationPanel.tsx']);
-    expect(importers(/RvolObservationPanel/)).toEqual(['src/components/live/RvolObservationPanel.tsx']); // defined, never mounted
+    expect(importers(/from '[^']*rvolObservation'/)).toEqual(['src/components/live/LiveQueuePage.tsx', 'src/components/live/QueueParts.tsx', 'src/components/live/RvolObservationPanel.tsx', 'src/lib/rvolObservationHook.ts']);
+    expect(importers(/from '[^']*rvolObservationHook'/)).toEqual(['src/App.tsx']);
+    // No engine (decision, queue, ranker, lifecycle, v1.2) or server module reaches the observation code.
+    expect(importers(/rvolObservation|rvolPolicyV1/).filter((f) => f.startsWith('netlify/') || (f.startsWith('src/engine/') && !/rvolObservation\.ts$|rvolPolicyV1\.ts$/.test(f)))).toEqual([]);
   });
 });
 

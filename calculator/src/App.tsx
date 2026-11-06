@@ -24,7 +24,8 @@ import { LiveQueuePage, type LiveActions } from './components/live/LiveQueuePage
 import { AutomationSettings } from './components/live/AutomationSettings';
 import { ParityView } from './components/live/ParityView';
 import { HistoricalSipTest } from './components/live/HistoricalSipTest';
-import { buildQueue } from './engine/automation/liveQueue';
+import { buildQueue, type QueueInput } from './engine/automation/liveQueue';
+import { useRvolObservation } from './lib/rvolObservationHook';
 import { inputsFromRecord } from './engine/automation/autoCandidate';
 import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
 import { etParts } from './engine/automation/etTime';
@@ -348,9 +349,11 @@ export default function App() {
   // S2a.2 — in-memory observation continuity per alert (server-time evidence); lost on reload by design (fail closed).
   const observationRef = useRef<ObservationMap>({});
   const observation = useMemo(() => (observationRef.current = observeContinuity(observationRef.current, feed.records, quotes, autoCfg)), [feed.records, quotes, autoCfg]);
-  const queue = useMemo(() => {
+  // The authoritative queue input (identical to the former inline argument; split out so the RVOL V1 observation can
+  // read the same input afterwards — it never feeds anything back).
+  const queueInput = useMemo<QueueInput | null>(() => {
     if (!autoCfg.enabled) return null;
-    return buildQueue({
+    return {
       records: feed.records,
       candidates,
       positions,
@@ -371,8 +374,9 @@ export default function App() {
       knownBrokerPositions,
       portfolioGate: verification.gated ? verification.reason : null,
       observation,
-    });
+    };
   }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation]);
+  const queue = useMemo(() => (queueInput ? buildQueue(queueInput) : null), [queueInput]);
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
   const authorizations = useMemo(() => (queue ? executionAuthorizations(queue.rows, clock) : null), [queue, clock]);
@@ -417,6 +421,8 @@ export default function App() {
 
   /* ── CR-15 cross-day Journal reconciliation (effective only when the SERVER flag AND this browser's mode are on) ── */
   const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
+  // RVOL POLICY V1 — OBSERVATION ONLY (server flag, default OFF). Deferred after the authoritative queue; display only.
+  const rvolObservation = useRvolObservation(serverFlags.rvolV1Observation === true, queueInput, queue);
   // Saved only when you change it (a browser that never uses CR-15 gets no new storage key).
   const [cr15Mode, setCr15ModeState] = useState<Cr15Mode>(() => load<Cr15Mode>(AUTO_KEYS.cr15Mode, 'OFF'));
   const setCr15Mode = useCallback((m: Cr15Mode) => { setCr15ModeState(m); save(AUTO_KEYS.cr15Mode, m); }, []);
@@ -723,6 +729,7 @@ export default function App() {
                 brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
+                rvolObservation={rvolObservation}
               />
             )}
             {liveSub === 'parity' && (

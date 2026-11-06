@@ -1,5 +1,6 @@
 /**
- * RVOL POLICY V1 — OBSERVATION ONLY. Feature flag RVOL_V1_OBSERVATION_ENABLED defaults to false and nothing mounts this.
+ * RVOL POLICY V1 — OBSERVATION ONLY. Enabled only by the server flag RB_RVOL_V1_OBSERVATION_ENABLED (rb-health
+ * config.rvolV1ObservationEnabled); absent / unknown / health failure = OFF. Display-only even when ON.
  *
  * Computes, SEPARATELY from production, what RB v1.1 would decide if RVOL policy V1 (rvolPolicyV1.ts) were active.
  * Isolation guarantees:
@@ -14,8 +15,10 @@ import type { AutoAlertRecord } from './alertDecision';
 import { buildQueue, type QueueInput, type QueueOutput, type QueueRow } from './liveQueue';
 import { applyRvolPolicyV1, evaluateRvolPolicyV1, type RvolV1Verdict } from './rvolPolicyV1';
 
-/** Default OFF. Observation is display-only even when enabled; it can never change a decision. */
-export const RVOL_V1_OBSERVATION_ENABLED = false;
+/** Default when the server flag is absent or unknown: OFF. Observation is display-only even when ON. */
+export const RVOL_V1_OBSERVATION_DEFAULT = false;
+/** Bound: above this many records the observation is skipped (status SKIPPED_BOUND), never truncated silently. */
+export const RVOL_V1_OBSERVATION_MAX_RECORDS = 600;
 export const RVOL_V1_OBSERVATION_LABEL = 'RVOL POLICY V1 — OBSERVATION ONLY';
 
 export interface RvolV1Side { decision: string; detail: string; score: number | null; tier: string | null; rvolPoints: number | null; ticket: boolean; plannedRisk: number | null }
@@ -66,6 +69,8 @@ function isolatedInput(q: QueueInput, records: AutoAlertRecord[]): QueueInput {
     broker: c(q.broker),
     releasedExposure: c(q.releasedExposure),
     knownBrokerEntries: c(q.knownBrokerEntries),
+    knownBrokerPositions: c(q.knownBrokerPositions),
+    observation: c(q.observation),
     cfg: c(q.cfg),
     rb: c(q.rb),
     rk: c(q.rk),
@@ -76,7 +81,7 @@ function isolatedInput(q: QueueInput, records: AutoAlertRecord[]): QueueInput {
  * Observation for every record whose V1 view differs from production (accepted RVOL or a peer-pool effect).
  * `production` must be the QueueOutput the app already computed from `q`; it is only read.
  */
-export function observeRvolPolicyV1(q: QueueInput, production: QueueOutput, extra?: Parameters<typeof evaluateRvolPolicyV1>[1]): readonly RvolV1Observation[] {
+export function observeRvolPolicyV1(q: QueueInput, production: QueueOutput, extra?: Parameters<typeof evaluateRvolPolicyV1>[1], opts: { includePeerEffects?: boolean } = { includePeerEffects: true }): readonly RvolV1Observation[] {
   const verdicts = new Map<string, RvolV1Verdict>();
   const v1Records = q.records.map((r) => {
     const v = evaluateRvolPolicyV1(r, extra);
@@ -93,6 +98,7 @@ export function observeRvolPolicyV1(q: QueueInput, production: QueueOutput, extr
     const verdict = verdicts.get(row.record.id)!;
     const changed = p.decision !== n.decision || p.score !== n.score || p.tier !== n.tier || p.ticket !== n.ticket;
     if (!verdict.accepted && !changed) continue;
+    if (!verdict.accepted && opts.includePeerEffects === false) continue; // live panel: RVOL-accepted alerts only
     out.push({
       recordId: row.record.id, label: RVOL_V1_OBSERVATION_LABEL, verdict, production: p, v1: n,
       rvolSourceDifference: verdict.accepted,
@@ -102,4 +108,30 @@ export function observeRvolPolicyV1(q: QueueInput, production: QueueOutput, extr
     });
   }
   return deepFreeze(out);
+}
+
+export interface RvolObservationRun {
+  status: 'DISABLED' | 'OK' | 'SKIPPED_BOUND' | 'ERROR';
+  observations: readonly RvolV1Observation[];
+  ms: number;
+  records: number;
+  error: string | null;
+  computedAtMs: number;
+}
+
+/**
+ * Failure-isolated, bounded runner used by the app AFTER the authoritative queue has been computed and rendered.
+ * Never throws: any error becomes status ERROR with no observations. Disabled → no computation at all.
+ */
+export function runRvolObservation(enabled: boolean, q: QueueInput | null, production: QueueOutput | null, now: () => number = () => Date.now(), observe: typeof observeRvolPolicyV1 = observeRvolPolicyV1): RvolObservationRun {
+  const t0 = now();
+  const base = { observations: deepFreeze([] as RvolV1Observation[]), ms: 0, records: q?.records.length ?? 0, error: null, computedAtMs: t0 };
+  if (!enabled || !q || !production) return deepFreeze({ ...base, status: 'DISABLED' as const });
+  if (q.records.length > RVOL_V1_OBSERVATION_MAX_RECORDS) return deepFreeze({ ...base, status: 'SKIPPED_BOUND' as const });
+  try {
+    const observations = observe(q, production, undefined, { includePeerEffects: false });
+    return deepFreeze({ ...base, status: 'OK' as const, observations, ms: now() - t0 });
+  } catch (e) {
+    return deepFreeze({ ...base, status: 'ERROR' as const, ms: now() - t0, error: e instanceof Error ? e.message.slice(0, 200) : 'observation failed' });
+  }
 }

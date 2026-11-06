@@ -19,6 +19,8 @@ import {
 import type { LiveActions } from './LiveQueuePage';
 import { ShadowPanel } from './ShadowV12';
 import { LocationAuditLine } from '../ranker/ScoreCard';
+import { RvolObservationPanel } from './RvolObservationPanel';
+import type { RvolV1Observation } from '../../engine/automation/rvolObservation';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
 import type { AlertSnapshotMap, AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
 import { alertTimeAssessment, changeSinceAlert, marketDataAge, timeSinceAlert, type AlertField } from './queueView';
@@ -151,11 +153,13 @@ export function QueueToolbar(props: {
 
 /* ───────────────────────── table ───────────────────────── */
 
-export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots }: {
+export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots, rvolObservations }: {
   rows: QueueRow[]; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades;
   cols: ColumnGroups; open: Set<string>; setOpen: (ids: Set<string>) => void;
   /** Write-once alert-time snapshots (read only, for the original-assessment row). */
   snapshots?: AlertSnapshotMap;
+  /** RVOL POLICY V1 — OBSERVATION ONLY, by record id (display only). */
+  rvolObservations?: ReadonlyMap<string, RvolV1Observation>;
 }) {
   const [asc, setAsc] = useState(false);
   const sorted = useMemo(() => [...rows].sort((a, b) => (asc ? 1 : -1) * (a.record.alert.alertTimeMs - b.record.alert.alertTimeMs) || a.record.id.localeCompare(b.record.id)), [rows, asc]);
@@ -252,7 +256,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                 {isOpen && (
                   <tr>
                     <td colSpan={span} className="border-t border-ink-700 bg-ink-900/40 px-3 py-3">
-                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} />
+                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} rvolObservation={rvolObservations?.get(r.record.id) ?? null} />
                     </td>
                   </tr>
                 )}
@@ -485,7 +489,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   );
 }
 
-export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null }) {
+export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null, rvolObservation = null }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null; rvolObservation?: RvolV1Observation | null }) {
   const f = detailFields(r);
   const s = r.record.snapshot;
   const v = s?.values;
@@ -596,6 +600,8 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
         {v && <button type="button" onClick={() => actions.openInCalculator(r)} className="rounded border border-ink-600 px-2.5 py-1 text-xs">Open in manual Calculator</button>}
         {(r.record.status === 'DATA_ERROR' || r.record.status === 'RECEIVED') && <button type="button" onClick={() => actions.reprocess(r.record.id)} className="rounded border border-warn px-2.5 py-1 text-xs text-warn">Retry market data</button>}
       </div>
+
+      <RvolObservationPanel o={rvolObservation} />
 
       <details className="rounded-lg border border-ink-700 bg-ink-850 p-2.5 text-[12.5px]">
         <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-ink-400">More detail — indicators, hard rules, score breakdown, provenance, shadow comparison</summary>
