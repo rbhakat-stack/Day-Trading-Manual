@@ -603,7 +603,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
           <div className="grid gap-3 lg:grid-cols-4">
             <Box title="Alert-time indicators (automated market data values)">
               {v ? (
-                <KV rows={[['O / H / L / C', `${p(v.open)} / ${p(v.high)} / ${p(v.low)} / ${p(v.close)}`], ['EMA9 / EMA20', `${p(v.ema9, 3)} / ${p(v.ema20, 3)}`], ['RSI14', p(v.rsi, 1)], ['RVOL20', p(v.rvol, 2)], [`VWAP (${s?.config.vwapMode})`, p(v.vwap, 3)], ['VWAP (other mode)', p(v.vwapAlternative, 3)], ['15m candle', s?.confirm15m?.label ?? '—'], ['15m Close / EMA20', `${p(v.close15m)} / ${p(v.ema20_15m, 3)}`]]} />
+                <KV rows={[['O / H / L / C', `${p(v.open)} / ${p(v.high)} / ${p(v.low)} / ${p(v.close)}`], ['EMA9 / EMA20', `${p(v.ema9, 3)} / ${p(v.ema20, 3)}`], ['RSI14', p(v.rsi, 1)], ['RVOL20 — RB current (used for eligibility)', p(v.rvol, 2)], ['RVOL20 — TrendSpider formula on Alpaca SIP (diagnostic only)', r.record.rvolDiagnostics ? p(r.record.rvolDiagnostics.tsFormulaSipRvol, 2) : 'not recorded at alert time'], ['RVOL20 — TrendSpider actual', 'NOT CAPTURED'], [`VWAP (${s?.config.vwapMode})`, p(v.vwap, 3)], ['VWAP (other mode)', p(v.vwapAlternative, 3)], ['15m candle', s?.confirm15m?.label ?? '—'], ['15m Close / EMA20', `${p(v.close15m)} / ${p(v.ema20_15m, 3)}`]]} />
               ) : (
                 <p className="text-warn">No complete snapshot.</p>
               )}

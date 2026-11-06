@@ -19,6 +19,7 @@ import type { Action, Direction, TradeResult } from '../tradeCalculator';
 import type { ParsedAlert } from './alertPayload';
 import type { DataIssue, SnapshotResult } from './alertSnapshot';
 import { etParts } from './etTime';
+import { isRvolOnlyMismatch, rvolOnlyExplanation, type RvolDiagnostics } from './rvolDiagnostics';
 
 /* ───────────────────────── shared record shape (server ↔ client) ───────────────────────── */
 
@@ -108,6 +109,8 @@ export interface AutoAlertRecord {
   enrichmentAudit?: EnrichmentAttempt[];
   /** Step 3 · A — present when the snapshot was completed on a retry (after the first attempt). */
   delayedReconstruction?: DelayedReconstruction | null;
+  /** RVOL transparency (diagnostic only, written once at alert time; never used for eligibility, scoring or tickets). Absent on older records. */
+  rvolDiagnostics?: RvolDiagnostics | null;
 }
 
 /** Step 3 · A — retry schedule for an incomplete signal candle: ~30, 60, 120 s after the previous attempt (4 attempts). */
@@ -416,7 +419,9 @@ export function decideAlert(a: DecideArgs): AlertDecision {
   if (a.duplicateOf) return out('NOT ELIGIBLE', 'DUPLICATE / EXISTING CANDIDATE', 'IGNORE', [a.duplicateReason ?? `${rec.alert.symbol} already has a live candidate, pending order or position. RB v1 never pyramids.`], null, ['DUPLICATE']);
 
   // 5 data trust
-  const mism: string[] = [...review.map((i) => i.message), ...a.parityMismatches.map((m) => `Data parity: ${m}`)];
+  // RVOL-only mismatch: same decision (DATA REVIEW, no ticket) — only the explanation is more precise.
+  const rvolOnly = isRvolOnlyMismatch(snap);
+  const mism: string[] = [...review.map((i) => (rvolOnly && i.code === 'ALERT_NOT_REPRODUCED' ? rvolOnlyExplanation(snap, rec.rvolDiagnostics, rec.alert.direction) : i.message)), ...a.parityMismatches.map((m) => `Data parity: ${m}`)];
   if (pm?.mismatch) mism.push(`PRICE SOURCE MISMATCH: TrendSpider $${rec.alert.lastPrice} vs provider $${rec.initialQuote?.price} (Δ $${pm.diff.toFixed(2)} > $${pm.tol.toFixed(2)}).`);
   if (mism.length) return out('DATA REVIEW REQUIRED', 'DATA MISMATCH — MANUAL REVIEW', 'DATA_REVIEW', mism);
 

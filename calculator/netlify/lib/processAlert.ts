@@ -13,6 +13,7 @@ import { buildAlertSnapshot, DEFAULT_SNAPSHOT_CONFIG, type SnapshotConfig } from
 import { CANDLE_MAX_ATTEMPTS, CANDLE_RETRY_DELAYS_MS, DEFAULT_AUTOMATION, type AutoAlertRecord, type DelayedReconstruction, type EnrichmentAttempt } from '../../src/engine/automation/alertDecision';
 import { delayedTriggerEvidence, signalWindow, verifySignalCandle } from '../../src/engine/automation/signalCompleteness';
 import type { Bar } from '../../src/engine/automation/indicators';
+import { buildRvolDiagnostics } from '../../src/engine/automation/rvolDiagnostics';
 import { needsRvolOptionalSnapshot, receiptAudit, withReconstruction, type AutoAlertRecordV12 } from '../../src/engine/automation/v12/audit';
 import { inputsFromRecord } from '../../src/engine/automation/autoCandidate';
 import { etParts, etToEpoch } from '../../src/engine/automation/etTime';
@@ -173,6 +174,13 @@ export async function enrichRecord(rec: AutoAlertRecord, deps: ProcessDeps): Pro
     const quote = trades[rec.alert.symbol] ?? null;
     const snapshot = buildAlertSnapshot(bars, rec.alert.alertTimeMs, rec.alert.direction, cfg);
     r.snapshot = snapshot;
+    // RVOL transparency — diagnostic only, from the same verified bars, written once at alert time. Any failure here
+    // only leaves the diagnostic empty; it can never change the snapshot, the decision inputs or the record status.
+    try {
+      r.rvolDiagnostics = buildRvolDiagnostics(bars, snapshot, new Date(deps.now()).toISOString());
+    } catch {
+      r.rvolDiagnostics = null;
+    }
     r.initialQuote = quote;
     const newest = bars.filter((b) => b.t + FIVE <= rec.alert.alertTimeMs).slice(-1)[0];
     r.marketDataThroughIso = newest ? new Date(newest.t + FIVE).toISOString() : null;

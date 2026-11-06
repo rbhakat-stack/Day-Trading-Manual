@@ -320,3 +320,26 @@ describe('Step 3 · D — eligible current-price data', () => {
     expect(Object.keys(q)).toEqual(['GM']);
   });
 });
+
+describe('RVOL transparency — written once at alert time from the verified bars; decision unchanged', () => {
+  it('CARR 10:05 (complete candle): rvolDiagnostics = TrendSpider formula on SIP, live RVOL untouched, never recomputed later', async () => {
+    const clock = { now: ALERT.CARR };
+    const d = deps('CARR', clock, client('CARR', clock, { lag: () => 0 }));
+    const rec = (await processAlert(body('CARR'), d) as { record: AutoAlertRecord }).record;
+    expect(rec.status).toBe('OK');
+    const diag = rec.rvolDiagnostics!;
+    // independent computation from the fixture: volume / SMA20 of the 20 completed regular-session candles before the signal
+    const sig = Date.parse('2026-11-05T15:00:00Z');
+    const prior = B5.CARR.filter((b) => b.t < sig).filter((b) => { const m = new Date(b.t).getUTCHours() * 60 + new Date(b.t).getUTCMinutes(); return m >= 14 * 60 + 30 && m < 21 * 60; }).slice(-20);
+    expect(prior).toHaveLength(20);
+    const base = prior.reduce((a, b) => a + b.v, 0) / 20;
+    expect(diag.baseline).toBeCloseTo(base, 6);
+    expect(diag.tsFormulaSipRvol).toBeCloseTo(rec.snapshot!.values!.volume / base, 12);
+    expect(diag.rbRvol).toBe(rec.snapshot!.values!.rvol); // live value untouched
+    expect(diag.trendspiderActual).toBeNull();
+    expect(diag.computedAtIso).toBe(rec.processedIso);
+    // immutability: a later pass returns the same record (the diagnostic is never recomputed from later data)
+    clock.now += 600_000;
+    expect((await enrichRecord(rec, d)).rvolDiagnostics).toEqual(diag);
+  });
+});
