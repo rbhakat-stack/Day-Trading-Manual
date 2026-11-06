@@ -15,7 +15,7 @@ import { RB_V1_DEFAULTS } from '../../settings';
 
 const ALL = [...(FX.records as unknown as AutoAlertRecord[]), ...(FXQ.records as unknown as AutoAlertRecord[])];
 const rec = (p: string) => structuredClone(ALL.find((r) => r.id.startsWith(p))!) as AutoAlertRecord;
-const AUDIT = { auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), evidence: 'SYNTHETIC', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, confirmation15mCompletedCandle: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
+const AUDIT = { ts15mCandle: 'COMPLETED' as const, auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), evidence: 'SYNTHETIC', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
 const S = (vwapBasis: VerifiedTsConfiguration['vwapBasis'], symbols = ['FTNT', 'CTVA']): VerifiedTsConfiguration => ({ ...AUDIT, vwapBasis, id: 'RBTS-S-001@TEST', ruleSet: 'RBTS-S-001', direction: 'SHORT', alertName: 'RB v1 SHORT Setup', symbols, conditionsAsSaved: EXPECTED_CONDITIONS.SHORT });
 const L = (vwapBasis: VerifiedTsConfiguration['vwapBasis']): VerifiedTsConfiguration => ({ ...AUDIT, vwapBasis, id: 'RBTS-L-001@TEST', ruleSet: 'RBTS-L-001', direction: 'LONG', alertName: 'RB v1 LONG Setup', symbols: ['Q'], conditionsAsSaved: EXPECTED_CONDITIONS.LONG });
 const accepted = (r: AutoAlertRecord, reg: VerifiedTsConfiguration[]) => prepareRvolPolicy([r], { a: true, registry: reg }, {})!.accepted.size === 1;
@@ -27,7 +27,7 @@ function row(r: AutoAlertRecord, policy: null | { a: true; registry: VerifiedTsC
 const auth = (x: QueueRow) => JSON.stringify([x.decision, x.ranked, x.candidate, x.live, x.lifecycle, x.blocked ?? null, x.shadow]);
 
 describe('registry: recognized TrendSpider VWAP settings', () => {
-  it('release gate: the production registry is still EMPTY', () => expect(VERIFIED_TS_CONFIGURATIONS).toEqual([]));
+  it('release gate: production entries all record the TrendSpider VWAP(14, 0, HLC3) setting', () => expect(VERIFIED_TS_CONFIGURATIONS.map((e) => e.vwapBasis)).toEqual(['TS_VWAP_14_0_HLC3', 'TS_VWAP_14_0_HLC3', 'TS_VWAP_14_0_HLC3']));
   it('exactly SESSION and TS_VWAP_14_0_HLC3 are recognized; OTHER (and anything else) is rejected', () => {
     expect(ACCEPTED_TS_VWAP_BASES).toEqual(['SESSION', 'TS_VWAP_14_0_HLC3']);
     expect(entryProblems(S('TS_VWAP_14_0_HLC3'))).toEqual([]);

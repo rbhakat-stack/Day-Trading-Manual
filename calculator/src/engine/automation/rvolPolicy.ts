@@ -21,6 +21,10 @@
  *   • RB_SESSION_VWAP_PASSED (8th prerequisite, Policy A only, defence in depth): RB evaluated the VWAP condition on
  *     SESSION VWAP (snapshot vwapMode SESSION) and it passed. This keeps RB's independent session-VWAP gate mandatory
  *     regardless of the TrendSpider VWAP setting recorded in the registry (which is not assumed equivalent).
+ *   • RB_COMPLETED_15M_PASSED (9th prerequisite, Policy A only): RB's OWN last COMPLETED regular-session 15m candle,
+ *     frozen in the alert-time snapshot, is present, complete (3/3 five-minute bars), not stale (ended at or before the
+ *     alert and < 15 min before it), its values are valid, and "15m Close >/< 15m EMA20" passed (re-verified from the
+ *     values). Never a forming or later value. Required regardless of the TrendSpider 15m semantics in the registry.
  */
 import type { AutoAlertRecord } from './alertDecision';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
@@ -67,6 +71,30 @@ export function rbSessionVwapPassed(r: AutoAlertRecord): boolean {
   return c.length === 1 && c[0].pass === true;
 }
 
+const FIFTEEN_MIN_MS = 15 * 60_000;
+const BAD_15M_ISSUES = ['NO_COMPLETED_15M', 'CONFIRM_15M_MISSING', 'CONFIRM_15M_PARTIAL', 'EMA20_15M_UNAVAILABLE'];
+/**
+ * RB's frozen alert-time confirmation on the last COMPLETED regular-session 15m candle passed. Missing, partial,
+ * stale or invalid → false. Reads only the immutable alert-time snapshot (never a live or forming value).
+ */
+export function rbCompleted15mPassed(r: AutoAlertRecord): boolean {
+  const s = r.snapshot;
+  const v = s?.values;
+  const c = s?.confirm15m;
+  if (!s || !v || !c || c.bars5 !== 3) return false;
+  if ((s.issues ?? []).some((i) => BAD_15M_ISSUES.includes(i.code))) return false;
+  const endMs = Date.parse(c.endIso);
+  const startMs = Date.parse(c.startIso);
+  const alertMs = r.alert.alertTimeMs;
+  if (!Number.isFinite(endMs) || !Number.isFinite(startMs) || endMs - startMs !== FIFTEEN_MIN_MS) return false;
+  if (!(endMs <= alertMs && alertMs - endMs < FIFTEEN_MIN_MS)) return false; // the last completed candle, not stale
+  if (!Number.isFinite(v.close15m) || !Number.isFinite(v.ema20_15m) || v.ema20_15m <= 0) return false;
+  const long = r.alert.direction === 'LONG';
+  const recomputed = long ? v.close15m > v.ema20_15m : v.close15m < v.ema20_15m;
+  const cond = s.alertConditions.filter((x) => /^15m Close [<>] 15m EMA20/.test(x.label));
+  return recomputed && cond.length === 1 && cond[0].pass === true && cond[0].label.includes(long ? '>' : '<');
+}
+
 /** Pure. Never mutates inputs. Returns null when Policy A is OFF (callers then run the unchanged engine). */
 export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicyFlags | null | undefined, frozen: AlertSnapshotMap | undefined): PreparedRvolPolicy | null {
   const eff = effectiveRvolPolicy(policy);
@@ -81,6 +109,7 @@ export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicy
     const cfg = checkConfiguration(r, policy?.registry ?? VERIFIED_TS_CONFIGURATIONS);
     if (!cfg.pass) return r; // configuration not verified → Policy A does not apply (fail closed)
     if (!rbSessionVwapPassed(r)) return r; // RB's own session-VWAP condition must pass (fail closed)
+    if (!rbCompleted15mPassed(r)) return r; // RB's own completed-15m confirmation must pass (fail closed)
     accepted.set(r.id, { policy: 'A', verdict: v, configuration: cfg, effectiveMinScore: 85 });
     return applyRvolPolicyV1(r, v);
   });

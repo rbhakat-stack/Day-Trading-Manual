@@ -21,7 +21,7 @@ import type { ManualPosition } from '../../ranker/opportunityTypes';
 const ALL = [...(FX.records as unknown as AutoAlertRecord[]), ...(FXQ.records as unknown as AutoAlertRecord[])];
 const rec = (p: string) => structuredClone(ALL.find((r) => r.id.startsWith(p))!) as AutoAlertRecord;
 const classify = (s: string) => KNOWN_CLASSIFICATIONS[s] ?? { sector: `Sector-${s}`, industry: `Industry-${s}`, theme: '' };
-const AUDIT = { auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), vwapBasis: 'SESSION' as const, evidence: 'SYNTHETIC', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, confirmation15mCompletedCandle: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
+const AUDIT = { ts15mCandle: 'COMPLETED' as const, auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), vwapBasis: 'SESSION' as const, evidence: 'SYNTHETIC', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
 const S: VerifiedTsConfiguration = { ...AUDIT, id: 'RBTS-S-001@TEST', ruleSet: 'RBTS-S-001', direction: 'SHORT', alertName: 'RB v1 SHORT Setup', symbols: ['FTNT', 'CARR', 'CTVA'], conditionsAsSaved: EXPECTED_CONDITIONS.SHORT };
 const L: VerifiedTsConfiguration = { ...AUDIT, id: 'RBTS-L-001@TEST', ruleSet: 'RBTS-L-001', direction: 'LONG', alertName: 'RB v1 LONG Setup', symbols: ['Q'], conditionsAsSaved: EXPECTED_CONDITIONS.LONG };
 const REG = [S, L];
@@ -44,9 +44,9 @@ function rvolPassedTwin(r: AutoAlertRecord): AutoAlertRecord {
   return t;
 }
 
-describe('fail closed: the production registry is EMPTY', () => {
-  it('release gate: VERIFIED_TS_CONFIGURATIONS is empty in this release candidate', () => {
-    expect(VERIFIED_TS_CONFIGURATIONS).toEqual([]);
+describe('fail closed: the production registry never matches the fixture alerts (all precede the 2026-11-06 17:00 ET audit or are not registered)', () => {
+  it('release gate: VERIFIED_TS_CONFIGURATIONS holds exactly the owner-approved Q / HIG / SWKS entries (full content gate in policyARegistryRelease.test.ts)', () => {
+    expect(VERIFIED_TS_CONFIGURATIONS.map((e) => e.id)).toEqual(['RBTS-L-001@2026-11-06/Q', 'RBTS-S-001@2026-11-06/HIG', 'RBTS-L-001@2026-11-06/SWKS']);
   });
   it('Policy A ON with the production registry → authoritative output identical to OFF on every fixture alert', () => {
     const recs = ALL.map((r) => structuredClone(r));
@@ -173,8 +173,14 @@ describe('an accepted alert is decided exactly like an RVOL-reproduced twin (no 
       const t = Date.parse(`2026-11-06T${hh}-05:00`);
       Object.assign(r, { receivedMs: t, receivedIso: new Date(t).toISOString(), processedIso: new Date(t + 1000).toISOString() });
       Object.assign(r.alert, { alertTimeMs: t, alertTimeIso: new Date(t).toISOString() });
+      // Keep the SYNTHETIC record internally consistent: its frozen 15m confirmation is the last completed 15m candle
+      // before the shifted alert time (values unchanged), as the alert-time snapshot builder would have recorded it.
+      const open = Date.parse('2026-11-06T09:30:00-05:00');
+      const end = Math.min(Date.parse('2026-11-06T16:00:00-05:00'), open + Math.floor((t - open) / 900_000) * 900_000);
+      r.snapshot!.confirm15m = { ...r.snapshot!.confirm15m!, startIso: new Date(end - 900_000).toISOString(), endIso: new Date(end).toISOString() };
       const on = row(buildQueue(input([r], { a: true, now: t + nowOff })), r.id);
       const twin = row(buildQueue(input([rvolPassedTwin(r)], { now: t + nowOff })), r.id);
+      expect(on.rvolPolicy).toBeTruthy(); // the scenario really exercises an ACCEPTED alert
       expect(on.decision).toEqual(twin.decision);
       expect(on.decision.ticket).toBeNull();
     }

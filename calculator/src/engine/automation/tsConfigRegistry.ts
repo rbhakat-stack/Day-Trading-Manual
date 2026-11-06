@@ -21,6 +21,11 @@ export const MAX_AUDIT_VALIDITY_DAYS = 30;
 /** TrendSpider VWAP settings an audited entry may record (see vwapBasis). Everything else is rejected. */
 export const ACCEPTED_TS_VWAP_BASES: readonly string[] = ['SESSION', 'TS_VWAP_14_0_HLC3'];
 
+/** Recorded TrendSpider 15m candle semantics an audited entry may carry (see ts15mCandle). Anything else → rejected. */
+export const ACCEPTED_TS_15M_CANDLE: readonly string[] = ['COMPLETED', 'FORMING', 'UNCONFIRMED'];
+/** Alert settings every audited entry must have verified as true (exactly these keys). */
+export const REQUIRED_SETTINGS = ['allConditionsAnd', 'signalTimeframe5m', 'triggerOnCandleClose', 'extendedHoursOff', 'webhookToRbEndpoint'] as const;
+
 /** The required saved conditions, verbatim (all combined with AND). An entry must list exactly these. */
 export const EXPECTED_CONDITIONS: Record<'LONG' | 'SHORT', readonly string[]> = {
   LONG: ['5m Close > VWAP', 'EMA9 > EMA20', 'RSI(14) > 55', 'RVOL(20, SMA, 1) > 1.5', '5m Close > Open', 'Completed 15m Close > EMA20(15m)'],
@@ -52,8 +57,18 @@ export interface VerifiedTsConfiguration {
    * TrendSpider setting can only make acceptance stricter, never looser.
    */
   vwapBasis: 'SESSION' | 'TS_VWAP_14_0_HLC3' | 'OTHER';
-  /** Alert settings seen in the screenshots — every one must be true. */
-  settings: { allConditionsAnd: boolean; signalTimeframe5m: boolean; confirmation15mCompletedCandle: boolean; triggerOnCandleClose: boolean; extendedHoursOff: boolean; webhookToRbEndpoint: boolean };
+  /**
+   * Which 15-minute candle TrendSpider's "15m Close vs 15m EMA20" condition evaluates, recorded honestly:
+   *   'COMPLETED'   — independently verified: the last completed 15m candle;
+   *   'FORMING'     — independently verified: the still-forming 15m candle;
+   *   'UNCONFIRMED' — not established (TrendSpider documents neither; RB's archive cannot distinguish them).
+   * Never record UNCONFIRMED as COMPLETED. Whatever is recorded, Policy A additionally requires RB's OWN last
+   * COMPLETED regular-session 15m confirmation, frozen at alert time, to have passed (rvolPolicy.ts:
+   * RB_COMPLETED_15M_PASSED), so the TrendSpider semantics can only make acceptance stricter.
+   */
+  ts15mCandle: 'COMPLETED' | 'FORMING' | 'UNCONFIRMED';
+  /** Alert settings verified by the audit — every one must be true. */
+  settings: { allConditionsAnd: boolean; signalTimeframe5m: boolean; triggerOnCandleClose: boolean; extendedHoursOff: boolean; webhookToRbEndpoint: boolean };
   /** Audit window (ET dates as epoch ms). validUntilMs − auditedAtMs ≤ MAX_AUDIT_VALIDITY_DAYS. */
   auditedAtMs: number;
   validUntilMs: number;
@@ -62,8 +77,31 @@ export interface VerifiedTsConfiguration {
   auditedBy: string;
 }
 
-/** EMPTY by design until the TrendSpider audit evidence is reviewed and approved. */
-export const VERIFIED_TS_CONFIGURATIONS: readonly VerifiedTsConfiguration[] = [];
+/**
+ * Owner-approved audited configurations (approval 2026-11-06, "Option 2"). One entry per separately saved TrendSpider
+ * alert. Evidence: the owner's manual inspection of each saved alert on 2026-11-06 after the close — six conditions as
+ * required, VWAP(14, 0, HLC3), all conditions AND, 5-minute candle-close evaluation, regular session / extended hours
+ * off; CR-012 template audit 2026-10-31; webhook delivery to RB proven at runtime by authenticated stored alerts.
+ * NOT established (recorded, not assumed): TrendSpider 15m candle semantics (UNCONFIRMED); alert repeat / expiry.
+ * HIG and SWKS: rule_set notes saved by the owner after the close on 2026-11-06 — first labelled live alerts PENDING
+ * (until they arrive with the rule_set, Policy A cannot match them). The audit window starts 2026-11-06 17:00 ET (after
+ * every Nov 6 alert) and lasts the maximum 30 days: re-audit before 2026-12-06 17:00 ET or the entries lapse.
+ * FTNT, KKR, HCA and every other configuration are deliberately absent.
+ */
+const AUDIT_2026_11_06 = {
+  vwapBasis: 'TS_VWAP_14_0_HLC3',
+  ts15mCandle: 'UNCONFIRMED',
+  settings: { allConditionsAnd: true, signalTimeframe5m: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true },
+  auditedAtMs: Date.parse('2026-11-06T22:00:00Z'),
+  validUntilMs: Date.parse('2026-12-06T22:00:00Z'),
+  evidence: 'Owner manual inspection of the saved TrendSpider alert, 2026-11-06 (six conditions, VWAP(14,0,HLC3), AND, 5m candle close, extended hours off); CR-012 audit 2026-10-31; authenticated webhook deliveries in the RB alert archive',
+  auditedBy: 'Owner (rbhakat-stack)',
+} as const;
+export const VERIFIED_TS_CONFIGURATIONS: readonly VerifiedTsConfiguration[] = Object.freeze([
+  { ...AUDIT_2026_11_06, id: 'RBTS-L-001@2026-11-06/Q', ruleSet: 'RBTS-L-001', direction: 'LONG', alertName: 'RB v1 LONG Setup', symbols: ['Q'], conditionsAsSaved: EXPECTED_CONDITIONS.LONG },
+  { ...AUDIT_2026_11_06, id: 'RBTS-S-001@2026-11-06/HIG', ruleSet: 'RBTS-S-001', direction: 'SHORT', alertName: 'RB v1 SHORT Setup', symbols: ['HIG'], conditionsAsSaved: EXPECTED_CONDITIONS.SHORT },
+  { ...AUDIT_2026_11_06, id: 'RBTS-L-001@2026-11-06/SWKS', ruleSet: 'RBTS-L-001', direction: 'LONG', alertName: 'RB v1 LONG Setup', symbols: ['SWKS'], conditionsAsSaved: EXPECTED_CONDITIONS.LONG },
+] satisfies VerifiedTsConfiguration[]);
 
 export interface ConfigurationCheck { pass: boolean; configId: string | null; detail: string }
 
@@ -74,8 +112,10 @@ export function entryProblems(e: VerifiedTsConfiguration): string[] {
   if (!want) p.push('direction');
   else if (e.conditionsAsSaved.length !== want.length || want.some((c, i) => e.conditionsAsSaved[i] !== c)) p.push('conditions differ from the required rule set');
   if (!ACCEPTED_TS_VWAP_BASES.includes(e.vwapBasis)) p.push('VWAP setting is not a recognized audited configuration');
+  if (!ACCEPTED_TS_15M_CANDLE.includes(e.ts15mCandle)) p.push('15m candle semantics not recorded');
   for (const [k, v] of Object.entries(e.settings ?? {})) if (v !== true) p.push(`setting ${k} not verified`);
-  if (Object.keys(e.settings ?? {}).length !== 6) p.push('settings incomplete');
+  const keys = Object.keys(e.settings ?? {});
+  if (keys.length !== REQUIRED_SETTINGS.length || REQUIRED_SETTINGS.some((k) => !keys.includes(k))) p.push('settings incomplete');
   if (!e.symbols?.length || e.symbols.some((s) => !s || s.includes('*'))) p.push('symbols must be an explicit list');
   if (!(Number.isFinite(e.auditedAtMs) && Number.isFinite(e.validUntilMs) && e.validUntilMs > e.auditedAtMs)) p.push('audit window invalid');
   else if (e.validUntilMs - e.auditedAtMs > MAX_AUDIT_VALIDITY_DAYS * 86_400_000) p.push(`audit window longer than ${MAX_AUDIT_VALIDITY_DAYS} days`);

@@ -16,7 +16,7 @@ import type { AlertSnapshotMap } from '../lifecycle/alertTimeSnapshot';
 import { EXPECTED_CONDITIONS, type VerifiedTsConfiguration } from '../tsConfigRegistry';
 
 /** SYNTHETIC audited registry for these tests (production registry is EMPTY → Policy A fails closed; see rvolPolicyAConfig.test.ts). */
-const AUDIT = { auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), vwapBasis: 'SESSION' as const, evidence: 'TEST', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, confirmation15mCompletedCandle: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
+const AUDIT = { ts15mCandle: 'COMPLETED' as const, auditedAtMs: Date.parse('2026-11-05T05:00:00Z'), validUntilMs: Date.parse('2026-11-20T05:00:00Z'), vwapBasis: 'SESSION' as const, evidence: 'TEST', auditedBy: 'TEST', settings: { allConditionsAnd: true, signalTimeframe5m: true, triggerOnCandleClose: true, extendedHoursOff: true, webhookToRbEndpoint: true } };
 export const TEST_REGISTRY: VerifiedTsConfiguration[] = [
   { ...AUDIT, id: 'RBTS-S-001@TEST', ruleSet: 'RBTS-S-001', direction: 'SHORT', alertName: 'RB v1 SHORT Setup', symbols: ['FTNT', 'CARR', 'CTVA', 'NCLH'], conditionsAsSaved: EXPECTED_CONDITIONS.SHORT },
   { ...AUDIT, id: 'RBTS-L-001@TEST', ruleSet: 'RBTS-L-001', direction: 'LONG', alertName: 'RB v1 LONG Setup', symbols: ['Q', 'NCLH'], conditionsAsSaved: EXPECTED_CONDITIONS.LONG },
