@@ -92,7 +92,7 @@ export function indicatorChecks(r: QueueRow): IndicatorCheck[] {
       : rule === 'CLOSE_VS_VWAP' ? `Close ${f(v.close)} · VWAP ${f(v.vwap, 3)}`
         : rule === 'EMA9_VS_EMA20' ? `EMA9 ${f(v.ema9, 3)} · EMA20 ${f(v.ema20, 3)}`
           : rule === 'RSI' ? f(v.rsi, 1)
-            : rule === 'RVOL' ? `${f(v.rvol)} (TrendSpider formula on SIP ${r.record.rvolDiagnostics ? f(r.record.rvolDiagnostics.tsFormulaSipRvol) : 'not recorded'})`
+            : rule === 'RVOL' ? `${f(v.rvol)} (current RB formula; the TrendSpider-formula SIP value is shown in the RVOL diagnostic rows)`
               : rule === 'CANDLE_DIRECTION' ? `Open ${f(v.open)} · Close ${f(v.close)}`
                 : rule === 'CONFIRM_15M' ? `15m Close ${f(v.close15m)} · EMA20 ${f(v.ema20_15m, 3)}` : '—';
     let status: CheckStatus;
