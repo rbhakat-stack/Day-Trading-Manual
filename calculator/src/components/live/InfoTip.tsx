@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 
 /**
  * Small "i" help icon for a field heading. Opens on hover, keyboard focus or click / tap (click pins it open for
- * touch); Escape, blur or a second click closes it. The panel is position:fixed next to the icon so a scrolling table
+ * touch); Escape, focus loss, any scroll or a second click closes it. The panel is position:fixed next to the icon so a scrolling table
  * never clips it, and it is clamped inside the viewport. Presentation only.
  */
 export function InfoTip({ label, text }: { label: string; text: string }) {
@@ -27,11 +27,10 @@ export function InfoTip({ label, text }: { label: string; text: string }) {
     if (!open) return;
     const close = () => { setHover(false); setPinned(false); };
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    // The panel is fixed to where the icon was: any scroll (page or table) or resize closes it rather than detaching it.
+    // The panel is fixed to where the icon was: any scroll (page or table) closes it rather than detaching it.
     window.addEventListener('keydown', esc);
     window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => { window.removeEventListener('keydown', esc); window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
+    return () => { window.removeEventListener('keydown', esc); window.removeEventListener('scroll', close, true); };
   }, [open]);
   return (
     <span className="relative inline-block align-middle" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
