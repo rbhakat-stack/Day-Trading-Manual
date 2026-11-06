@@ -16,7 +16,9 @@
  */
 import type { AutoAlertRecordV12 } from './v12/audit';
 import type { QueueRow } from './liveQueue';
-import { FIT_KEYS, SETUP_KEYS, type ComponentKey, type ComponentScore } from '../ranker/opportunityTypes';
+import { FIT_KEYS, SETUP_KEYS, type ComponentKey, type ComponentScore, type QualityTier } from '../ranker/opportunityTypes';
+import { classifyScore } from '../ranker/candidateRanker';
+import type { RankerSettings } from '../ranker/rankerSettings';
 
 export const REFERENCE_LABEL = 'REFERENCE ONLY — NOT ELIGIBLE FOR EXECUTION';
 
@@ -51,6 +53,15 @@ export function scoreView(r: QueueRow): ScoreView {
   if (missingComp.length) return { kind: 'UNAVAILABLE', reasons: missingComp };
   const t = totalFromComponents(k.components);
   return { kind: 'REFERENCE', ...t, components: k.components, hardFails: [...new Set(k.hardFails.filter((f) => !['NO_POSITION_SLOT', 'CAPITAL_LIMIT', 'PORTFOLIO_HEAT_LIMIT', 'CORRELATION_LIMIT'].includes(f.code)).map((f) => f.code))] };
+}
+
+/**
+ * DISPLAY-ONLY tier for a REFERENCE score: the production classifier (classifyScore, the Ranker's current grades) applied
+ * to the reference total. Never stored, never fed to any decision, ranking or ticket. Only called for a REFERENCE view —
+ * an UNAVAILABLE score never gets a tier (shown as N/A).
+ */
+export function referenceTier(total: number, grades: RankerSettings['grades']): QualityTier {
+  return classifyScore(total, { grades } as RankerSettings);
 }
 
 /* ───────────────────────── indicator mismatch diagnostics ───────────────────────── */

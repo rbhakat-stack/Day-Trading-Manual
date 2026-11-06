@@ -21,7 +21,9 @@ import { ShadowPanel } from './ShadowV12';
 import { LocationAuditLine } from '../ranker/ScoreCard';
 import { RvolObservationPanel } from './RvolObservationPanel';
 import type { ReferenceEntry } from '../../lib/referenceScoreHook';
-import { REFERENCE_LABEL } from '../../engine/automation/referenceScore';
+import { REFERENCE_LABEL, referenceTier } from '../../engine/automation/referenceScore';
+import { InfoTip } from './InfoTip';
+import { decisionHelp, EXECUTION_HELP, FINAL_HELP, placeOrderHint, scoreHelp, tierHelp } from './fieldHelp';
 import type { RvolV1Observation } from '../../engine/automation/rvolObservation';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
 import type { AlertSnapshotMap, AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
@@ -57,6 +59,39 @@ function RefScore({ e }: { e: ReferenceEntry | null | undefined }) {
   const shown = c ? c.total : e.view.total;
   const when = c ? `${c.reconstructed ? 'RECONSTRUCTED / DIAGNOSTIC — computed' : 'captured at first evaluation'} ${fmtEt(c.atMs)} (this session; not stored)` : 'live reference';
   return <span className="text-ink-400" title={`${REFERENCE_LABEL} · ${when}${c && c.total !== e.view.total ? ` · now ${e.view.total}` : ''}`}>{shown}<span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Reference only</span></span>;
+}
+/** Help text for an ACTIVE-column heading (Score / Tier / Decision / Execution / Final State); null for other headings. */
+function fieldHelp(h: string, scoreLabel: string, g: Grades): string | null {
+  if (h === scoreLabel) return scoreHelp(g);
+  return h === 'Tier' ? tierHelp(g) : h === 'Decision' ? decisionHelp(g) : h === 'Execution' ? EXECUTION_HELP : h === 'Final State' ? FINAL_HELP : null;
+}
+/** Tier for a row whose AUTHORITATIVE score is empty (Phase C ON only): the tier of the displayed reference score
+ *  (grey, "Reference only"), or N/A when no reliable score exists. Never an authoritative tier. */
+export function RefTier({ e, grades }: { e: ReferenceEntry | null | undefined; grades: Grades }) {
+  if (e?.view.kind === 'UNAVAILABLE') return <span className="text-ink-400" title={`No reliable score — no tier. ${e.view.reasons.join(' · ')}`}>N/A</span>;
+  if (e?.view.kind !== 'REFERENCE') return <TierPill t={null} />;
+  const total = e.captured ? e.captured.total : e.view.total; // the same number the Score cell shows
+  const t = referenceTier(total, grades);
+  return <span title={`${REFERENCE_LABEL} — tier of reference score ${total}; diagnostic only.`}><Pill s={{ label: TIER_SHORT[t], tone: 'muted' }} /><span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Reference only</span></span>;
+}
+/** Help for the five primary fields, placed just ABOVE the decision panel: the panel itself stays free of
+ *  interactive controls (existing invariant: "the panel offers no new action"). */
+function FieldHelpStrip({ grades }: { grades: Grades }) {
+  return (
+    <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-400" data-field-help="primary">
+      <span>Field help:</span>
+      <span>Score<InfoTip label="Score" text={scoreHelp(grades)} /></span>
+      <span>Tier<InfoTip label="Tier" text={tierHelp(grades)} /></span>
+      <span>Decision<InfoTip label="Decision" text={decisionHelp(grades)} /></span>
+      <span>Execution<InfoTip label="Execution" text={EXECUTION_HELP} /></span>
+      <span>Final State<InfoTip label="Final State" text={FINAL_HELP} /></span>
+    </div>
+  );
+}
+/** Case A only (see placeOrderHint): the authoritative state already says an order may be placed now. */
+function PlaceHint({ r }: { r: QueueRow }) {
+  const h = placeOrderHint(r);
+  return h ? <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#3ee08f]" title={h.detail}>{h.label}</span> : null;
 }
 function MismatchNote({ e }: { e: ReferenceEntry | null | undefined }) {
   return e?.mismatch.label ? <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={e.mismatch.checks.filter((c) => c.status !== 'PASS').map((c) => `${c.indicator}: ${c.status}`).join(' · ')}>{e.mismatch.label}</span> : null;
@@ -208,7 +243,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
           </tr>
           <tr className="text-center">
             {strat.map((c) => stratCols(c).map((h, i, a) => (
-              <th key={`${c.version}-${h}`} className={`${th} text-[12px] font-medium text-ink-300 ${i === 0 ? `border-l ${edge(c)}` : ''} ${i === a.length - 1 ? `border-r ${edge(c)}` : ''}`}>{h}</th>
+              <th key={`${c.version}-${h}`} className={`${th} text-[12px] font-medium text-ink-300 ${i === 0 ? `border-l ${edge(c)}` : ''} ${i === a.length - 1 ? `border-r ${edge(c)}` : ''}`}>{h}{c.role === 'ACTIVE' && fieldHelp(h, c.scoreLabel, optionAGrades) && <InfoTip label={h} text={fieldHelp(h, c.scoreLabel, optionAGrades)!} />}</th>
             )))}
           </tr>
         </thead>
@@ -241,12 +276,12 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                           {cell.score ?? (c.role === 'ACTIVE' && referenceScores ? <RefScore e={referenceScores.get(r.record.id)} /> : '—')}{cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}</span>}
                           {cell.frozen && cell.live != null && <span className="block text-[10px] font-normal text-ink-500">now {cell.live} (live)</span>}
                         </td>
-                        {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}><TierPill t={t} /></td>)}
+                        {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}>{c.role === 'ACTIVE' && i === 0 && cell.score === null && !t && referenceScores ? <RefTier e={referenceScores.get(r.record.id)} grades={optionAGrades} /> : <TierPill t={t} />}</td>)}
                         {c.role === 'ACTIVE' && (
                           <>
                             <td className={td}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
                             <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
-                            <td className={`${td} border-r ${edge(c)}`}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
+                            <td className={`${td} border-r ${edge(c)}`}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /><PlaceHint r={r} /></td>
                           </>
                         )}
                       </Fragment>
@@ -384,9 +419,9 @@ function RowLabel({ kind, sub }: { kind: Freshness; sub: string }) {
  * every original value is read from a genuinely recorded alert-time source, else NOT CAPTURED. The original row and
  * the change strip are informational only — the current Final execution state is the sole authority.
  */
-function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore, now, snapshot, reference }: {
+function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, maxScore, now, snapshot, reference, grades }: {
   r: QueueRow; f: ReturnType<typeof detailFields>; active: StrategyColumn; dec: Status; ex: Status; ds: Status; cs: Status; ps: Status;
-  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number; now: number; snapshot: AlertTimeSnapshot | null; reference?: ReferenceEntry | null;
+  finTone: Tone; fin: ReturnType<typeof finalState>; maxScore: number; now: number; snapshot: AlertTimeSnapshot | null; reference?: ReferenceEntry | null; grades: Grades;
 }) {
   const a = r.record.alert;
   const lc = r.lifecycle;
@@ -446,7 +481,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
           <span className="text-[12px] font-semibold text-ink-400"> / {maxPts}</span>
           {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
         </Card>
-        <Card label="Tier" mark={scoreMark}><TierPill t={cell.tiers[0] ?? null} /></Card>
+        <Card label="Tier" mark={scoreMark}>{cell.score === null && !cell.tiers[0] && reference !== undefined ? <RefTier e={reference} grades={grades} /> : <TierPill t={cell.tiers[0] ?? null} />}</Card>
         <Card label="Decision" mark="LIVE"><span className={TONE_TEXT[dec.tone]} title={`${r.decision.decision} — ${r.decision.detail}`}>{dec.label}</span></Card>
         <Card label="Current execution state" mark="LIVE"><span className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</span></Card>
         <Card label="Final execution state (Final Actionability)" mark="LIVE" wide>
@@ -531,8 +566,9 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
   const ex = executionBadge(r);
   return (
     <div className="sticky left-3 w-[calc(100cqw-1.5rem)] min-w-0 space-y-2 font-sans" data-details={r.record.id}>
+      {active && <FieldHelpStrip grades={optionAGrades} />}
       {active && (
-        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} reference={reference} />
+        <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} reference={reference} grades={optionAGrades} />
       )}
       {comparison.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-8 gap-y-1 rounded-lg border border-dashed border-[#6a46b8]/70 bg-ink-900 px-3 py-1.5 text-[13px]" data-comparison="shadow">
