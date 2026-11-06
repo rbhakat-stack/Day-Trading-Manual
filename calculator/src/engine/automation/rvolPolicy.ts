@@ -18,6 +18,9 @@
  *   • CONFIGURATION_VERIFIED (7th prerequisite, Policy A only): the alert must belong to an audited TrendSpider
  *     configuration in tsConfigRegistry.ts (code-reviewed; EMPTY until the audit evidence is approved → fail closed).
  *     A webhook label alone never qualifies. The observation verdict (rvolPolicyV1) is unchanged.
+ *   • RB_SESSION_VWAP_PASSED (8th prerequisite, Policy A only, defence in depth): RB evaluated the VWAP condition on
+ *     SESSION VWAP (snapshot vwapMode SESSION) and it passed. This keeps RB's independent session-VWAP gate mandatory
+ *     regardless of the TrendSpider VWAP setting recorded in the registry (which is not assumed equivalent).
  */
 import type { AutoAlertRecord } from './alertDecision';
 import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
@@ -56,6 +59,14 @@ export interface PreparedRvolPolicy {
 
 const FROZEN_DATA_REVIEW = 'DATA REVIEW REQUIRED';
 
+/** RB evaluated "5m Close > / < VWAP" on SESSION VWAP and the condition passed. Missing or other mode → false. */
+export function rbSessionVwapPassed(r: AutoAlertRecord): boolean {
+  const s = r.snapshot;
+  if (!s?.values || s.config?.vwapMode !== 'SESSION') return false;
+  const c = s.alertConditions.filter((x) => /^5m Close [<>] VWAP/.test(x.label));
+  return c.length === 1 && c[0].pass === true;
+}
+
 /** Pure. Never mutates inputs. Returns null when Policy A is OFF (callers then run the unchanged engine). */
 export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicyFlags | null | undefined, frozen: AlertSnapshotMap | undefined): PreparedRvolPolicy | null {
   const eff = effectiveRvolPolicy(policy);
@@ -69,6 +80,7 @@ export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicy
     if (!v.accepted) return r;
     const cfg = checkConfiguration(r, policy?.registry ?? VERIFIED_TS_CONFIGURATIONS);
     if (!cfg.pass) return r; // configuration not verified → Policy A does not apply (fail closed)
+    if (!rbSessionVwapPassed(r)) return r; // RB's own session-VWAP condition must pass (fail closed)
     accepted.set(r.id, { policy: 'A', verdict: v, configuration: cfg, effectiveMinScore: 85 });
     return applyRvolPolicyV1(r, v);
   });

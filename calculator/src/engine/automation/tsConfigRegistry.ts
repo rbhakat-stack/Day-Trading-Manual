@@ -18,6 +18,9 @@ import type { AutoAlertRecord } from './alertDecision';
 
 export const MAX_AUDIT_VALIDITY_DAYS = 30;
 
+/** TrendSpider VWAP settings an audited entry may record (see vwapBasis). Everything else is rejected. */
+export const ACCEPTED_TS_VWAP_BASES: readonly string[] = ['SESSION', 'TS_VWAP_14_0_HLC3'];
+
 /** The required saved conditions, verbatim (all combined with AND). An entry must list exactly these. */
 export const EXPECTED_CONDITIONS: Record<'LONG' | 'SHORT', readonly string[]> = {
   LONG: ['5m Close > VWAP', 'EMA9 > EMA20', 'RSI(14) > 55', 'RVOL(20, SMA, 1) > 1.5', '5m Close > Open', 'Completed 15m Close > EMA20(15m)'],
@@ -36,8 +39,19 @@ export interface VerifiedTsConfiguration {
   symbols: readonly string[];
   /** Conditions exactly as seen in the condition editor screenshot (must equal EXPECTED_CONDITIONS[direction]). */
   conditionsAsSaved: readonly string[];
-  /** VWAP basis seen in the indicator settings. Must be RB's basis (session VWAP) or RB cannot reproduce the condition. */
-  vwapBasis: 'SESSION' | 'OTHER';
+  /**
+   * The VWAP indicator configured on the TrendSpider alert, recorded EXACTLY as seen in its settings dialog:
+   *   'SESSION'            — a session-anchored VWAP;
+   *   'TS_VWAP_14_0_HLC3'  — TrendSpider "VWAP" with Length 14, Offset 0, Price Source HLC3. Its semantics are NOT
+   *                          confirmed (TrendSpider's help defines Length only as the "number of periods used in the
+   *                          calculation"; no reset / anchor rule is documented) and it is NOT assumed equal to RB's
+   *                          session VWAP;
+   *   'OTHER'              — anything else → the entry is rejected.
+   * Whatever is recorded here, Policy A additionally requires RB's OWN session-VWAP condition to pass on SIP data
+   * (rvolPolicy.ts: RB_SESSION_VWAP_PASSED). Both VWAP conditions therefore hold for an accepted alert, so the
+   * TrendSpider setting can only make acceptance stricter, never looser.
+   */
+  vwapBasis: 'SESSION' | 'TS_VWAP_14_0_HLC3' | 'OTHER';
   /** Alert settings seen in the screenshots — every one must be true. */
   settings: { allConditionsAnd: boolean; signalTimeframe5m: boolean; confirmation15mCompletedCandle: boolean; triggerOnCandleClose: boolean; extendedHoursOff: boolean; webhookToRbEndpoint: boolean };
   /** Audit window (ET dates as epoch ms). validUntilMs − auditedAtMs ≤ MAX_AUDIT_VALIDITY_DAYS. */
@@ -59,7 +73,7 @@ export function entryProblems(e: VerifiedTsConfiguration): string[] {
   const want = EXPECTED_CONDITIONS[e.direction];
   if (!want) p.push('direction');
   else if (e.conditionsAsSaved.length !== want.length || want.some((c, i) => e.conditionsAsSaved[i] !== c)) p.push('conditions differ from the required rule set');
-  if (e.vwapBasis !== 'SESSION') p.push('VWAP basis is not RB session VWAP');
+  if (!ACCEPTED_TS_VWAP_BASES.includes(e.vwapBasis)) p.push('VWAP setting is not a recognized audited configuration');
   for (const [k, v] of Object.entries(e.settings ?? {})) if (v !== true) p.push(`setting ${k} not verified`);
   if (Object.keys(e.settings ?? {}).length !== 6) p.push('settings incomplete');
   if (!e.symbols?.length || e.symbols.some((s) => !s || s.includes('*'))) p.push('symbols must be an explicit list');
