@@ -388,7 +388,7 @@ export function decideAlert(a: DecideArgs): AlertDecision {
     { label: '6 Not stale', pass: action ? action !== 'SKIP_STALE' && fr.band !== 'STALE' : null },
     { label: '7 Not chased', pass: action ? action !== 'SKIP_CHASED' : null },
     { label: '8 Valid calculator structure', pass: a.live ? !a.live.hardFails.some((f) => f.code === 'INVALID_TRADE_STRUCTURE') && !!a.live.plan?.structureValid : null },
-    { label: '9 Opportunity Score ≥ 85', pass: tier ? tier === 'ELITE' || tier === 'HIGH_PRIORITY' : null },
+    { label: a.ranked?.effectiveMinScore !== undefined ? `9 Opportunity Score ≥ ${a.ranked.effectiveMinScore} (RVOL exception)` : '9 Opportunity Score ≥ 85', pass: tier ? (a.ranked?.tradeEligible ?? (tier === 'ELITE' || tier === 'HIGH_PRIORITY')) : null },
     { label: '10 Portfolio rules pass, capital allocated', pass: rec10 ? rec10.startsWith('TRADE NOW') : null },
     { label: `11 Market data fresh (≤ ${cfg.maxDataAgeSec} s, last trade ≤ ${cfg.maxTradeAgeSec} s)`, pass: dataFresh },
     { label: '12 No material data mismatch', pass: !review.length && !pm?.mismatch && !a.parityMismatches.length },
@@ -443,9 +443,9 @@ export function decideAlert(a: DecideArgs): AlertDecision {
 
   // 7 score tiers (absolute thresholds from the shared ranker)
   if (tier === 'SKIP' || tier === 'LOW_PRIORITY') return out('SKIP', `Score ${a.ranked.total} — below the 80 watchlist threshold`, 'IGNORE', [a.ranked.eligibilityLabel]);
-  if (tier === 'WATCHLIST') return out('WATCHLIST', `Score ${a.ranked.total} — below the 85 trade threshold`, 'WATCHLIST', [a.ranked.eligibilityLabel]);
+  if (tier === 'WATCHLIST' && !a.ranked.tradeEligible) return out('WATCHLIST', `Score ${a.ranked.total} — below the 85 trade threshold`, 'WATCHLIST', [a.ranked.eligibilityLabel]);
 
-  // ≥ 85 from here
+  // ≥ 85 from here (or, RVOL Policy B only, ≥ the conditional minimum for this validated RVOL-discrepancy alert)
   if (!rec10?.startsWith('TRADE NOW')) return out('WATCHLIST', rec10 ?? 'NOT ALLOCATED', 'WATCHLIST', a.ranked.reasonsAgainst.slice(0, 3));
   if (!dataFresh) {
     return out('DATA REVIEW REQUIRED', 'STALE DATA — REFRESHING', 'DATA_REVIEW', [
@@ -461,7 +461,7 @@ export function decideAlert(a: DecideArgs): AlertDecision {
   const ticket = ticketFor(rec.alert.direction, a.candidate);
   return tier === 'ELITE'
     ? out('TRADE NOW — ELITE', `Score ${a.ranked.total} · rank #${a.ranked.rank}`, 'ACTION_NOW', [], ticket)
-    : out('HIGH PRIORITY — TRADE CONSIDERATION', `Score ${a.ranked.total} · rank #${a.ranked.rank}`, 'HIGH_PRIORITY', [], ticket);
+    : out('HIGH PRIORITY — TRADE CONSIDERATION', `Score ${a.ranked.total} · rank #${a.ranked.rank}${tier === 'WATCHLIST' && a.ranked.tradeEligible ? ` · RVOL exception (minimum ${a.ranked.effectiveMinScore})` : ''}`, 'HIGH_PRIORITY', [], ticket);
 }
 
 export const VERSIONS = { rules: RULES_VERSION, scoring: SCORING_VERSION };

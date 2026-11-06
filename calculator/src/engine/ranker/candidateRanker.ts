@@ -97,6 +97,10 @@ export interface RankedCandidate {
   reasonsAgainst: string[];
   portfolio: PortfolioSnapshot;
   capitalRequiredPct: number;
+  /** RVOL Policy B only (absent otherwise): trade-eligible by score under the conditional minimum. */
+  tradeEligible?: boolean;
+  /** RVOL Policy B only (absent otherwise): the minimum trade score applied to this candidate. */
+  effectiveMinScore?: number;
 }
 
 export interface ReplacementSuggestion {
@@ -133,6 +137,11 @@ export interface RankOptions {
   peerExclude?: ReadonlySet<string>;
   extraPeers?: PeerEfficiency[];
   useFrozenCapitalEfficiency?: boolean;
+  /**
+   * RVOL Policy B (flag-gated; absent = existing behavior): for exactly these candidate ids the minimum TRADE score is
+   * `minScore` instead of grades.high. Tiers, score, rank order, allocation order and every hard rule are unchanged.
+   */
+  tradeThresholdException?: { ids: ReadonlySet<string>; minScore: number };
 }
 
 const efficiencyOf = (c: Candidate) => clean(c.expectedReward / c.positionValue);
@@ -167,6 +176,15 @@ export function classifyScore(total: number, s: RankerSettings): QualityTier {
   return 'SKIP';
 }
 
+/**
+ * Trade eligibility by score. Without an exception: the tier rule (ELITE or HIGH_PRIORITY, i.e. total ≥ grades.high).
+ * RVOL Policy B: for an exception candidate also total ≥ exceptionMin (inclusive, on the true one-decimal total).
+ */
+export function tradeEligibleByScore(total: number | null, tier: QualityTier | null, exceptionMin: number | null): boolean {
+  if (tier === 'ELITE' || tier === 'HIGH_PRIORITY') return true;
+  return exceptionMin !== null && total !== null && Number.isFinite(total) && total >= exceptionMin;
+}
+
 const TIER_RECOMMENDATION: Record<Exclude<QualityTier, 'ELITE' | 'HIGH_PRIORITY'>, Recommendation> = {
   WATCHLIST: 'WATCHLIST / RESERVE',
   LOW_PRIORITY: 'LOW PRIORITY',
@@ -190,11 +208,14 @@ export function decide(args: {
   portfolioFails: HardFail[];
   tier: QualityTier | null;
   allocation: AllocationResult | null;
+  /** RVOL Policy B: trade-eligible by the conditional minimum score (absent → the tier decides, as before). */
+  tradeEligible?: boolean;
 }): Recommendation {
   if (args.strategyFails.length) return 'NOT ELIGIBLE — CANNOT BE RANKED';
   if (args.missing.length || !args.tier) return 'SCORING INCOMPLETE';
   if (args.portfolioFails.length) return PORTFOLIO_RECOMMENDATION[sortFails(args.portfolioFails)[0].code] ?? 'BLOCKED — CAPITAL';
-  if (args.tier !== 'ELITE' && args.tier !== 'HIGH_PRIORITY') return TIER_RECOMMENDATION[args.tier];
+  const tradeTier = args.tier === 'ELITE' || args.tier === 'HIGH_PRIORITY';
+  if (!tradeTier && !args.tradeEligible) return TIER_RECOMMENDATION[args.tier as Exclude<QualityTier, 'ELITE' | 'HIGH_PRIORITY'>];
   if (args.allocation?.allocated) return args.tier === 'ELITE' ? 'TRADE NOW — ELITE' : 'TRADE NOW — HIGH PRIORITY';
   if (args.allocation?.reason === 'CORRELATION') return 'BLOCKED — CORRELATED EXPOSURE';
   return 'CAPITAL WAITLIST';
@@ -419,12 +440,15 @@ export function rankCandidates(
     const fit = canScore ? Math.min(30, sumKeys(components, FIT_KEYS)) : null;
     const total = setup !== null && fit !== null ? Math.min(100, round1(setup + fit)) : null;
     const tier = total !== null ? classifyScore(total, s) : null;
-    return { ...x, components, setup, fit, total, tier };
+    // RVOL Policy B: trade eligibility by score — the tier rule, or the conditional minimum for exception ids only.
+    const exc = opts?.tradeThresholdException?.ids.has(x.c.id) ? opts.tradeThresholdException.minScore : null;
+    const tradeEligible = tradeEligibleByScore(total, tier, exc);
+    return { ...x, components, setup, fit, total, tier, exc, tradeEligible };
   });
 
   // Steps 5–6 — allocate scarce capital, best first, among trade-tier candidates with no hard failure
   const allocInputs = scored
-    .filter((x) => POOL_STATUSES.includes(x.c.status) && x.total !== null && !x.portfolioFails.length && (x.tier === 'ELITE' || x.tier === 'HIGH_PRIORITY'))
+    .filter((x) => POOL_STATUSES.includes(x.c.status) && x.total !== null && !x.portfolioFails.length && x.tradeEligible)
     .map((x) => ({ ...asClassified(x.c), id: x.c.id, score: x.total as number, setupScore: x.setup as number, alertTime: x.c.alertTime, createdAt: x.c.createdAt }));
   const allocations = new Map(allocate(allocInputs, portfolio, s).map((a) => [a.id, a]));
 
@@ -440,17 +464,17 @@ export function rankCandidates(
   const rankOfId = new Map(rankable.map((x, i) => [x.c.id, i + 1]));
 
   const ranked: RankedCandidate[] = scored.map((x) => {
-    const { c, pf, rules, strategyFails, portfolioFails, missing, components, setup, fit, total, tier } = x;
+    const { c, pf, rules, strategyFails, portfolioFails, missing, components, setup, fit, total, tier, exc, tradeEligible } = x;
     const allocation = allocations.get(c.id) ?? null;
     const inPool = POOL_STATUSES.includes(c.status);
-    const recommendation = inPool ? decide({ strategyFails, missing, portfolioFails, tier, allocation }) : null;
+    const recommendation = inPool ? decide({ strategyFails, missing, portfolioFails, tier, allocation, ...(exc !== null ? { tradeEligible } : {}) }) : null;
     const reasonsFor = total !== null ? components.flatMap((k) => k.positives) : [];
     const reasonsAgainst: string[] = [];
     for (const f of strategyFails) reasonsAgainst.push(`${f.label}: ${f.reason}`);
     if (!strategyFails.length && missing.length) reasonsAgainst.push(`MISSING INPUT — SCORE INCOMPLETE: ${missing.join(', ')}`);
     for (const f of portfolioFails) reasonsAgainst.push(`${f.label}: ${f.reason}`);
     if (total !== null) {
-      if (tier !== 'ELITE' && tier !== 'HIGH_PRIORITY') reasonsAgainst.push(`Score ${total} is below the ${s.grades.high} minimum trade threshold — do not trade, regardless of rank.`);
+      if (!tradeEligible) reasonsAgainst.push(`Score ${total} is below the ${exc ?? s.grades.high} minimum trade threshold${exc !== null ? ' (RVOL exception)' : ''} — do not trade, regardless of rank.`);
       if (allocation && !allocation.allocated) {
         reasonsAgainst.push(
           allocation.reason === 'CORRELATION'
@@ -468,7 +492,9 @@ export function rankCandidates(
           ? `${TIER_LABELS[tier as QualityTier]} — PORTFOLIO BLOCKED`
           : tier === 'ELITE' || tier === 'HIGH_PRIORITY'
             ? TIER_LABELS[tier]
-            : `${TIER_LABELS[tier as QualityTier]} — BELOW TRADE THRESHOLD`;
+            : tradeEligible
+              ? `${TIER_LABELS[tier as QualityTier]} — RVOL EXCEPTION (MINIMUM ${exc})`
+              : `${TIER_LABELS[tier as QualityTier]} — BELOW TRADE THRESHOLD`;
     const displayStatus = recommendation ?? (c.status === 'PENDING' ? 'PENDING ORDER' : c.status.replace(/_/g, ' '));
     return {
       candidate: c,
@@ -493,6 +519,7 @@ export function rankCandidates(
       reasonsAgainst,
       portfolio: pf,
       capitalRequiredPct: pf.available > 0 ? c.positionValue / pf.available : Infinity,
+      ...(exc !== null ? { tradeEligible, effectiveMinScore: exc } : {}),
     };
   });
 

@@ -48,5 +48,7 @@ export function configStatus() {
     referenceScoresEnabled: env('RB_REFERENCE_SCORES_ENABLED') === 'true',
     /** RVOL eligibility Policy A — RVOL-only TrendSpider/SIP discrepancy becomes a warning (default OFF; absent = OFF). */
     rvolPolicyAEnabled: env('RB_RVOL_POLICY_A_ENABLED') === 'true',
+    /** RVOL eligibility Policy B — conditional minimum score 80 for validated RVOL-discrepancy alerts; requires Policy A (default OFF). */
+    rvolPolicyBEnabled: env('RB_RVOL_POLICY_B_ENABLED') === 'true',
   };
 }

@@ -101,7 +101,7 @@ export function gateSequence(row: QueueRow): GateSequence {
   if (row.decision.decision === 'SCORING') return { score: 'PENDING', portfolio: 'PENDING', capital: 'PENDING' };
   if (!r) return { score: 'NOT SCORED', portfolio: 'NOT EVALUATED — NOT REQUIRED', capital: 'NOT ATTEMPTED' };
   const tier = r.tier;
-  const score: GateResult = r.total === null || !tier ? 'NOT SCORED' : tier === 'ELITE' || tier === 'HIGH_PRIORITY' ? 'PASS' : 'FAIL';
+  const score: GateResult = r.total === null || !tier ? 'NOT SCORED' : (r.tradeEligible ?? (tier === 'ELITE' || tier === 'HIGH_PRIORITY')) ? 'PASS' : 'FAIL';
   const rec = r.recommendation ?? '';
   // Portfolio hard rules (slot / heat / correlation) are hard rules: RB v1.1 evaluates them regardless of the score, and
   // a full portfolio also lowers the portfolio-fit points. When one failed, it is reported as the block — never hidden

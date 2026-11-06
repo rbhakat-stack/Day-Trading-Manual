@@ -33,22 +33,36 @@ import { checkConfiguration, VERIFIED_TS_CONFIGURATIONS, type ConfigurationCheck
 
 export interface RvolPolicyFlags {
   a: boolean;
+  /** Policy B (RB_RVOL_POLICY_B_ENABLED, default OFF). Effective only together with Policy A. */
+  b?: boolean;
   /** TESTS / REPLAY ONLY — the App never supplies it (source-guarded); production always uses VERIFIED_TS_CONFIGURATIONS. */
   registry?: readonly VerifiedTsConfiguration[];
 }
-export interface EffectiveRvolPolicy extends RvolPolicyFlags { warning: string | null }
+export interface EffectiveRvolPolicy { a: boolean; b: boolean; warning: string | null }
+/**
+ * POLICY B — minimum actionable score for a Policy-A-ACCEPTED RVOL-only alert (audited configuration, RB session
+ * VWAP and completed-15m passed, every other condition reproduced). Every other alert keeps grades.high (85). No points
+ * are added; tiers are unchanged (an 82 stays WATCHLIST).
+ */
+export const RVOL_EXCEPTION_MIN_SCORE = 80;
 
-/** Flag state → effective policy. Unknown (null) = OFF. */
-export function effectiveRvolPolicy(flags: { a?: boolean | null } | null | undefined): EffectiveRvolPolicy {
-  return { a: flags?.a === true, warning: null };
+/**
+ * Flag state → effective policy. Unknown (null) = OFF. Policy B requires Policy A: B without A is an invalid
+ * configuration → both OFF (STATE 1, standard v1.1) plus a configuration warning.
+ */
+export function effectiveRvolPolicy(flags: { a?: boolean | null; b?: boolean | null } | null | undefined): EffectiveRvolPolicy {
+  const a = flags?.a === true;
+  const b = flags?.b === true;
+  if (b && !a) return { a: false, b: false, warning: 'RVOL Policy B is enabled without Policy A — invalid configuration; both RVOL policies are OFF (standard RB v1.1).' };
+  return { a, b, warning: null };
 }
 
 export interface RvolPolicyRowInfo {
-  policy: 'A';
+  policy: 'A' | 'A+B';
   verdict: RvolV1Verdict;
   /** The audited TrendSpider configuration this alert was matched to. */
   configuration: ConfigurationCheck;
-  /** Effective minimum actionable score for THIS alert (85 under Policy A). */
+  /** Effective minimum actionable score for THIS alert (85 under Policy A; 80 under Policy A + B). */
   effectiveMinScore: number;
 }
 
@@ -59,9 +73,13 @@ export interface PreparedRvolPolicy {
   original: ReadonlyMap<string, AutoAlertRecord>;
   /** Accepted alerts and their audit info. */
   accepted: ReadonlyMap<string, RvolPolicyRowInfo>;
+  /** Policy B: accepted alerts whose minimum actionable score is RVOL_EXCEPTION_MIN_SCORE (subset of accepted). */
+  exception: ReadonlySet<string>;
 }
 
 const FROZEN_DATA_REVIEW = 'DATA REVIEW REQUIRED';
+/** Policy B is never applied to an alert frozen at alert time as below the 85 threshold (decided without Policy B). */
+const FROZEN_BELOW_85 = /below the 85 trade threshold/;
 
 /** RB evaluated "5m Close > / < VWAP" on SESSION VWAP and the condition passed. Missing or other mode → false. */
 export function rbSessionVwapPassed(r: AutoAlertRecord): boolean {
@@ -101,6 +119,7 @@ export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicy
   if (!eff.a) return null;
   const original = new Map(records.map((r) => [r.id, r]));
   const accepted = new Map<string, RvolPolicyRowInfo>();
+  const exception = new Set<string>();
   const out = records.map((r) => {
     const fz = frozen?.[r.id];
     if (fz && fz.v11.decision === FROZEN_DATA_REVIEW) return r; // settled at alert time without the policy
@@ -110,10 +129,13 @@ export function prepareRvolPolicy(records: AutoAlertRecord[], policy: RvolPolicy
     if (!cfg.pass) return r; // configuration not verified → Policy A does not apply (fail closed)
     if (!rbSessionVwapPassed(r)) return r; // RB's own session-VWAP condition must pass (fail closed)
     if (!rbCompleted15mPassed(r)) return r; // RB's own completed-15m confirmation must pass (fail closed)
-    accepted.set(r.id, { policy: 'A', verdict: v, configuration: cfg, effectiveMinScore: 85 });
+    // Policy B: only for an alert Policy A accepted here, and never for one already decided at alert time without B.
+    const b = eff.b && !(fz && fz.v11.decision === 'WATCHLIST' && FROZEN_BELOW_85.test(fz.v11.detail));
+    accepted.set(r.id, { policy: b ? 'A+B' : 'A', verdict: v, configuration: cfg, effectiveMinScore: b ? RVOL_EXCEPTION_MIN_SCORE : 85 });
+    if (b) exception.add(r.id);
     return applyRvolPolicyV1(r, v);
   });
-  return { records: out, original, accepted };
+  return { records: out, original, accepted, exception };
 }
 
 export const RVOL_SOURCE_DIFFERENCE_TOOLTIP = 'RVOL source difference: TrendSpider qualified this alert under its RVOL > 1.5 rule, but RB calculated RVOL below 1.5 from Alpaca SIP. RB’s independent RVOL calculation determines score points. All other required conditions must pass.';

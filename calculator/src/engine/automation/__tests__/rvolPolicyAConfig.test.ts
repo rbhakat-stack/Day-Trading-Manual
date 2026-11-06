@@ -59,7 +59,7 @@ describe('fail closed: the production registry never matches the fixture alerts 
   });
   it('App never supplies a registry (source guard): production always uses the code-reviewed registry', () => {
     const app = readFileSync(join(__dirname, '..', '..', '..', 'App.tsx'), 'utf8');
-    expect(app).toMatch(/rvolPolicy: rvolPolicyA \? \{ a: true \} : null/);
+    expect(app).toMatch(/rvolPolicy: rvolPolicyA \? \{ a: true, b: rvolPolicyB \} : null/); // Policy B flag only; never a registry
     expect(app).not.toMatch(/registry/);
   });
 });

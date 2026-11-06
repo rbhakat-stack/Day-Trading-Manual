@@ -27,6 +27,7 @@ import { HistoricalSipTest } from './components/live/HistoricalSipTest';
 import { buildQueue, type QueueInput } from './engine/automation/liveQueue';
 import { useRvolObservation } from './lib/rvolObservationHook';
 import { useReferenceScores } from './lib/referenceScoreHook';
+import { effectiveRvolPolicy } from './engine/automation/rvolPolicy';
 import { inputsFromRecord } from './engine/automation/autoCandidate';
 import { compareParity, mismatchMessages, paritySummary, type ParityEntry, type ParityRow } from './engine/automation/parity';
 import { etParts } from './engine/automation/etTime';
@@ -351,8 +352,10 @@ export default function App() {
   const observationRef = useRef<ObservationMap>({});
   const observation = useMemo(() => (observationRef.current = observeContinuity(observationRef.current, feed.records, quotes, autoCfg)), [feed.records, quotes, autoCfg]);
   const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
-  // RVOL eligibility Policy A (server flag, default OFF; unknown = OFF).
-  const rvolPolicyA = serverFlags.rvolPolicyA === true;
+  // RVOL eligibility Policies A and B (server flags, default OFF; unknown = OFF; B without A = both OFF + warning).
+  const rvolPolicyEff = effectiveRvolPolicy({ a: serverFlags.rvolPolicyA, b: serverFlags.rvolPolicyB });
+  const rvolPolicyA = rvolPolicyEff.a;
+  const rvolPolicyB = rvolPolicyEff.b;
   // The authoritative queue input (identical to the argument previously passed directly; split out so the RVOL V1 observation can
   // read the same input afterwards — it never feeds anything back).
   const queueInput = useMemo<QueueInput | null>(() => {
@@ -378,9 +381,9 @@ export default function App() {
       knownBrokerPositions,
       portfolioGate: verification.gated ? verification.reason : null,
       observation,
-      rvolPolicy: rvolPolicyA ? { a: true } : null,
+      rvolPolicy: rvolPolicyA ? { a: true, b: rvolPolicyB } : null,
     };
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation, rvolPolicyA]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation, rvolPolicyA, rvolPolicyB]);
   const queue = useMemo(() => (queueInput ? buildQueue(queueInput) : null), [queueInput]);
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
@@ -737,6 +740,7 @@ export default function App() {
                 pollMs={autoCfg.pollMs}
                 rvolObservation={rvolObservation}
                 referenceScores={referenceScores}
+                rvolPolicyWarning={rvolPolicyEff.warning}
               />
             )}
             {liveSub === 'parity' && (

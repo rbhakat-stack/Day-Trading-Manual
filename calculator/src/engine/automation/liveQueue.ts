@@ -9,7 +9,7 @@
  *
  * Alerts are processed independently and ranked together; nothing is decided by arrival order.
  */
-import { prepareRvolPolicy, type PreparedRvolPolicy, type RvolPolicyFlags, type RvolPolicyRowInfo } from './rvolPolicy';
+import { prepareRvolPolicy, RVOL_EXCEPTION_MIN_SCORE, type PreparedRvolPolicy, type RvolPolicyFlags, type RvolPolicyRowInfo } from './rvolPolicy';
 import { rankCandidates, snapshotOf, type PeerEfficiency, type RankedCandidate, type RankOptions, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
 import type { Candidate, FrozenCapitalEfficiency, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
@@ -210,7 +210,7 @@ function buildQueueCore(q: QueueInput, rvol: PreparedRvolPolicy | null): QueueOu
   const held = heldCandidateIds(candidates, q.terminal, q.now);
   const sidelined = held.size ? new Set([...dataBlocked, ...held]) : dataBlocked;
   // RVOL Policy A: an accepted alert is never a capital-efficiency peer of OTHER candidates (no unrelated score change).
-  const peerOpts: RankOptions = { peerNow: q.now, peerExclude: new Set([...sidelined, ...latched, ...(rvol ? rvol.accepted.keys() : [])]), useFrozenCapitalEfficiency: true };
+  const peerOpts: RankOptions = { peerNow: q.now, peerExclude: new Set([...sidelined, ...latched, ...(rvol ? rvol.accepted.keys() : [])]), useFrozenCapitalEfficiency: true, ...(rvol?.exception.size ? { tradeThresholdException: { ids: rvol.exception, minScore: RVOL_EXCEPTION_MIN_SCORE } } : {}) };
   const ranking = rankCandidates(candidates.filter((c) => !sidelined.has(c.id)), exp.positions, q.rk, today, window, exp.exclude, peerOpts);
   const display = sidelined.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude, peerOpts) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));

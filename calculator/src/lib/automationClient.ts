@@ -274,17 +274,17 @@ export function useBrokerHistory(enabled: boolean, token: string, dates: string[
 }
 
 /** Server feature flags from rb-health (read-only). null = unknown (not loaded / failed) — treated as OFF. */
-export function useServerFlags(enabled: boolean, token: string, pollMs = 300_000): { cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null; rvolPolicyA: boolean | null } {
-  const [s, setS] = useState<{ cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null; rvolPolicyA: boolean | null }>({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null });
+export function useServerFlags(enabled: boolean, token: string, pollMs = 300_000): { cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null; rvolPolicyA: boolean | null; rvolPolicyB: boolean | null } {
+  const [s, setS] = useState<{ cr15: boolean | null; rvolV1Observation: boolean | null; referenceScores: boolean | null; rvolPolicyA: boolean | null; rvolPolicyB: boolean | null }>({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null, rvolPolicyB: null });
   useEffect(() => {
-    if (!enabled || !token) { setS({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null }); return; }
+    if (!enabled || !token) { setS({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null, rvolPolicyB: null }); return; }
     let stop = false;
     const tick = async () => {
       try {
         const h = await checkHealth(token);
-        if (!stop) setS({ cr15: h.config?.cr15Enabled === true, rvolV1Observation: h.config?.rvolV1ObservationEnabled === true, referenceScores: h.config?.referenceScoresEnabled === true, rvolPolicyA: h.config?.rvolPolicyAEnabled === true });
+        if (!stop) setS({ cr15: h.config?.cr15Enabled === true, rvolV1Observation: h.config?.rvolV1ObservationEnabled === true, referenceScores: h.config?.referenceScoresEnabled === true, rvolPolicyA: h.config?.rvolPolicyAEnabled === true, rvolPolicyB: h.config?.rvolPolicyBEnabled === true });
       } catch {
-        if (!stop) setS({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null });
+        if (!stop) setS({ cr15: null, rvolV1Observation: null, referenceScores: null, rvolPolicyA: null, rvolPolicyB: null });
       }
     };
     void tick();
