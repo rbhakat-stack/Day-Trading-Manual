@@ -71,5 +71,5 @@ export function placeOrderHint(r: QueueRow): { label: 'PLACE BUY STOP' | 'PLACE 
   if (finalBadge(r).label !== 'READY') return null;
   if (r.candidate && !['NEW', 'WATCHLIST'].includes(r.candidate.status)) return null;
   const label = t.action === 'BUY' ? 'PLACE BUY STOP' : 'PLACE SELL STOP';
-  return { label, detail: `RB considers this actionable now: ${t.action} STOP ${t.quantity} @ ${t.price} (stop loss ${t.stopLoss}, take profit ${t.takeProfit}). Place it manually at your broker — RB never submits orders. The stop order only executes if price reaches the entry.` };
+  return { label, detail: `RB considers this actionable now: ${t.action} STOP ${t.quantity} @ ${t.price} (stop loss ${t.stopLoss}, take profit ${t.takeProfit}). Place it manually at your broker — RB never submits orders. CHECK FIRST: broker synchronization can lag — before submitting, confirm at your broker that no working or filled order already exists for this ticker (RB cannot see an order placed since its last broker sync). The stop order only executes if price reaches the entry.` };
 }

@@ -100,6 +100,8 @@ describe('PLACE BUY / SELL STOP hint (case A only)', () => {
     expect(placeOrderHint(mk())!.label).toBe('PLACE BUY STOP');
     expect(placeOrderHint(mk({ action: 'SELL' }))!.label).toBe('PLACE SELL STOP');
     expect(placeOrderHint(mk())!.detail).toMatch(/manually at your broker — RB never submits orders/);
+    expect(placeOrderHint(mk())!.detail).toMatch(/broker synchronization can lag/);
+    expect(placeOrderHint(mk({ action: 'SELL' }))!.detail).toMatch(/confirm at your broker that no working or filled order already exists for this ticker/);
   });
   it('never shown when the existing state withholds or ends the ticket', () => {
     const cases: Parameters<typeof mk>[0][] = [
