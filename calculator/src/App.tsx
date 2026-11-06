@@ -349,7 +349,7 @@ export default function App() {
   // S2a.2 — in-memory observation continuity per alert (server-time evidence); lost on reload by design (fail closed).
   const observationRef = useRef<ObservationMap>({});
   const observation = useMemo(() => (observationRef.current = observeContinuity(observationRef.current, feed.records, quotes, autoCfg)), [feed.records, quotes, autoCfg]);
-  // The authoritative queue input (identical to the former inline argument; split out so the RVOL V1 observation can
+  // The authoritative queue input (identical to the argument previously passed directly; split out so the RVOL V1 observation can
   // read the same input afterwards — it never feeds anything back).
   const queueInput = useMemo<QueueInput | null>(() => {
     if (!autoCfg.enabled) return null;
