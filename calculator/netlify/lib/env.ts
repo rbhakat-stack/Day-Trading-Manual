@@ -46,5 +46,7 @@ export function configStatus() {
     rvolV1ObservationEnabled: env('RB_RVOL_V1_OBSERVATION_ENABLED') === 'true',
     /** Phase C reference-only scores and indicator mismatch diagnostics — display only (default OFF; absent = OFF). */
     referenceScoresEnabled: env('RB_REFERENCE_SCORES_ENABLED') === 'true',
+    /** RVOL eligibility Policy A — RVOL-only TrendSpider/SIP discrepancy becomes a warning (default OFF; absent = OFF). */
+    rvolPolicyAEnabled: env('RB_RVOL_POLICY_A_ENABLED') === 'true',
   };
 }

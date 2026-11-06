@@ -9,6 +9,7 @@
  *
  * Alerts are processed independently and ranked together; nothing is decided by arrival order.
  */
+import { prepareRvolPolicy, type PreparedRvolPolicy, type RvolPolicyFlags, type RvolPolicyRowInfo } from './rvolPolicy';
 import { rankCandidates, snapshotOf, type PeerEfficiency, type RankedCandidate, type RankOptions, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
 import type { Candidate, FrozenCapitalEfficiency, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
@@ -57,6 +58,8 @@ export interface QueueInput {
   portfolioGate?: string | null;
   /** S2a.2 — this tab's in-memory observation continuity (server-time evidence). The App always supplies it. */
   observation?: ObservationMap;
+  /** RVOL eligibility Policy A (server flag, default OFF). Absent / OFF = the unchanged engine. */
+  rvolPolicy?: RvolPolicyFlags | null;
 }
 
 export interface QueueRow {
@@ -78,6 +81,8 @@ export interface QueueRow {
    * diagnostics only; frozen into the alert-time snapshot on the first pass and read back from it afterwards.
    */
   blocked?: BlockedDiagnostic | null;
+  /** RVOL Policy A: present only when this alert's RVOL-only discrepancy was accepted (warning, not DATA REVIEW). */
+  rvolPolicy?: RvolPolicyRowInfo | null;
 }
 
 export interface BlockedDiagnostic {
@@ -105,6 +110,13 @@ export interface QueueOutput {
 const LIVE_STATUSES = ['NEW', 'WATCHLIST'];
 
 export function buildQueue(q: QueueInput): QueueOutput {
+  // RVOL Policy A — OFF, or nothing accepted: the unchanged engine on the unchanged input.
+  const rvol = prepareRvolPolicy(q.records, q.rvolPolicy, q.frozen);
+  if (!rvol || !rvol.accepted.size) return buildQueueCore(q, null);
+  return buildQueueCore({ ...q, records: rvol.records }, rvol);
+}
+
+function buildQueueCore(q: QueueInput, rvol: PreparedRvolPolicy | null): QueueOutput {
   const released = releasedIds(q.records, q.now, q.cfg);
   const byId = new Map(q.candidates.map((c) => [c.id, c]));
   let changed = false;
@@ -197,7 +209,8 @@ export function buildQueue(q: QueueInput): QueueOutput {
   // incumbent's capital, slot or correlation allowance); like untrusted-data alerts they are scored for display only.
   const held = heldCandidateIds(candidates, q.terminal, q.now);
   const sidelined = held.size ? new Set([...dataBlocked, ...held]) : dataBlocked;
-  const peerOpts: RankOptions = { peerNow: q.now, peerExclude: new Set([...sidelined, ...latched]), useFrozenCapitalEfficiency: true };
+  // RVOL Policy A: an accepted alert is never a capital-efficiency peer of OTHER candidates (no unrelated score change).
+  const peerOpts: RankOptions = { peerNow: q.now, peerExclude: new Set([...sidelined, ...latched, ...(rvol ? rvol.accepted.keys() : [])]), useFrozenCapitalEfficiency: true };
   const ranking = rankCandidates(candidates.filter((c) => !sidelined.has(c.id)), exp.positions, q.rk, today, window, exp.exclude, peerOpts);
   const display = sidelined.size ? rankCandidates(candidates, exp.positions, q.rk, today, window, exp.exclude, peerOpts) : ranking;
   const rankedById = new Map(ranking.ranked.map((r) => [r.candidate.id, r]));
@@ -233,7 +246,9 @@ export function buildQueue(q: QueueInput): QueueOutput {
   // v1.2 builds a shadow-only candidate from its RVOL-optional rebuild (never added to `candidates`, never persisted).
   const v12Lives = new Map(lives);
   const v12Only: Candidate[] = [];
-  for (const rec of q.records as AutoAlertRecordV12[]) {
+  // v1.2 SHADOW always reads the ORIGINAL records (RVOL Policy A never changes the comparison).
+  const v12Records = (rvol ? q.records.map((r) => rvol.original.get(r.id) ?? r) : q.records) as AutoAlertRecordV12[];
+  for (const rec of v12Records) {
     const snap = rec.v12?.rvolOptionalSnapshot;
     if (!snap?.values || rec.status !== 'OK' || !released.has(rec.id) || byId.has(rec.id) || dup.get(rec.id)) continue;
     const price = q.quotes[rec.alert.symbol]?.price ?? rec.initialQuote?.price;
@@ -249,7 +264,7 @@ export function buildQueue(q: QueueInput): QueueOutput {
   });
   const audits = new Map<string, V12Audit>();
   const v12Pool = new Set<string>();
-  for (const rec of q.records as AutoAlertRecordV12[]) {
+  for (const rec of v12Records) {
     if (!rec.v12) continue;
     audits.set(rec.id, rec.v12);
     if (decideAlertV12({ ...v12Base(rec), record: rec, mode: 'SHADOW', ranked: null }).scoring === 'PENDING_V12_RANKING') v12Pool.add(rec.id);
@@ -277,8 +292,9 @@ export function buildQueue(q: QueueInput): QueueOutput {
       duplicateReason: blocked.get(rec.id)?.block.reason ?? null,
       window,
     }, v12Inputs);
-    const shadow = decideShadow(rec as AutoAlertRecordV12, v12Inputs);
+    const shadow = decideShadow((rvol?.original.get(rec.id) ?? rec) as AutoAlertRecordV12, v12Inputs);
     const row = { record: rec, candidate, ranked, live, quote, decision, shadow, blocked: blocked.get(rec.id) ?? null } as QueueRow;
+    if (rvol?.accepted.has(rec.id)) row.rvolPolicy = rvol.accepted.get(rec.id)!;
     // Step 3 · D — odd-lot evidence at/through the entry ends the alert on THIS pass (the executable price may still be below it).
     const trigger = q.terminal?.[triggerKey(rec.id)] ?? observedSkippedCross(row, q.now, q.cfg);
     row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), trigger);

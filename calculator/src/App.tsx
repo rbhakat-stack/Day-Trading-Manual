@@ -350,6 +350,9 @@ export default function App() {
   // S2a.2 — in-memory observation continuity per alert (server-time evidence); lost on reload by design (fail closed).
   const observationRef = useRef<ObservationMap>({});
   const observation = useMemo(() => (observationRef.current = observeContinuity(observationRef.current, feed.records, quotes, autoCfg)), [feed.records, quotes, autoCfg]);
+  const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
+  // RVOL eligibility Policy A (server flag, default OFF; unknown = OFF).
+  const rvolPolicyA = serverFlags.rvolPolicyA === true;
   // The authoritative queue input (identical to the argument previously passed directly; split out so the RVOL V1 observation can
   // read the same input afterwards — it never feeds anything back).
   const queueInput = useMemo<QueueInput | null>(() => {
@@ -375,8 +378,9 @@ export default function App() {
       knownBrokerPositions,
       portfolioGate: verification.gated ? verification.reason : null,
       observation,
+      rvolPolicy: rvolPolicyA ? { a: true } : null,
     };
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation, rvolPolicyA]);
   const queue = useMemo(() => (queueInput ? buildQueue(queueInput) : null), [queueInput]);
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
@@ -421,7 +425,6 @@ export default function App() {
   }, [brokerTrades]);
 
   /* ── CR-15 cross-day Journal reconciliation (effective only when the SERVER flag AND this browser's mode are on) ── */
-  const serverFlags = useServerFlags(autoCfg.enabled, autoToken);
   // RVOL POLICY V1 — OBSERVATION ONLY (server flag, default OFF). Deferred after the authoritative queue; display only.
   const rvolObservation = useRvolObservation(serverFlags.rvolV1Observation === true, queueInput, queue);
   // PHASE C — reference-only scores and mismatch diagnostics (server flag, default OFF). Display only.

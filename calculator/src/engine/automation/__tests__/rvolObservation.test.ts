@@ -56,11 +56,12 @@ describe('isolation', () => {
     expect(files.length).toBeGreaterThan(100);
     const rel = (f: string) => relative(root, f).split(sep).join('/');
     const importers = (re: RegExp) => files.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(importers(/from '[^']*rvolPolicyV1'/)).toEqual(['src/engine/automation/rvolObservation.ts']);
+    // rvolPolicy.ts is the RVOL Policy A module (authoritative only when RB_RVOL_POLICY_A_ENABLED is ON; tested in rvolPolicyA.test.ts).
+    expect(importers(/from '[^']*rvolPolicyV1'/)).toEqual(['src/engine/automation/rvolObservation.ts', 'src/engine/automation/rvolPolicy.ts']);
     expect(importers(/from '[^']*rvolObservation'/)).toEqual(['src/components/live/LiveQueuePage.tsx', 'src/components/live/QueueParts.tsx', 'src/components/live/RvolObservationPanel.tsx', 'src/lib/rvolObservationHook.ts']);
     expect(importers(/from '[^']*rvolObservationHook'/)).toEqual(['src/App.tsx']);
     // No engine (decision, queue, ranker, lifecycle, v1.2) or server module reaches the observation code.
-    expect(importers(/rvolObservation|rvolPolicyV1/).filter((f) => f.startsWith('netlify/') || (f.startsWith('src/engine/') && !/rvolObservation\.ts$|rvolPolicyV1\.ts$/.test(f)))).toEqual([]);
+    expect(importers(/rvolObservation|rvolPolicyV1/).filter((f) => f.startsWith('netlify/') || (f.startsWith('src/engine/') && !/rvolObservation\.ts$|rvolPolicyV1\.ts$|rvolPolicy\.ts$/.test(f)))).toEqual([]);
   });
 });
 

@@ -24,6 +24,7 @@ import type { ReferenceEntry } from '../../lib/referenceScoreHook';
 import { REFERENCE_LABEL, referenceTier } from '../../engine/automation/referenceScore';
 import { InfoTip } from './InfoTip';
 import { decisionHelp, EXECUTION_HELP, FINAL_HELP, placeOrderHint, scoreHelp, tierHelp } from './fieldHelp';
+import { RVOL_SOURCE_DIFFERENCE_TOOLTIP } from '../../engine/automation/rvolPolicy';
 import type { RvolV1Observation } from '../../engine/automation/rvolObservation';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
 import type { AlertSnapshotMap, AlertTimeSnapshot } from '../../engine/automation/lifecycle/alertTimeSnapshot';
@@ -95,6 +96,10 @@ function PlaceHint({ r }: { r: QueueRow }) {
 }
 function MismatchNote({ e }: { e: ReferenceEntry | null | undefined }) {
   return e?.mismatch.label ? <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={e.mismatch.checks.filter((c) => c.status !== 'PASS').map((c) => `${c.indicator}: ${c.status}`).join(' · ')}>{e.mismatch.label}</span> : null;
+}
+/** RVOL Policy A — small non-blocking amber warning (existing warn tone); renders nothing for every other alert. */
+function RvolWarn({ r }: { r: QueueRow }) {
+  return r.rvolPolicy ? <span className="text-warn" title={RVOL_SOURCE_DIFFERENCE_TOOLTIP} aria-label="RVOL source difference"> ⚠</span> : null;
 }
 const p = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : x.toFixed(x < 1 ? 4 : dp));
 const money = (x: number | null | undefined, dp = 2) => (x === null || x === undefined || !Number.isFinite(x) ? '—' : usd(x, dp));
@@ -279,7 +284,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                         {cell.tiers.map((t, i) => <td key={i} className={`${td} ${c.role !== 'ACTIVE' && i === cell.tiers.length - 1 ? `border-r ${edge(c)}` : ''}`}>{c.role === 'ACTIVE' && i === 0 && cell.score === null && !t && referenceScores ? <RefTier e={referenceScores.get(r.record.id)} grades={optionAGrades} /> : <TierPill t={t} />}</td>)}
                         {c.role === 'ACTIVE' && (
                           <>
-                            <td className={td}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /></td>
+                            <td className={td}><Pill s={dec} wide title={`${r.decision.decision} — ${r.decision.detail}`} /><RvolWarn r={r} /></td>
                             <td className={td}><Pill s={executionBadge(r)} wide title={executionBadge(r).detail} /></td>
                             <td className={`${td} border-r ${edge(c)}`}><Pill s={fin} wide title={`${r.decision.decision} — ${r.decision.detail}`} /><PlaceHint r={r} /></td>
                           </>
@@ -300,7 +305,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                   {cols.safety && (
                     <>
                       <td className={td}><Pill s={chaseStatus(r)} title={chaseStatus(r).detail} /></td>
-                      <td className={td}><Pill s={dataStatus(r)} title={dataStatus(r).detail} />{referenceScores && <MismatchNote e={referenceScores.get(r.record.id)} />}</td>
+                      <td className={td}><Pill s={dataStatus(r)} title={dataStatus(r).detail} /><RvolWarn r={r} />{referenceScores && <MismatchNote e={referenceScores.get(r.record.id)} />}</td>
                       <td className={td}><Pill s={portfolioStatus(r)} title={portfolioStatus(r).detail} /></td>
                     </>
                   )}
@@ -482,13 +487,13 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
           {cell.frozen && <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">{cell.frozenLabel ?? 'Frozen · not ranked'}{cell.live != null ? ` · now ${cell.live} (live)` : ''}</span>}
         </Card>
         <Card label="Tier" mark={scoreMark}>{cell.score === null && !cell.tiers[0] && reference !== undefined ? <RefTier e={reference} grades={grades} /> : <TierPill t={cell.tiers[0] ?? null} />}</Card>
-        <Card label="Decision" mark="LIVE"><span className={TONE_TEXT[dec.tone]} title={`${r.decision.decision} — ${r.decision.detail}`}>{dec.label}</span></Card>
+        <Card label="Decision" mark="LIVE"><span className={TONE_TEXT[dec.tone]} title={`${r.decision.decision} — ${r.decision.detail}`}>{dec.label}</span><RvolWarn r={r} /></Card>
         <Card label="Current execution state" mark="LIVE"><span className={TONE_TEXT[ex.tone]} title={ex.detail}>{ex.label}</span></Card>
         <Card label="Final execution state (Final Actionability)" mark="LIVE" wide>
           <span className={TONE_TEXT[finalToneKey]} title={lc?.reason}>{finalText}</span>
           {lc && lc.finalActionability !== 'READY' && <span className="mt-0.5 block text-[10.5px] font-normal leading-snug text-ink-300">{lc.reason}</span>}
         </Card>
-        <Card label="Data status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span><MismatchNote e={reference} /></Card>
+        <Card label="Data status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ds.tone]}`}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</span><RvolWarn r={r} /><MismatchNote e={reference} /></Card>
         <Card label="Chase status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[cs.tone]}`}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</span></Card>
         <Card label="Portfolio status" mark="LIVE"><span className={`text-[14px] ${TONE_TEXT[ps.tone]}`} title={ps.detail}>{ps.label}{ps.label === 'BLOCKED' ? ` — ${ps.detail}` : ''}</span></Card>
       </div>
@@ -609,7 +614,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
           ['Chase status', <b key="c" className={TONE_TEXT[cs.tone]}>{cs.label === 'PASS' && ch && !ch.crossed ? 'NOT CROSSED' : cs.label}</b>],
         ]} />
         <Panel4 icon="data" title="Data & Diagnostics" rows={[
-          ['Data status', <b key="d" className={TONE_TEXT[ds.tone]}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}</b>],
+          ['Data status', <b key="d" className={TONE_TEXT[ds.tone]}>{ds.label === 'PASS' ? 'PASS' : `${ds.label}: ${ds.detail}`}<RvolWarn r={r} /></b>],
           ['SIP RVOL (diagnostic)', f.sipRvol === null ? 'unavailable — non-blocking' : f.sipRvol.toFixed(2)],
           ['RB v1.1 hard fails', f.hardFails.length ? f.hardFails.join(', ') : 'none'],
           ['Parity warnings', f.parity.length ? f.parity.map((w) => w.replace(/^PARITY_(WARNING|NOTE)[_:]?/, '')).join(', ') : 'none'],
@@ -674,7 +679,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
           <div className="grid gap-3 lg:grid-cols-4">
             <Box title="Alert-time indicators (automated market data values)">
               {v ? (
-                <KV rows={[['O / H / L / C', `${p(v.open)} / ${p(v.high)} / ${p(v.low)} / ${p(v.close)}`], ['EMA9 / EMA20', `${p(v.ema9, 3)} / ${p(v.ema20, 3)}`], ['RSI14', p(v.rsi, 1)], ['RVOL20 — RB current (used for eligibility)', p(v.rvol, 2)], ['RVOL20 — TrendSpider formula on Alpaca SIP (diagnostic only)', r.record.rvolDiagnostics ? p(r.record.rvolDiagnostics.tsFormulaSipRvol, 2) : 'not recorded at alert time'], ['RVOL20 — TrendSpider actual', 'NOT CAPTURED'], [`VWAP (${s?.config.vwapMode})`, p(v.vwap, 3)], ['VWAP (other mode)', p(v.vwapAlternative, 3)], ['15m candle', s?.confirm15m?.label ?? '—'], ['15m Close / EMA20', `${p(v.close15m)} / ${p(v.ema20_15m, 3)}`]]} />
+                <KV rows={[['O / H / L / C', `${p(v.open)} / ${p(v.high)} / ${p(v.low)} / ${p(v.close)}`], ['EMA9 / EMA20', `${p(v.ema9, 3)} / ${p(v.ema20, 3)}`], ['RSI14', p(v.rsi, 1)], ['RVOL20 — RB current (used for eligibility)', p(v.rvol, 2)], ['RVOL20 — TrendSpider formula on Alpaca SIP (diagnostic only)', r.record.rvolDiagnostics ? p(r.record.rvolDiagnostics.tsFormulaSipRvol, 2) : 'not recorded at alert time'], ['RVOL20 — TrendSpider actual', 'NOT CAPTURED'], ...(r.rvolPolicy ? [['TrendSpider RVOL qualification', `configured > 1.5 (rule set ${String(r.record.payload?.rule_set ?? '—')}) — qualified alert received`], ['RVOL score points (RB SIP)', `${r.ranked?.components.find((k) => k.key === 'rvol')?.points ?? '—'} / 15`], ['RVOL source difference', 'Accepted under RVOL Policy A — warning only; RB SIP RVOL sets the score points'], ['Audited TrendSpider configuration', r.rvolPolicy.configuration.configId ?? '—'], ['Effective minimum score', String(r.rvolPolicy.effectiveMinScore)]] as [string, string][] : []), [`VWAP (${s?.config.vwapMode})`, p(v.vwap, 3)], ['VWAP (other mode)', p(v.vwapAlternative, 3)], ['15m candle', s?.confirm15m?.label ?? '—'], ['15m Close / EMA20', `${p(v.close15m)} / ${p(v.ema20_15m, 3)}`]]} />
               ) : (
                 <p className="text-warn">No complete snapshot.</p>
               )}
