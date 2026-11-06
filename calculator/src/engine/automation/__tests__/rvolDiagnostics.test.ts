@@ -171,7 +171,9 @@ describe('release safety — the diagnostic can never influence a decision', () 
     walk(join(root, 'netlify'));
     expect(files.length).toBeGreaterThan(100);
     const users = files.filter((f) => /rvolDiagnostics/.test(readFileSync(f, 'utf8'))).map((f) => relative(root, f).split(sep).join('/')).sort();
-    expect(users).toEqual(['netlify/lib/processAlert.ts', 'src/components/live/QueueParts.tsx', 'src/engine/automation/alertDecision.ts']); // (+ the module itself, which defines RvolDiagnostics)
+    expect(users).toEqual(['netlify/lib/processAlert.ts', 'src/components/live/QueueParts.tsx', 'src/engine/automation/alertDecision.ts',
+      // RVOL policy V1 (observation only): reads the diagnostic for display. Never imported by an authoritative module — enforced in rvolObservation.test.ts.
+      'src/engine/automation/rvolPolicyV1.ts']); // (+ the module itself, which defines RvolDiagnostics)
     // alertDecision uses it only inside the reason text builder
     const ad = readFileSync(join(root, 'src/engine/automation/alertDecision.ts'), 'utf8');
     expect(ad.match(/rec\.rvolDiagnostics/g)).toHaveLength(1);

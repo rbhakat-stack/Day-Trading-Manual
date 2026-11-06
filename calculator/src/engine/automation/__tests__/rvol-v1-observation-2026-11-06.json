@@ -1,0 +1,1392 @@
+{
+ "source": "Production alert archive (rb-v1-alerts) 2026-11-06, read-only copy; sanitised webhook payloads (no credentials) + Alpaca SIP-derived snapshots",
+ "records": [
+  {
+   "id": "CARR-S-110518-d1f4de",
+   "dedupeKey": "CARR|SHORT|1793981118|RB_V1_SHORT_SETUP",
+   "receivedIso": "2026-11-06T16:05:18.251Z",
+   "receivedMs": 1793981118251,
+   "status": "OK",
+   "alert": {
+    "strategy": "RB_V1",
+    "symbol": "CARR",
+    "direction": "SHORT",
+    "alertName": "RB v1 SHORT Setup",
+    "alertTimeMs": 1793981118251,
+    "alertTimeIso": "2026-11-06T16:05:18.251Z",
+    "timeSource": "RECEIVED",
+    "lastPrice": null
+   },
+   "payload": {
+    "strategy": "RB_V1",
+    "symbol": "CARR",
+    "direction": "SHORT",
+    "alert_name": "RB v1 SHORT Setup",
+    "rule_set": "RBTS-S-001"
+   },
+   "snapshot": {
+    "alertEt": "11:05:18",
+    "alertDate": "2026-11-06",
+    "session": "FULL",
+    "sessionNote": "Regular full session 09:30–16:00 ET.",
+    "config": {
+     "vwapMode": "SESSION",
+     "maxSignalLagSec": 120,
+     "maxMissingBarRatio": 0.05,
+     "minWarmupBars": 100
+    },
+    "values": {
+     "open": 53.14,
+     "high": 53.15,
+     "low": 53.01,
+     "close": 53.065,
+     "volume": 109985,
+     "atr": 0.20686430007527995,
+     "ema9": 53.20470279671864,
+     "ema20": 53.2416191801409,
+     "rsi": 43.44836551241322,
+     "rvol": 1.0555709114082468,
+     "vwap": 53.25162086735423,
+     "vwapAlternative": 53.3074824405468,
+     "close15m": 53.125,
+     "ema20_15m": 53.43785049410514
+    },
+    "signal": {
+     "startIso": "2026-11-06T16:00:00.000Z",
+     "endIso": "2026-11-06T16:05:00.000Z",
+     "label": "11:00–11:05"
+    },
+    "confirm15m": {
+     "startIso": "2026-11-06T15:45:00.000Z",
+     "endIso": "2026-11-06T16:00:00.000Z",
+     "label": "10:45–11:00",
+     "bars5": 3
+    },
+    "issues": [
+     {
+      "kind": "REVIEW",
+      "code": "ALERT_NOT_REPRODUCED",
+      "message": "TrendSpider fired the SHORT alert, but the automated values do not satisfy: RVOL20 > 1.5. Data feeds or indicator settings may differ."
+     }
+    ],
+    "alertConditions": [
+     {
+      "label": "5m Close < VWAP",
+      "pass": true
+     },
+     {
+      "label": "EMA9 < EMA20",
+      "pass": true
+     },
+     {
+      "label": "RSI14 < 45",
+      "pass": true
+     },
+     {
+      "label": "RVOL20 > 1.5",
+      "pass": false
+     },
+     {
+      "label": "Close < Open",
+      "pass": true
+     },
+     {
+      "label": "15m Close < 15m EMA20",
+      "pass": true
+     }
+    ],
+    "barsUsed": 409
+   },
+   "provider": {
+    "name": "Alpaca",
+    "feed": "sip",
+    "host": "data.alpaca.markets"
+   },
+   "marketDataThroughIso": "2026-11-06T16:05:00.000Z",
+   "initialQuote": {
+    "price": 53.06,
+    "tradeIso": "2026-11-06T16:05:18.351771825Z",
+    "fetchedIso": "2026-11-06T16:05:18.768Z",
+    "conditions": [
+     " "
+    ],
+    "tape": "A",
+    "priceSource": "LATEST",
+    "skipped": null
+   },
+   "calcAtAlert": {
+    "action": "SELL_STOP",
+    "headline": "SELL STOP",
+    "entry": 53,
+    "stop": 53.21,
+    "target": 52.58,
+    "shares": 377,
+    "plannedRisk": 79.17
+   },
+   "sameTickerEarlier": [],
+   "errors": [],
+   "attempts": 1,
+   "versions": {
+    "rules": "RB v1.1",
+    "scoring": "RB v1.1",
+    "strategy": "RB v1.1"
+   },
+   "processedIso": "2026-11-06T16:05:18.955Z",
+   "v12": {
+    "schema": 1,
+    "logicVersion": "RB v1.2",
+    "mode": "SHADOW",
+    "qualification": {
+     "status": "QUALIFIED",
+     "source": "TRENDSPIDER",
+     "ruleSet": {
+      "status": "RECOGNISED",
+      "ruleSet": "RBTS-S-001",
+      "entry": {
+       "id": "RBTS-S-001",
+       "direction": "SHORT",
+       "rulesVersion": "RB v1.2",
+       "audited": "2026-10-31",
+       "checklistRef": "RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — TrendSpider Multi-Factor Alert · smallest timeframe 5m · all conditions AND · Extended Hours OFF · repeat: no limit · expiration: 30 days",
+       "active": true,
+       "rules": [
+        "5m Close < VWAP(14, 0, hlc3)",
+        "5m EMA9 < EMA20",
+        "5m RSI14 < 45",
+        "5m RVOL(20, SMA, 1) > 1.5",
+        "5m Close < Open",
+        "15m Close < 15m EMA20"
+       ]
+      },
+      "reason": "Audited SHORT rule set (2026-10-31)."
+     },
+     "rulesAssumedPassed": [
+      "5m Close < VWAP(14, 0, hlc3)",
+      "5m EMA9 < EMA20",
+      "5m RSI14 < 45",
+      "5m RVOL(20, SMA, 1) > 1.5",
+      "5m Close < Open",
+      "15m Close < 15m EMA20"
+     ],
+     "numericValuesProvided": false,
+     "reason": "Audited SHORT rule set (2026-10-31)."
+    },
+    "signalMapping": {
+     "status": "ON_TIME",
+     "receivedMs": 1793981118251,
+     "session": "FULL",
+     "boundaryMs": 1793981100000,
+     "lagSec": 18.251,
+     "candleStartMs": 1793980800000,
+     "candleEndMs": 1793981100000,
+     "label": "11:00–11:05",
+     "reason": "Received 18.3 s after the 11:00–11:05 candle closed."
+    },
+    "dedupeKeys": {
+     "v11": "CARR|SHORT|1793981118|RB_V1_SHORT_SETUP",
+     "v12": "v12|CARR|SHORT|C2026-11-06T16:00:00.000Z|RBTS-S-001"
+    },
+    "duplicateOf": null,
+    "reconstruction": {
+     "source": "SIP",
+     "open": 53.14,
+     "high": 53.15,
+     "low": 53.01,
+     "close": 53.065,
+     "volume": 109985,
+     "atr14": 0.20686430007527995,
+     "vwap": 53.25162086735423,
+     "ema9": 53.20470279671864,
+     "ema20": 53.2416191801409,
+     "rsi14": 43.44836551241322,
+     "sipRvol": 1.0555709114082468,
+     "close15mCompleted": 53.125,
+     "ema20_15mCompleted": 53.43785049410514,
+     "forming15m": {
+      "label": "11:00–11:15",
+      "close": 53.065,
+      "ema20": 53.402340923237986,
+      "bars5": 1
+     }
+    },
+    "conditionDiagnostics": [
+     {
+      "rule": "CLOSE_VS_VWAP",
+      "label": "5m Close < VWAP",
+      "sipValue": -0.1866208673542289,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.1866208673542289,
+      "tolerance": 0.0265325,
+      "class": "AGREE"
+     },
+     {
+      "rule": "EMA9_VS_EMA20",
+      "label": "EMA9 < EMA20",
+      "sipValue": -0.036916383422259,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.036916383422259,
+      "tolerance": 0.0265325,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RSI",
+      "label": "RSI14 < 45",
+      "sipValue": 43.44836551241322,
+      "threshold": 45,
+      "sipPass": true,
+      "margin": 1.5516344875867816,
+      "tolerance": 2,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CANDLE_DIRECTION",
+      "label": "Close < Open",
+      "sipValue": -0.07500000000000284,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.07500000000000284,
+      "tolerance": 0.02,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RVOL",
+      "label": "RVOL20 > 1.5 (SIP, diagnostic only)",
+      "sipValue": 1.0555709114082468,
+      "threshold": 1.5,
+      "sipPass": false,
+      "margin": 0.44442908859175323,
+      "tolerance": null,
+      "class": "DIAGNOSTIC_ONLY"
+     },
+     {
+      "rule": "CONFIRM_15M",
+      "label": "Completed 15m Close < 15m EMA20",
+      "sipValue": -0.31285049410514176,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.31285049410514176,
+      "tolerance": 0.0265625,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CONFIRM_15M_FORMING",
+      "label": "Forming 15m (11:00–11:15) Close < 15m EMA20",
+      "sipValue": -0.3373409232379885,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.3373409232379885,
+      "tolerance": 0.0265325,
+      "class": "AGREE"
+     }
+    ],
+    "warnings": [
+     "SIP_RVOL_DIAGNOSTIC_ONLY"
+    ],
+    "dataReview": [],
+    "ticketAtAlert": {
+     "entry": 53,
+     "stop": 53.21,
+     "target": 52.58,
+     "shares": 377,
+     "plannedRisk": 79.17
+    }
+   },
+   "nextAttemptMs": null,
+   "enrichmentAudit": [
+    {
+     "attempt": 1,
+     "atIso": "2026-11-06T16:05:18.917Z",
+     "outcome": "OK",
+     "detail": "Signal candle 11:00–11:05 ET verified complete (5 of 5 minutes, 5-minute bar = 1-minute aggregate)."
+    }
+   ],
+   "firstProcessedIso": "2026-11-06T16:05:18.955Z"
+  },
+  {
+   "id": "CTVA-S-123014-f6723a",
+   "dedupeKey": "CTVA|SHORT|1793986214|RB_V1_SHORT_SETUP",
+   "receivedIso": "2026-11-06T17:30:14.866Z",
+   "receivedMs": 1793986214866,
+   "status": "OK",
+   "alert": {
+    "strategy": "RB_V1",
+    "symbol": "CTVA",
+    "direction": "SHORT",
+    "alertName": "RB v1 SHORT Setup",
+    "alertTimeMs": 1793986214866,
+    "alertTimeIso": "2026-11-06T17:30:14.866Z",
+    "timeSource": "RECEIVED",
+    "lastPrice": null
+   },
+   "payload": {
+    "strategy": "RB_V1",
+    "symbol": "CTVA",
+    "direction": "SHORT",
+    "alert_name": "RB v1 SHORT Setup",
+    "rule_set": "RBTS-S-001"
+   },
+   "snapshot": {
+    "alertEt": "12:30:14",
+    "alertDate": "2026-11-06",
+    "session": "FULL",
+    "sessionNote": "Regular full session 09:30–16:00 ET.",
+    "config": {
+     "vwapMode": "SESSION",
+     "maxSignalLagSec": 120,
+     "maxMissingBarRatio": 0.05,
+     "minWarmupBars": 100
+    },
+    "values": {
+     "open": 11.99,
+     "high": 12.005,
+     "low": 11.96,
+     "close": 11.965,
+     "volume": 130439,
+     "atr": 0.04017128741338555,
+     "ema9": 11.991736246094085,
+     "ema20": 11.993282316553085,
+     "rsi": 44.84271155524592,
+     "rvol": 1.8519585989521956,
+     "vwap": 11.9737094853355,
+     "vwapAlternative": 11.998375566985528,
+     "close15m": 11.965,
+     "ema20_15m": 11.994899745843078
+    },
+    "signal": {
+     "startIso": "2026-11-06T17:25:00.000Z",
+     "endIso": "2026-11-06T17:30:00.000Z",
+     "label": "12:25–12:30"
+    },
+    "confirm15m": {
+     "startIso": "2026-11-06T17:15:00.000Z",
+     "endIso": "2026-11-06T17:30:00.000Z",
+     "label": "12:15–12:30",
+     "bars5": 3
+    },
+    "issues": [],
+    "alertConditions": [
+     {
+      "label": "5m Close < VWAP",
+      "pass": true
+     },
+     {
+      "label": "EMA9 < EMA20",
+      "pass": true
+     },
+     {
+      "label": "RSI14 < 45",
+      "pass": true
+     },
+     {
+      "label": "RVOL20 > 1.5",
+      "pass": true
+     },
+     {
+      "label": "Close < Open",
+      "pass": true
+     },
+     {
+      "label": "15m Close < 15m EMA20",
+      "pass": true
+     }
+    ],
+    "barsUsed": 426
+   },
+   "provider": {
+    "name": "Alpaca",
+    "feed": "sip",
+    "host": "data.alpaca.markets"
+   },
+   "marketDataThroughIso": "2026-11-06T17:30:00.000Z",
+   "initialQuote": {
+    "price": 11.965,
+    "tradeIso": "2026-11-06T17:30:13.137794269Z",
+    "fetchedIso": "2026-11-06T17:30:15.211Z",
+    "conditions": [
+     " "
+    ],
+    "tape": "A",
+    "priceSource": "LATEST",
+    "skipped": null
+   },
+   "calcAtAlert": {
+    "action": "SELL_STOP",
+    "headline": "SELL STOP",
+    "entry": 11.95,
+    "stop": 12.01,
+    "target": 11.83,
+    "shares": 1673,
+    "plannedRisk": 100.38
+   },
+   "sameTickerEarlier": [],
+   "errors": [],
+   "attempts": 1,
+   "versions": {
+    "rules": "RB v1.1",
+    "scoring": "RB v1.1",
+    "strategy": "RB v1.1"
+   },
+   "processedIso": "2026-11-06T17:30:15.356Z",
+   "v12": {
+    "schema": 1,
+    "logicVersion": "RB v1.2",
+    "mode": "SHADOW",
+    "qualification": {
+     "status": "QUALIFIED",
+     "source": "TRENDSPIDER",
+     "ruleSet": {
+      "status": "RECOGNISED",
+      "ruleSet": "RBTS-S-001",
+      "entry": {
+       "id": "RBTS-S-001",
+       "direction": "SHORT",
+       "rulesVersion": "RB v1.2",
+       "audited": "2026-10-31",
+       "checklistRef": "RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — TrendSpider Multi-Factor Alert · smallest timeframe 5m · all conditions AND · Extended Hours OFF · repeat: no limit · expiration: 30 days",
+       "active": true,
+       "rules": [
+        "5m Close < VWAP(14, 0, hlc3)",
+        "5m EMA9 < EMA20",
+        "5m RSI14 < 45",
+        "5m RVOL(20, SMA, 1) > 1.5",
+        "5m Close < Open",
+        "15m Close < 15m EMA20"
+       ]
+      },
+      "reason": "Audited SHORT rule set (2026-10-31)."
+     },
+     "rulesAssumedPassed": [
+      "5m Close < VWAP(14, 0, hlc3)",
+      "5m EMA9 < EMA20",
+      "5m RSI14 < 45",
+      "5m RVOL(20, SMA, 1) > 1.5",
+      "5m Close < Open",
+      "15m Close < 15m EMA20"
+     ],
+     "numericValuesProvided": false,
+     "reason": "Audited SHORT rule set (2026-10-31)."
+    },
+    "signalMapping": {
+     "status": "ON_TIME",
+     "receivedMs": 1793986214866,
+     "session": "FULL",
+     "boundaryMs": 1793986200000,
+     "lagSec": 14.866,
+     "candleStartMs": 1793985900000,
+     "candleEndMs": 1793986200000,
+     "label": "12:25–12:30",
+     "reason": "Received 14.9 s after the 12:25–12:30 candle closed."
+    },
+    "dedupeKeys": {
+     "v11": "CTVA|SHORT|1793986214|RB_V1_SHORT_SETUP",
+     "v12": "v12|CTVA|SHORT|C2026-11-06T17:25:00.000Z|RBTS-S-001"
+    },
+    "duplicateOf": null,
+    "reconstruction": {
+     "source": "SIP",
+     "open": 11.99,
+     "high": 12.005,
+     "low": 11.96,
+     "close": 11.965,
+     "volume": 130439,
+     "atr14": 0.04017128741338555,
+     "vwap": 11.9737094853355,
+     "ema9": 11.991736246094085,
+     "ema20": 11.993282316553085,
+     "rsi14": 44.84271155524592,
+     "sipRvol": 1.8519585989521956,
+     "close15mCompleted": 11.965,
+     "ema20_15mCompleted": 11.994899745843078,
+     "forming15m": {
+      "label": "12:15–12:30",
+      "close": 11.965,
+      "ema20": 11.994899745843078,
+      "bars5": 3
+     }
+    },
+    "conditionDiagnostics": [
+     {
+      "rule": "CLOSE_VS_VWAP",
+      "label": "5m Close < VWAP",
+      "sipValue": -0.008709485335499423,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.008709485335499423,
+      "tolerance": 0.0059825,
+      "class": "AGREE"
+     },
+     {
+      "rule": "EMA9_VS_EMA20",
+      "label": "EMA9 < EMA20",
+      "sipValue": -0.0015460704589997931,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.0015460704589997931,
+      "tolerance": 0.0059825,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RSI",
+      "label": "RSI14 < 45",
+      "sipValue": 44.84271155524592,
+      "threshold": 45,
+      "sipPass": true,
+      "margin": 0.1572884447540801,
+      "tolerance": 2,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CANDLE_DIRECTION",
+      "label": "Close < Open",
+      "sipValue": -0.025000000000000355,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.025000000000000355,
+      "tolerance": 0.02,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RVOL",
+      "label": "RVOL20 > 1.5 (SIP, diagnostic only)",
+      "sipValue": 1.8519585989521956,
+      "threshold": 1.5,
+      "sipPass": true,
+      "margin": 0.3519585989521956,
+      "tolerance": null,
+      "class": "DIAGNOSTIC_ONLY"
+     },
+     {
+      "rule": "CONFIRM_15M",
+      "label": "Completed 15m Close < 15m EMA20",
+      "sipValue": -0.029899745843078307,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.029899745843078307,
+      "tolerance": 0.0059825,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CONFIRM_15M_FORMING",
+      "label": "Forming 15m (12:15–12:30) Close < 15m EMA20",
+      "sipValue": -0.029899745843078307,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.029899745843078307,
+      "tolerance": 0.0059825,
+      "class": "AGREE"
+     }
+    ],
+    "warnings": [
+     "SIP_RVOL_DIAGNOSTIC_ONLY"
+    ],
+    "dataReview": [],
+    "ticketAtAlert": {
+     "entry": 11.95,
+     "stop": 12.01,
+     "target": 11.83,
+     "shares": 1673,
+     "plannedRisk": 100.38
+    }
+   },
+   "nextAttemptMs": null,
+   "rvolDiagnostics": {
+    "schema": 1,
+    "rbRvol": 1.8519585989521956,
+    "tsFormulaSipRvol": 1.9729958865352286,
+    "baseline": 66112.15,
+    "baselineBars": [
+     {
+      "t": 1793979900000,
+      "v": 44022
+     },
+     {
+      "t": 1793980200000,
+      "v": 84915
+     },
+     {
+      "t": 1793980500000,
+      "v": 56788
+     },
+     {
+      "t": 1793980800000,
+      "v": 42788
+     },
+     {
+      "t": 1793981100000,
+      "v": 77441
+     },
+     {
+      "t": 1793981400000,
+      "v": 46073
+     },
+     {
+      "t": 1793981700000,
+      "v": 53700
+     },
+     {
+      "t": 1793982000000,
+      "v": 56624
+     },
+     {
+      "t": 1793982300000,
+      "v": 48755
+     },
+     {
+      "t": 1793982600000,
+      "v": 62045
+     },
+     {
+      "t": 1793982900000,
+      "v": 78101
+     },
+     {
+      "t": 1793983200000,
+      "v": 47236
+     },
+     {
+      "t": 1793983500000,
+      "v": 71449
+     },
+     {
+      "t": 1793983800000,
+      "v": 51902
+     },
+     {
+      "t": 1793984100000,
+      "v": 54591
+     },
+     {
+      "t": 1793984400000,
+      "v": 87368
+     },
+     {
+      "t": 1793984700000,
+      "v": 56912
+     },
+     {
+      "t": 1793985000000,
+      "v": 117989
+     },
+     {
+      "t": 1793985300000,
+      "v": 52292
+     },
+     {
+      "t": 1793985600000,
+      "v": 131252
+     }
+    ],
+    "signalVolume": 130439,
+    "source": "ALPACA_SIP",
+    "computedAtIso": "2026-11-06T17:30:15.313Z",
+    "trendspiderActual": null,
+    "trendspiderActualSource": "NOT_CAPTURED"
+   },
+   "enrichmentAudit": [
+    {
+     "attempt": 1,
+     "atIso": "2026-11-06T17:30:15.320Z",
+     "outcome": "OK",
+     "detail": "Signal candle 12:25–12:30 ET verified complete (5 of 5 minutes, 5-minute bar = 1-minute aggregate)."
+    }
+   ],
+   "firstProcessedIso": "2026-11-06T17:30:15.356Z"
+  },
+  {
+   "id": "FTNT-S-103025-657c98",
+   "dedupeKey": "FTNT|SHORT|1793979025|RB_V1_SHORT_SETUP",
+   "receivedIso": "2026-11-06T15:30:25.355Z",
+   "receivedMs": 1793979025355,
+   "status": "OK",
+   "alert": {
+    "strategy": "RB_V1",
+    "symbol": "FTNT",
+    "direction": "SHORT",
+    "alertName": "RB v1 SHORT Setup",
+    "alertTimeMs": 1793979025355,
+    "alertTimeIso": "2026-11-06T15:30:25.355Z",
+    "timeSource": "RECEIVED",
+    "lastPrice": null
+   },
+   "payload": {
+    "strategy": "RB_V1",
+    "symbol": "FTNT",
+    "direction": "SHORT",
+    "alert_name": "RB v1 SHORT Setup",
+    "rule_set": "RBTS-S-001"
+   },
+   "snapshot": {
+    "alertEt": "10:30:25",
+    "alertDate": "2026-11-06",
+    "session": "FULL",
+    "sessionNote": "Regular full session 09:30–16:00 ET.",
+    "config": {
+     "vwapMode": "SESSION",
+     "maxSignalLagSec": 120,
+     "maxMissingBarRatio": 0.05,
+     "minWarmupBars": 100
+    },
+    "values": {
+     "open": 120.837,
+     "high": 121.1099,
+     "low": 119.845,
+     "close": 120.1,
+     "volume": 154004,
+     "atr": 0.9155898198228529,
+     "ema9": 121.94901842878004,
+     "ema20": 122.43536894320687,
+     "rsi": 27.69809469408871,
+     "rvol": 1.4386080614138907,
+     "vwap": 122.91884544168397,
+     "vwapAlternative": 122.71185146462844,
+     "close15m": 120.1,
+     "ema20_15m": 123.1818288721515
+    },
+    "signal": {
+     "startIso": "2026-11-06T15:25:00.000Z",
+     "endIso": "2026-11-06T15:30:00.000Z",
+     "label": "10:25–10:30"
+    },
+    "confirm15m": {
+     "startIso": "2026-11-06T15:15:00.000Z",
+     "endIso": "2026-11-06T15:30:00.000Z",
+     "label": "10:15–10:30",
+     "bars5": 3
+    },
+    "issues": [
+     {
+      "kind": "REVIEW",
+      "code": "ALERT_NOT_REPRODUCED",
+      "message": "TrendSpider fired the SHORT alert, but the automated values do not satisfy: RVOL20 > 1.5. Data feeds or indicator settings may differ."
+     }
+    ],
+    "alertConditions": [
+     {
+      "label": "5m Close < VWAP",
+      "pass": true
+     },
+     {
+      "label": "EMA9 < EMA20",
+      "pass": true
+     },
+     {
+      "label": "RSI14 < 45",
+      "pass": true
+     },
+     {
+      "label": "RVOL20 > 1.5",
+      "pass": false
+     },
+     {
+      "label": "Close < Open",
+      "pass": true
+     },
+     {
+      "label": "15m Close < 15m EMA20",
+      "pass": true
+     }
+    ],
+    "barsUsed": 402
+   },
+   "provider": {
+    "name": "Alpaca",
+    "feed": "sip",
+    "host": "data.alpaca.markets"
+   },
+   "marketDataThroughIso": "2026-11-06T15:30:00.000Z",
+   "initialQuote": {
+    "price": 120.1,
+    "tradeIso": "2026-11-06T15:30:24.877786558Z",
+    "fetchedIso": "2026-11-06T15:30:25.954Z",
+    "conditions": [
+     "@"
+    ],
+    "tape": "C",
+    "priceSource": "LATEST",
+    "skipped": null
+   },
+   "calcAtAlert": {
+    "action": "SELL_STOP",
+    "headline": "SELL STOP",
+    "entry": 119.83,
+    "stop": 121.11,
+    "target": 117.27,
+    "shares": 166,
+    "plannedRisk": 212.48
+   },
+   "sameTickerEarlier": [],
+   "errors": [],
+   "attempts": 1,
+   "versions": {
+    "rules": "RB v1.1",
+    "scoring": "RB v1.1",
+    "strategy": "RB v1.1"
+   },
+   "processedIso": "2026-11-06T15:30:26.082Z",
+   "v12": {
+    "schema": 1,
+    "logicVersion": "RB v1.2",
+    "mode": "SHADOW",
+    "qualification": {
+     "status": "QUALIFIED",
+     "source": "TRENDSPIDER",
+     "ruleSet": {
+      "status": "RECOGNISED",
+      "ruleSet": "RBTS-S-001",
+      "entry": {
+       "id": "RBTS-S-001",
+       "direction": "SHORT",
+       "rulesVersion": "RB v1.2",
+       "audited": "2026-10-31",
+       "checklistRef": "RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — TrendSpider Multi-Factor Alert · smallest timeframe 5m · all conditions AND · Extended Hours OFF · repeat: no limit · expiration: 30 days",
+       "active": true,
+       "rules": [
+        "5m Close < VWAP(14, 0, hlc3)",
+        "5m EMA9 < EMA20",
+        "5m RSI14 < 45",
+        "5m RVOL(20, SMA, 1) > 1.5",
+        "5m Close < Open",
+        "15m Close < 15m EMA20"
+       ]
+      },
+      "reason": "Audited SHORT rule set (2026-10-31)."
+     },
+     "rulesAssumedPassed": [
+      "5m Close < VWAP(14, 0, hlc3)",
+      "5m EMA9 < EMA20",
+      "5m RSI14 < 45",
+      "5m RVOL(20, SMA, 1) > 1.5",
+      "5m Close < Open",
+      "15m Close < 15m EMA20"
+     ],
+     "numericValuesProvided": false,
+     "reason": "Audited SHORT rule set (2026-10-31)."
+    },
+    "signalMapping": {
+     "status": "ON_TIME",
+     "receivedMs": 1793979025355,
+     "session": "FULL",
+     "boundaryMs": 1793979000000,
+     "lagSec": 25.355,
+     "candleStartMs": 1793978700000,
+     "candleEndMs": 1793979000000,
+     "label": "10:25–10:30",
+     "reason": "Received 25.4 s after the 10:25–10:30 candle closed."
+    },
+    "dedupeKeys": {
+     "v11": "FTNT|SHORT|1793979025|RB_V1_SHORT_SETUP",
+     "v12": "v12|FTNT|SHORT|C2026-11-06T15:25:00.000Z|RBTS-S-001"
+    },
+    "duplicateOf": null,
+    "reconstruction": {
+     "source": "SIP",
+     "open": 120.837,
+     "high": 121.1099,
+     "low": 119.845,
+     "close": 120.1,
+     "volume": 154004,
+     "atr14": 0.9155898198228529,
+     "vwap": 122.91884544168397,
+     "ema9": 121.94901842878004,
+     "ema20": 122.43536894320687,
+     "rsi14": 27.69809469408871,
+     "sipRvol": 1.4386080614138907,
+     "close15mCompleted": 120.1,
+     "ema20_15mCompleted": 123.1818288721515,
+     "forming15m": {
+      "label": "10:15–10:30",
+      "close": 120.1,
+      "ema20": 123.1818288721515,
+      "bars5": 3
+     }
+    },
+    "conditionDiagnostics": [
+     {
+      "rule": "CLOSE_VS_VWAP",
+      "label": "5m Close < VWAP",
+      "sipValue": -2.818845441683976,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 2.818845441683976,
+      "tolerance": 0.06005,
+      "class": "AGREE"
+     },
+     {
+      "rule": "EMA9_VS_EMA20",
+      "label": "EMA9 < EMA20",
+      "sipValue": -0.48635051442683164,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.48635051442683164,
+      "tolerance": 0.06005,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RSI",
+      "label": "RSI14 < 45",
+      "sipValue": 27.69809469408871,
+      "threshold": 45,
+      "sipPass": true,
+      "margin": 17.30190530591129,
+      "tolerance": 2,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CANDLE_DIRECTION",
+      "label": "Close < Open",
+      "sipValue": -0.737000000000009,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.737000000000009,
+      "tolerance": 0.02,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RVOL",
+      "label": "RVOL20 > 1.5 (SIP, diagnostic only)",
+      "sipValue": 1.4386080614138907,
+      "threshold": 1.5,
+      "sipPass": false,
+      "margin": 0.06139193858610925,
+      "tolerance": null,
+      "class": "DIAGNOSTIC_ONLY"
+     },
+     {
+      "rule": "CONFIRM_15M",
+      "label": "Completed 15m Close < 15m EMA20",
+      "sipValue": -3.0818288721515046,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 3.0818288721515046,
+      "tolerance": 0.06005,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CONFIRM_15M_FORMING",
+      "label": "Forming 15m (10:15–10:30) Close < 15m EMA20",
+      "sipValue": -3.0818288721515046,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 3.0818288721515046,
+      "tolerance": 0.06005,
+      "class": "AGREE"
+     }
+    ],
+    "warnings": [
+     "SIP_RVOL_DIAGNOSTIC_ONLY"
+    ],
+    "dataReview": [],
+    "ticketAtAlert": {
+     "entry": 119.83,
+     "stop": 121.11,
+     "target": 117.27,
+     "shares": 166,
+     "plannedRisk": 212.48
+    }
+   },
+   "nextAttemptMs": null,
+   "enrichmentAudit": [
+    {
+     "attempt": 1,
+     "atIso": "2026-11-06T15:30:26.039Z",
+     "outcome": "OK",
+     "detail": "Signal candle 10:25–10:30 ET verified complete (5 of 5 minutes, 5-minute bar = 1-minute aggregate)."
+    }
+   ],
+   "firstProcessedIso": "2026-11-06T15:30:26.082Z"
+  },
+  {
+   "id": "Q-L-123010-ca3110",
+   "dedupeKey": "Q|LONG|1793986210|RB_V1_LONG_SETUP",
+   "receivedIso": "2026-11-06T17:30:10.699Z",
+   "receivedMs": 1793986210699,
+   "status": "OK",
+   "alert": {
+    "strategy": "RB_V1",
+    "symbol": "Q",
+    "direction": "LONG",
+    "alertName": "RB v1 LONG Setup",
+    "alertTimeMs": 1793986210699,
+    "alertTimeIso": "2026-11-06T17:30:10.699Z",
+    "timeSource": "RECEIVED",
+    "lastPrice": null
+   },
+   "payload": {
+    "strategy": "RB_V1",
+    "symbol": "Q",
+    "direction": "LONG",
+    "alert_name": "RB v1 LONG Setup",
+    "rule_set": "RBTS-L-001"
+   },
+   "snapshot": {
+    "alertEt": "12:30:10",
+    "alertDate": "2026-11-06",
+    "session": "FULL",
+    "sessionNote": "Regular full session 09:30–16:00 ET.",
+    "config": {
+     "vwapMode": "SESSION",
+     "maxSignalLagSec": 120,
+     "maxMissingBarRatio": 0.05,
+     "minWarmupBars": 100
+    },
+    "values": {
+     "open": 116.315,
+     "high": 116.635,
+     "low": 116.295,
+     "close": 116.44,
+     "volume": 19700,
+     "atr": 0.660484113075957,
+     "ema9": 116.00037719261601,
+     "ema20": 115.42074665544048,
+     "rsi": 64.95725902225016,
+     "rvol": 1.9309844590057883,
+     "vwap": 114.50591361137123,
+     "vwapAlternative": 115.81028694480061,
+     "close15m": 116.44,
+     "ema20_15m": 114.0847974211669
+    },
+    "signal": {
+     "startIso": "2026-11-06T17:25:00.000Z",
+     "endIso": "2026-11-06T17:30:00.000Z",
+     "label": "12:25–12:30"
+    },
+    "confirm15m": {
+     "startIso": "2026-11-06T17:15:00.000Z",
+     "endIso": "2026-11-06T17:30:00.000Z",
+     "label": "12:15–12:30",
+     "bars5": 3
+    },
+    "issues": [],
+    "alertConditions": [
+     {
+      "label": "5m Close > VWAP",
+      "pass": true
+     },
+     {
+      "label": "EMA9 > EMA20",
+      "pass": true
+     },
+     {
+      "label": "RSI14 > 55",
+      "pass": true
+     },
+     {
+      "label": "RVOL20 > 1.5",
+      "pass": true
+     },
+     {
+      "label": "Close > Open",
+      "pass": true
+     },
+     {
+      "label": "15m Close > 15m EMA20",
+      "pass": true
+     }
+    ],
+    "barsUsed": 426
+   },
+   "provider": {
+    "name": "Alpaca",
+    "feed": "sip",
+    "host": "data.alpaca.markets"
+   },
+   "marketDataThroughIso": "2026-11-06T17:30:00.000Z",
+   "initialQuote": {
+    "price": 116.57,
+    "tradeIso": "2026-11-06T17:30:08.497519911Z",
+    "fetchedIso": "2026-11-06T17:30:11.375Z",
+    "conditions": [
+     " ",
+     "F"
+    ],
+    "tape": "A",
+    "priceSource": "LATEST",
+    "skipped": null
+   },
+   "calcAtAlert": {
+    "action": "BUY_STOP",
+    "headline": "BUY STOP",
+    "entry": 116.66,
+    "stop": 115.99,
+    "target": 118,
+    "shares": 171,
+    "plannedRisk": 114.57
+   },
+   "sameTickerEarlier": [],
+   "errors": [],
+   "attempts": 1,
+   "versions": {
+    "rules": "RB v1.1",
+    "scoring": "RB v1.1",
+    "strategy": "RB v1.1"
+   },
+   "processedIso": "2026-11-06T17:30:11.633Z",
+   "v12": {
+    "schema": 1,
+    "logicVersion": "RB v1.2",
+    "mode": "SHADOW",
+    "qualification": {
+     "status": "QUALIFIED",
+     "source": "TRENDSPIDER",
+     "ruleSet": {
+      "status": "RECOGNISED",
+      "ruleSet": "RBTS-L-001",
+      "entry": {
+       "id": "RBTS-L-001",
+       "direction": "LONG",
+       "rulesVersion": "RB v1.2",
+       "audited": "2026-10-31",
+       "checklistRef": "RB_V1_2_ARCHITECTURE.md §3.1 / RB_V1_1_CHANGE_LOG.md CR-012 — TrendSpider Multi-Factor Alert · smallest timeframe 5m · all conditions AND · Extended Hours OFF · repeat: no limit · expiration: 30 days",
+       "active": true,
+       "rules": [
+        "5m Close > VWAP(14, 0, hlc3)",
+        "5m EMA9 > EMA20",
+        "5m RSI14 > 55",
+        "5m RVOL(20, SMA, 1) > 1.5",
+        "5m Close > Open",
+        "15m Close > 15m EMA20"
+       ]
+      },
+      "reason": "Audited LONG rule set (2026-10-31)."
+     },
+     "rulesAssumedPassed": [
+      "5m Close > VWAP(14, 0, hlc3)",
+      "5m EMA9 > EMA20",
+      "5m RSI14 > 55",
+      "5m RVOL(20, SMA, 1) > 1.5",
+      "5m Close > Open",
+      "15m Close > 15m EMA20"
+     ],
+     "numericValuesProvided": false,
+     "reason": "Audited LONG rule set (2026-10-31)."
+    },
+    "signalMapping": {
+     "status": "ON_TIME",
+     "receivedMs": 1793986210699,
+     "session": "FULL",
+     "boundaryMs": 1793986200000,
+     "lagSec": 10.699,
+     "candleStartMs": 1793985900000,
+     "candleEndMs": 1793986200000,
+     "label": "12:25–12:30",
+     "reason": "Received 10.7 s after the 12:25–12:30 candle closed."
+    },
+    "dedupeKeys": {
+     "v11": "Q|LONG|1793986210|RB_V1_LONG_SETUP",
+     "v12": "v12|Q|LONG|C2026-11-06T17:25:00.000Z|RBTS-L-001"
+    },
+    "duplicateOf": null,
+    "reconstruction": {
+     "source": "SIP",
+     "open": 116.315,
+     "high": 116.635,
+     "low": 116.295,
+     "close": 116.44,
+     "volume": 19700,
+     "atr14": 0.660484113075957,
+     "vwap": 114.50591361137123,
+     "ema9": 116.00037719261601,
+     "ema20": 115.42074665544048,
+     "rsi14": 64.95725902225016,
+     "sipRvol": 1.9309844590057883,
+     "close15mCompleted": 116.44,
+     "ema20_15mCompleted": 114.0847974211669,
+     "forming15m": {
+      "label": "12:15–12:30",
+      "close": 116.44,
+      "ema20": 114.0847974211669,
+      "bars5": 3
+     }
+    },
+    "conditionDiagnostics": [
+     {
+      "rule": "CLOSE_VS_VWAP",
+      "label": "5m Close > VWAP",
+      "sipValue": 1.9340863886287707,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 1.9340863886287707,
+      "tolerance": 0.05822,
+      "class": "AGREE"
+     },
+     {
+      "rule": "EMA9_VS_EMA20",
+      "label": "EMA9 > EMA20",
+      "sipValue": 0.5796305371755324,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.5796305371755324,
+      "tolerance": 0.05822,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RSI",
+      "label": "RSI14 > 55",
+      "sipValue": 64.95725902225016,
+      "threshold": 55,
+      "sipPass": true,
+      "margin": 9.957259022250156,
+      "tolerance": 2,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CANDLE_DIRECTION",
+      "label": "Close > Open",
+      "sipValue": 0.125,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 0.125,
+      "tolerance": 0.02,
+      "class": "AGREE"
+     },
+     {
+      "rule": "RVOL",
+      "label": "RVOL20 > 1.5 (SIP, diagnostic only)",
+      "sipValue": 1.9309844590057883,
+      "threshold": 1.5,
+      "sipPass": true,
+      "margin": 0.4309844590057883,
+      "tolerance": null,
+      "class": "DIAGNOSTIC_ONLY"
+     },
+     {
+      "rule": "CONFIRM_15M",
+      "label": "Completed 15m Close > 15m EMA20",
+      "sipValue": 2.355202578833101,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 2.355202578833101,
+      "tolerance": 0.05822,
+      "class": "AGREE"
+     },
+     {
+      "rule": "CONFIRM_15M_FORMING",
+      "label": "Forming 15m (12:15–12:30) Close > 15m EMA20",
+      "sipValue": 2.355202578833101,
+      "threshold": 0,
+      "sipPass": true,
+      "margin": 2.355202578833101,
+      "tolerance": 0.05822,
+      "class": "AGREE"
+     }
+    ],
+    "warnings": [
+     "SIP_RVOL_DIAGNOSTIC_ONLY"
+    ],
+    "dataReview": [],
+    "ticketAtAlert": {
+     "entry": 116.66,
+     "stop": 115.99,
+     "target": 118,
+     "shares": 171,
+     "plannedRisk": 114.57
+    }
+   },
+   "nextAttemptMs": null,
+   "rvolDiagnostics": {
+    "schema": 1,
+    "rbRvol": 1.9309844590057883,
+    "tsFormulaSipRvol": 1.953938624506556,
+    "baseline": 10082.2,
+    "baselineBars": [
+     {
+      "t": 1793979900000,
+      "v": 17303
+     },
+     {
+      "t": 1793980200000,
+      "v": 19786
+     },
+     {
+      "t": 1793980500000,
+      "v": 10896
+     },
+     {
+      "t": 1793980800000,
+      "v": 19896
+     },
+     {
+      "t": 1793981100000,
+      "v": 12751
+     },
+     {
+      "t": 1793981400000,
+      "v": 13443
+     },
+     {
+      "t": 1793981700000,
+      "v": 5601
+     },
+     {
+      "t": 1793982000000,
+      "v": 12870
+     },
+     {
+      "t": 1793982300000,
+      "v": 7279
+     },
+     {
+      "t": 1793982600000,
+      "v": 6647
+     },
+     {
+      "t": 1793982900000,
+      "v": 13323
+     },
+     {
+      "t": 1793983200000,
+      "v": 5823
+     },
+     {
+      "t": 1793983500000,
+      "v": 7204
+     },
+     {
+      "t": 1793983800000,
+      "v": 10452
+     },
+     {
+      "t": 1793984100000,
+      "v": 7702
+     },
+     {
+      "t": 1793984400000,
+      "v": 6289
+     },
+     {
+      "t": 1793984700000,
+      "v": 4860
+     },
+     {
+      "t": 1793985000000,
+      "v": 6678
+     },
+     {
+      "t": 1793985300000,
+      "v": 6048
+     },
+     {
+      "t": 1793985600000,
+      "v": 6793
+     }
+    ],
+    "signalVolume": 19700,
+    "source": "ALPACA_SIP",
+    "computedAtIso": "2026-11-06T17:30:11.562Z",
+    "trendspiderActual": null,
+    "trendspiderActualSource": "NOT_CAPTURED"
+   },
+   "enrichmentAudit": [
+    {
+     "attempt": 1,
+     "atIso": "2026-11-06T17:30:11.592Z",
+     "outcome": "OK",
+     "detail": "Signal candle 12:25–12:30 ET verified complete (5 of 5 minutes, 5-minute bar = 1-minute aggregate)."
+    }
+   ],
+   "firstProcessedIso": "2026-11-06T17:30:11.633Z"
+  }
+ ]
+}
