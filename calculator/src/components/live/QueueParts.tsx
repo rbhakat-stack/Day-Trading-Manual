@@ -23,7 +23,7 @@ import { RvolObservationPanel } from './RvolObservationPanel';
 import type { ReferenceEntry } from '../../lib/referenceScoreHook';
 import { REFERENCE_LABEL, referenceTier } from '../../engine/automation/referenceScore';
 import { InfoTip } from './InfoTip';
-import { decisionHelp, EXECUTION_HELP, FINAL_HELP, placeOrderHint, scoreHelp, tierHelp } from './fieldHelp';
+import { decisionHelp, EXECUTION_HELP, FINAL_HELP, placeOrderHint, scoreHelp, tierHelp, type RvolPolicyState } from './fieldHelp';
 import { RVOL_SOURCE_DIFFERENCE_TOOLTIP } from '../../engine/automation/rvolPolicy';
 import type { RvolV1Observation } from '../../engine/automation/rvolObservation';
 import { alertLatency, latencyLabel } from '../../engine/automation/lifecycle/latency';
@@ -62,9 +62,9 @@ function RefScore({ e }: { e: ReferenceEntry | null | undefined }) {
   return <span className="text-ink-400" title={`${REFERENCE_LABEL} · ${when}${c && c.total !== e.view.total ? ` · now ${e.view.total}` : ''}`}>{shown}<span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-400">Reference only</span></span>;
 }
 /** Help text for an ACTIVE-column heading (Score / Tier / Decision / Execution / Final State); null for other headings. */
-function fieldHelp(h: string, scoreLabel: string, g: Grades): string | null {
-  if (h === scoreLabel) return scoreHelp(g);
-  return h === 'Tier' ? tierHelp(g) : h === 'Decision' ? decisionHelp(g) : h === 'Execution' ? EXECUTION_HELP : h === 'Final State' ? FINAL_HELP : null;
+function fieldHelp(h: string, scoreLabel: string, g: Grades, st?: RvolPolicyState): string | null {
+  if (h === scoreLabel) return scoreHelp(g, st);
+  return h === 'Tier' ? tierHelp(g, st) : h === 'Decision' ? decisionHelp(g, st) : h === 'Execution' ? EXECUTION_HELP : h === 'Final State' ? FINAL_HELP : null;
 }
 /** Tier for a row whose AUTHORITATIVE score is empty (Phase C ON only): the tier of the displayed reference score
  *  (grey, "Reference only"), or N/A when no reliable score exists. Never an authoritative tier. */
@@ -77,13 +77,13 @@ export function RefTier({ e, grades }: { e: ReferenceEntry | null | undefined; g
 }
 /** Help for the five primary fields, placed just ABOVE the decision panel: the panel itself stays free of
  *  interactive controls (existing invariant: "the panel offers no new action"). */
-function FieldHelpStrip({ grades }: { grades: Grades }) {
+function FieldHelpStrip({ grades, st }: { grades: Grades; st?: RvolPolicyState }) {
   return (
     <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-400" data-field-help="primary">
       <span>Field help:</span>
-      <span>Score<InfoTip label="Score" text={scoreHelp(grades)} /></span>
-      <span>Tier<InfoTip label="Tier" text={tierHelp(grades)} /></span>
-      <span>Decision<InfoTip label="Decision" text={decisionHelp(grades)} /></span>
+      <span>Score<InfoTip label="Score" text={scoreHelp(grades, st)} /></span>
+      <span>Tier<InfoTip label="Tier" text={tierHelp(grades, st)} /></span>
+      <span>Decision<InfoTip label="Decision" text={decisionHelp(grades, st)} /></span>
       <span>Execution<InfoTip label="Execution" text={EXECUTION_HELP} /></span>
       <span>Final State<InfoTip label="Final State" text={FINAL_HELP} /></span>
     </div>
@@ -208,7 +208,7 @@ export function QueueToolbar(props: {
 
 /* ───────────────────────── table ───────────────────────── */
 
-export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots, rvolObservations, referenceScores }: {
+export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades, cols, open, setOpen, snapshots, rvolObservations, referenceScores, rvolPolicyState }: {
   rows: QueueRow[]; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades;
   cols: ColumnGroups; open: Set<string>; setOpen: (ids: Set<string>) => void;
   /** Write-once alert-time snapshots (read only, for the original-assessment row). */
@@ -217,6 +217,8 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
   rvolObservations?: ReadonlyMap<string, RvolV1Observation>;
   /** PHASE C — reference scores and mismatch diagnostics by record id (null / absent = flag OFF, existing presentation). */
   referenceScores?: ReadonlyMap<string, ReferenceEntry> | null;
+  /** Effective RVOL policy state — help texts only (absent = both OFF → existing texts). */
+  rvolPolicyState?: RvolPolicyState;
 }) {
   const [asc, setAsc] = useState(false);
   const sorted = useMemo(() => [...rows].sort((a, b) => (asc ? 1 : -1) * (a.record.alert.alertTimeMs - b.record.alert.alertTimeMs) || a.record.id.localeCompare(b.record.id)), [rows, asc]);
@@ -248,7 +250,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
           </tr>
           <tr className="text-center">
             {strat.map((c) => stratCols(c).map((h, i, a) => (
-              <th key={`${c.version}-${h}`} className={`${th} text-[12px] font-medium text-ink-300 ${i === 0 ? `border-l ${edge(c)}` : ''} ${i === a.length - 1 ? `border-r ${edge(c)}` : ''}`}>{h}{c.role === 'ACTIVE' && fieldHelp(h, c.scoreLabel, optionAGrades) && <InfoTip label={h} text={fieldHelp(h, c.scoreLabel, optionAGrades)!} />}</th>
+              <th key={`${c.version}-${h}`} className={`${th} text-[12px] font-medium text-ink-300 ${i === 0 ? `border-l ${edge(c)}` : ''} ${i === a.length - 1 ? `border-r ${edge(c)}` : ''}`}>{h}{c.role === 'ACTIVE' && fieldHelp(h, c.scoreLabel, optionAGrades, rvolPolicyState) && <InfoTip label={h} text={fieldHelp(h, c.scoreLabel, optionAGrades, rvolPolicyState)!} />}</th>
             )))}
           </tr>
         </thead>
@@ -313,7 +315,7 @@ export function QueueTable({ rows, now, actions, layout, maxScore, optionAGrades
                 {isOpen && (
                   <tr>
                     <td colSpan={span} className="border-t border-ink-700 bg-ink-900/40 px-3 py-3">
-                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} rvolObservation={rvolObservations?.get(r.record.id) ?? null} reference={referenceScores ? referenceScores.get(r.record.id) ?? null : undefined} />
+                      <QueueDetails r={r} now={now} actions={actions} layout={layout} maxScore={maxScore} optionAGrades={optionAGrades} snapshot={snapshots?.[r.record.id] ?? null} rvolObservation={rvolObservations?.get(r.record.id) ?? null} reference={referenceScores ? referenceScores.get(r.record.id) ?? null : undefined} rvolPolicyState={rvolPolicyState} />
                     </td>
                   </tr>
                 )}
@@ -546,7 +548,7 @@ function DecisionOrderPanel({ r, f, active, dec, ex, ds, cs, ps, finTone, fin, m
   );
 }
 
-export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null, rvolObservation = null, reference }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null; rvolObservation?: RvolV1Observation | null; reference?: ReferenceEntry | null }) {
+export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades, snapshot = null, rvolObservation = null, reference, rvolPolicyState }: { r: QueueRow; now: number; actions: LiveActions; layout: StrategyColumn[]; maxScore: number; optionAGrades: Grades; snapshot?: AlertTimeSnapshot | null; rvolObservation?: RvolV1Observation | null; reference?: ReferenceEntry | null; rvolPolicyState?: RvolPolicyState }) {
   const f = detailFields(r);
   const s = r.record.snapshot;
   const v = s?.values;
@@ -571,7 +573,7 @@ export function QueueDetails({ r, now, actions, layout, maxScore, optionAGrades,
   const ex = executionBadge(r);
   return (
     <div className="sticky left-3 w-[calc(100cqw-1.5rem)] min-w-0 space-y-2 font-sans" data-details={r.record.id}>
-      {active && <FieldHelpStrip grades={optionAGrades} />}
+      {active && <FieldHelpStrip grades={optionAGrades} st={rvolPolicyState} />}
       {active && (
         <DecisionOrderPanel r={r} f={f} active={active} dec={dec} ex={ex} ds={ds} cs={cs} ps={ps} finTone={finTone} fin={fin} maxScore={maxScore} now={now} snapshot={snapshot} reference={reference} grades={optionAGrades} />
       )}

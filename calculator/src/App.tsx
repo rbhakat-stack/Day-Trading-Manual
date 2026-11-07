@@ -741,6 +741,7 @@ export default function App() {
                 rvolObservation={rvolObservation}
                 referenceScores={referenceScores}
                 rvolPolicyWarning={rvolPolicyEff.warning}
+                rvolPolicyState={rvolPolicyEff.a ? { a: rvolPolicyEff.a, b: rvolPolicyEff.b } : null}
               />
             )}
             {liveSub === 'parity' && (

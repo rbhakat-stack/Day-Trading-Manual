@@ -12,34 +12,55 @@ import { finalBadge } from './queueView';
 type Grades = RankerSettings['grades'];
 const below = (x: number) => `${+(x - 0.1).toFixed(1)}`;
 
+/** Effective RVOL policy state (from effectiveRvolPolicy; absent / null = both OFF → the existing texts, unchanged). */
+export type RvolPolicyState = { a: boolean; b: boolean } | null | undefined;
+/** Policy B's conditional minimum, shown in help only (the engine constant is RVOL_EXCEPTION_MIN_SCORE). */
+const RVOL_EXCEPTION_MIN = 80;
+const isA = (st: RvolPolicyState) => st?.a === true;
+const isAB = (st: RvolPolicyState) => st?.a === true && st?.b === true;
+/** Extra paragraph for the active policy state (none when both policies are OFF). */
+function policyNote(g: Grades, st: RvolPolicyState): string[] {
+  if (isAB(st)) {
+    return [`RVOL POLICIES A + B ON: Policy B applies only after Policy A accepts an audited RVOL-only mismatch (approved TrendSpider configuration; RB’s session VWAP, completed 15-minute confirmation and every other condition pass; amber ⚠). Such an approved RVOL exception needs a minimum score of ${RVOL_EXCEPTION_MIN}; every other alert still needs ${g.high}. A score of ${g.watchlist}–${below(g.high)} stays WATCHLIST tier. Tier never overrides eligibility or safety requirements, and RB never places trades automatically.`];
+  }
+  if (isA(st)) {
+    return [`RVOL POLICY A ON: an audited RVOL-only mismatch (approved TrendSpider configuration; RB’s session VWAP, completed 15-minute confirmation and every other condition pass; amber ⚠) is scored normally instead of DATA REVIEW. The minimum actionable score stays ${g.high} for every alert. RB never places trades automatically.`];
+  }
+  return [];
+}
+
 /** Tier bands exactly as classifyScore applies the Ranker's current grades (score ≥ threshold → that tier). */
 export function tierBands(g: Grades): string {
   return `ELITE ≥ ${g.elite} · HIGH ${g.high}–${below(g.elite)} · WATCHLIST ${g.watchlist}–${below(g.high)} · LOW ${g.low}–${below(g.watchlist)} · SKIP < ${g.low}`;
 }
 
-export function scoreHelp(g: Grades): string {
+export function scoreHelp(g: Grades, st?: RvolPolicyState): string {
   return [
     'RB’s weighted 0–100 assessment of opportunity quality: Setup Quality (max 70 — trend, RVOL, momentum, candle, price location, time of day) + Portfolio Fit (max 30 — capital efficiency, capital availability, correlation, portfolio risk), rounded to 0.1. Expand the alert for the component breakdown.',
-    `A score does not override mandatory trading, data-quality or risk rules. Minimum actionable score: ${g.high}. Tier bands: ${tierBands(g)}.`,
+    `A score does not override mandatory trading, data-quality or risk rules. Minimum actionable score: ${g.high}${isAB(st) ? ` (approved Policy A + B RVOL exceptions: ${RVOL_EXCEPTION_MIN})` : ''}. Tier bands: ${tierBands(g)}.`,
     'LIVE unless labelled: “Frozen” = the original alert-time score (reference only, not ranked). Grey “Reference only” = a diagnostic score for a disqualified alert — it cannot authorize a trade. “—” / Score unavailable = no reliable score.',
+    ...policyNote(g, st),
   ].join('\n\n');
 }
 
-export function tierHelp(g: Grades): string {
+export function tierHelp(g: Grades, st?: RvolPolicyState): string {
   return [
     `Quality class of the score: ${tierBands(g)}. LOW and SKIP both mean below the ${g.watchlist} watchlist threshold (Decision: SKIP).`,
     'Tier is a classification only — it is not authorization to place an order (see Decision and Final State).',
     'A grey tier marked “Reference only” is derived from a reference-only score and is diagnostic. N/A = no reliable score, so no tier.',
+    ...(isAB(st) ? [`With Policy A + B ON, an approved RVOL exception scoring ${RVOL_EXCEPTION_MIN}–${below(g.high)} can be actionable but its tier stays WATCHLIST — tier never overrides eligibility or safety requirements.`] : []),
   ].join('\n\n');
 }
 
-export function decisionHelp(g: Grades): string {
+export function decisionHelp(g: Grades, st?: RvolPolicyState): string {
   return [
     'Whether the alert qualifies under RB v1.1’s strategy, indicator-validation and opportunity-scoring rules (LIVE). A qualifying decision does not guarantee that the planned entry can still be executed — see Execution and Final State.',
     `TRADE READY: qualifies (score ≥ ${g.high}, capital allocated, order ticket built; ELITE ≥ ${g.elite}). If the execution layer withholds that ticket the badge names the reason instead (e.g. v1.1 TICKET — CHASED / MISSED / AFTER CUTOFF, HELD — TICKER RESERVED).`,
     `WATCHLIST: score ${g.watchlist}–${below(g.high)}, or ≥ ${g.high} but not allocated — monitor only. LATE — REVIEW / EXPIRED — STALE: named by the execution state.`,
     `SKIP: data verified, score below ${g.watchlist}. NOT ELIGIBLE: a hard rule failed (session / entry window, duplicate ticker, stale, setup rules). CHASED: not eligible because price ran past the chase limit. DATA REVIEW: RB could not verify or reproduce the alert data — no trade until resolved.`,
     'SUBMITTED / IN POSITION: you marked the order submitted / filled (or verified broker sync confirmed it).',
+    ...(isAB(st) ? [`RVOL EXCEPTION (Policy A + B): an approved audited RVOL-only alert scoring ${RVOL_EXCEPTION_MIN}–${below(g.high)} can reach TRADE READY; its decision detail reads “RVOL exception (minimum ${RVOL_EXCEPTION_MIN})”. All other checks — timing, chase, risk, portfolio — still apply.`] : []),
+    ...policyNote(g, st),
   ].join('\n\n');
 }
 
