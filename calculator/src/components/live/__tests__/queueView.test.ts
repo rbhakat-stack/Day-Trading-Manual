@@ -115,20 +115,20 @@ describe('safety / execution badges name existing states', () => {
     expect(finalState(row(main.rows, 'CCC')).ticket).toBe(false);
     expect(finalState(blocked.rows[0]).ticket).toBe(false);
   });
-  it('portfolio header reads the allocator snapshot', () => {
-    const s = portfolioSummary(blocked.rows)!;
-    expect(s.pf).toBe(blocked.rows[0].ranked!.portfolio);
-    expect([s.pf.slotsUsed, s.pf.maxPositions, s.consistent]).toEqual([4, 4, true]);
-    expect(portfolioSummary([])).toBeNull();
+  it('portfolio header reads the allocator snapshot (the COMPLETE portfolio of the evaluation — Defect 3)', () => {
+    const s = portfolioSummary(blocked.portfolio)!;
+    expect(s.pf).toBe(blocked.portfolio);
+    expect([s.pf.slotsUsed, s.pf.maxPositions, s.slotsRemaining, s.atSlotLimit]).toEqual([4, 4, 0, true]);
+    expect(portfolioSummary(null)).toBeNull();
   });
 });
 
 const noop = () => {};
 const actions: LiveActions = { submit: noop, skip: noop, watch: noop, openInCalculator: noop, classify: noop, reprocess: noop, keep: noop, replace: noop };
-const page = (rows: QueueRow[], presentation?: Parameters<typeof LiveQueuePage>[0]['presentation']) =>
+const page = (rows: QueueRow[], presentation?: Parameters<typeof LiveQueuePage>[0]['presentation'], portfolio?: Parameters<typeof LiveQueuePage>[0]['portfolio']) =>
   renderToStaticMarkup(createElement(LiveQueuePage, {
     rows, suggestions: [], now: NOW, enabled: true, feed: { lastOkMs: NOW, error: null }, quoteError: null, parityStatus: 'NOT VALIDATED', versionLabel: 'RB v1.1', actions, onOpenSettings: noop,
-    shadow: { maxScore: CTX.v12MaxScore, optionAGrades: RK.grades, logCount: 0, onExportLog: noop }, presentation,
+    shadow: { maxScore: CTX.v12MaxScore, optionAGrades: RK.grades, logCount: 0, onExportLog: noop }, presentation, portfolio,
   }));
 
 describe('compact badges map existing states only', () => {
@@ -184,7 +184,7 @@ describe('rendered queue', () => {
     expect(html.split('Mark order submitted').length - 1).toBe(tickets);
   });
   it('portfolio card renders the allocator values', () => {
-    const b = page(blocked.rows);
+    const b = page(blocked.rows, undefined, blocked.portfolio); // Defect 3: the complete portfolio of the evaluation
     expect(b).toContain('Paper ($100,000)');
     expect(b).toMatch(/>4 \/ 4</);
     expect(b).toMatch(/>\$1,000\.00 \/ \$1,000</);

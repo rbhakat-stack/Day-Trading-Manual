@@ -5,6 +5,8 @@
  */
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
 import type { QueueRow } from '../../engine/automation/liveQueue';
+import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
+import type { PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
 import { fmtEt } from '../../engine/automation/etTime';
 import { TRUSTED_RULE_SETS } from '../../engine/automation/v12/ruleSets';
 import { V12_SHADOW_GRADES, type Grades } from '../../engine/automation/v12/v12Thresholds';
@@ -107,7 +109,7 @@ const qualText = (q: Status) => (q.label === 'QUALIFIED' ? 'YES' : q.label === '
 
 /* ───────────────────────── header ───────────────────────── */
 
-export function QueueHeader({ layout, rows, versionLabel }: { layout: StrategyColumn[]; rows: QueueRow[]; versionLabel: string }) {
+export function QueueHeader({ layout, versionLabel, portfolio, verification }: { layout: StrategyColumn[]; versionLabel: string; portfolio?: PortfolioSnapshot | null; verification?: PortfolioVerification | null }) {
   const rs = TRUSTED_RULE_SETS.filter((r) => r.active).map((r) => r.id);
   const flow = layout.map((c) => `${c.version} (${c.role})`).join(' & ');
   return (
@@ -122,30 +124,49 @@ export function QueueHeader({ layout, rows, versionLabel }: { layout: StrategyCo
         </p>
         <p className="mt-0.5 text-[11px] text-ink-500">Automated analysis only — manual execution. Nothing is sent to TrendSpider, SignalStack, Alpaca or any broker.</p>
       </div>
-      <PortfolioCard rows={rows} />
+      <PortfolioCard portfolio={portfolio} verification={verification} />
     </div>
   );
 }
 
-/** Paper portfolio from the allocator's snapshot (never recomputed here). */
-export function PortfolioCard({ rows }: { rows: QueueRow[] }) {
-  const s = portfolioSummary(rows);
+/**
+ * Paper portfolio — the COMPLETE reconciled portfolio of the current evaluation (`QueueOutput.portfolio`, built by the
+ * existing ranker/allocator). Never taken from an alert row, never recomputed here; row order, sorting and filters
+ * cannot change it.
+ */
+export function PortfolioCard({ portfolio, verification }: { portfolio?: PortfolioSnapshot | null; verification?: PortfolioVerification | null }) {
+  const s = portfolioSummary(portfolio, verification);
   const pf = s?.pf;
+  const cell = 'px-4 text-center';
+  const lab = 'text-[12px] text-ink-300';
+  const big = 'font-sans text-[19px] font-bold tabular-nums';
+  const sub = 'text-[11px] text-ink-400 tabular-nums';
+  const unverified = !!s && s.capacity !== 'VERIFIED' && s.capacity !== 'UNKNOWN';
   return (
-    <div className="rounded-xl border border-ink-600 bg-ink-900/70 px-5 py-3" aria-label="Portfolio summary">
-      <div className="flex items-center divide-x divide-ink-600">
-        <div className="pr-5 text-[15px] text-ink-200"><b className="text-ink-100">Portfolio:</b> Paper ({pf ? money(pf.equity, 0) : '—'})</div>
-        <div className="px-5 text-center">
-          <div className="text-[12px] text-ink-300">Slots</div>
-          <div className={`font-sans text-[21px] font-bold tabular-nums ${pf && pf.slotsUsed >= pf.maxPositions ? 'text-[#ff6b7f]' : 'text-[#3ee08f]'}`}>{pf ? `${pf.slotsUsed} / ${pf.maxPositions}` : '—'}</div>
+    <div className="rounded-xl border border-ink-600 bg-ink-900/70 px-4 py-3" aria-label="Portfolio summary" data-section="portfolio-summary">
+      <div className="flex flex-wrap items-center gap-y-2 divide-x divide-ink-600">
+        <div className="pr-4 text-[15px] text-ink-200" title="Account equity from Ranker → Portfolio policy">
+          <b className="text-ink-100">Portfolio:</b> Paper ({pf ? money(pf.equity, 0) : '—'})
+          {pf && <div className={sub}>Per-trade risk limit {money(pf.perTradeRiskLimit, 0)}</div>}
         </div>
-        <div className="pl-5 text-center">
-          <div className="text-[12px] text-ink-300">Heat</div>
-          <div className={`font-sans text-[21px] font-bold tabular-nums ${pf && pf.heatCommitted >= pf.heatLimit ? 'text-[#ff6b7f]' : 'text-[#3ee08f]'}`}>{pf ? `${money(pf.heatCommitted)} / ${money(pf.heatLimit, 0)}` : '—'}</div>
+        <div className={cell} data-field="slots">
+          <div className={lab}>Slots</div>
+          <div className={`${big} ${s?.atSlotLimit ? 'text-[#ff6b7f]' : 'text-[#3ee08f]'}`}>{pf ? `${pf.slotsUsed} / ${pf.maxPositions}` : '—'}</div>
+          {s && <div className={sub}>{pf!.openPositions} open + {pf!.pendingOrders} pending · {s.slotsRemaining} free</div>}
+        </div>
+        <div className={cell} data-field="capital">
+          <div className={lab}>Available capital{unverified ? ' *' : ''}</div>
+          <div className={`${big} ${pf && pf.available <= 0 ? 'text-[#ff6b7f]' : unverified ? 'text-warn' : 'text-[#3ee08f]'}`}>{pf ? money(pf.available, 0) : '—'}</div>
+          {pf && <div className={sub}>of {money(pf.usableAllocation, 0)} usable · deployed {money(pf.deployed, 0)} · reserved {money(pf.reserved, 0)}</div>}
+        </div>
+        <div className={`${cell} pr-0`} data-field="heat">
+          <div className={lab}>Heat</div>
+          <div className={`${big} ${s?.atHeatLimit ? 'text-[#ff6b7f]' : 'text-[#3ee08f]'}`}>{pf ? `${money(pf.heatCommitted)} / ${money(pf.heatLimit, 0)}` : '—'}</div>
+          {pf && <div className={sub}>open {money(pf.heatOpen)} + pending {money(pf.heatCommitted - pf.heatOpen)}</div>}
         </div>
       </div>
-      {!s && <div className="mt-1 text-[11px] text-ink-500">Shown once an alert has been scored.</div>}
-      {s && !s.consistent && <div className="mt-1 text-[11px] text-warn">Rows were evaluated against different portfolio states.</div>}
+      {!s && <div className="mt-1 text-[11px] text-ink-500">Portfolio not evaluated yet (automated alerts off or no alert feed).</div>}
+      {s?.capacityNote && <div className="mt-1 max-w-[46rem] text-[11px] text-warn" data-field="capacity-note">* {s.capacityNote}</div>}
     </div>
   );
 }

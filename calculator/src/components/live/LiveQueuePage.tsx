@@ -9,6 +9,7 @@ import type { Classification } from '../../engine/automation/autoCandidate';
 import { fmtEt, mmss } from '../../engine/automation/etTime';
 const etTime = (ms: number) => fmtEt(ms).replace(' ET', '');
 import type { ReplacementSuggestion } from '../../engine/ranker/candidateRanker';
+import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
 import { ACTIVE_LOGIC_VERSION } from '../../engine/automation/v12/dispatch';
 import type { Grades } from '../../engine/automation/v12/v12Thresholds';
 import { usd } from '../../lib/format';
@@ -72,6 +73,8 @@ interface Props {
   exposure?: QueueOutput['exposure'];
   /** Broker portfolio verification state (warning + ticket gate). */
   verification?: PortfolioVerification;
+  /** The complete reconciled portfolio of this evaluation (`QueueOutput.portfolio`) — the only source of the summary card. */
+  portfolio?: PortfolioSnapshot | null;
 }
 
 const bandTone: Record<FreshnessBand, string> = { FRESH: 'text-long', AGING: 'text-warn', URGENT: 'text-[#ff9f5a]', STALE: 'text-short' };
@@ -95,7 +98,7 @@ export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], 
     + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
 }
 
-export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, alertSnapshots, rvolObservation, referenceScores, rvolPolicyWarning, rvolPolicyState }: Props) {
+export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, portfolio, alertSnapshots, rvolObservation, referenceScores, rvolPolicyWarning, rvolPolicyState }: Props) {
   const rvolObsById = new Map((rvolObservation?.observations ?? []).map((o) => [o.recordId, o]));
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
   const rows = allRows.filter((r) => retentionState(r.record.alert.alertTimeMs, now) !== 'ARCHIVED');
@@ -127,7 +130,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
   const eod = broker?.status === 'LIVE' ? withBrokerFacts(eodBase, now, brokerEodFacts(broker)) : eodBase;
   return (
     <div className="space-y-4">
-      <QueueHeader layout={layout} rows={rows} versionLabel={versionLabel} />
+      <QueueHeader layout={layout} versionLabel={versionLabel} portfolio={portfolio ?? null} verification={verification ?? null} />
       <QueueToolbar
         rows={rows} filter={filter} setFilter={setFilter} feedText={feedText} feedOk={!feed.error && !!feed.lastOkMs} pollSec={pollMs ? Math.round(pollMs / 1000) : null}
         cols={cols} setCols={setCols} allOpen={allOpen} toggleAll={() => setOpen(allOpen ? new Set() : new Set(shown.map((r) => r.record.id)))}

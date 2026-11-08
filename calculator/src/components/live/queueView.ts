@@ -8,7 +8,7 @@
  * show "RB v1.1 ACTIVE + RB v1.2 SHADOW" today, "RB v1.2 ACTIVE + RB v1.1 COMPARISON" after an approved promotion, and
  * "RB v1.2 ACTIVE" alone once v1.1 is retired. The layout follows ACTIVE_LOGIC_VERSION; it never changes it.
  */
-import { PORTFOLIO_UNVERIFIED } from '../../engine/automation/lifecycle/portfolioExposure';
+import { PORTFOLIO_UNVERIFIED, type PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
@@ -289,11 +289,43 @@ export function gateText(r: QueueRow): string {
 }
 
 /** Portfolio header from the allocator's snapshot. One ranking shares one snapshot; returns null when none exists yet. */
-export function portfolioSummary(rows: QueueRow[]): { pf: PortfolioSnapshot; consistent: boolean } | null {
-  const pfs = rows.map((r) => r.ranked?.portfolio).filter((p): p is PortfolioSnapshot => !!p);
-  if (!pfs.length) return null;
-  const key = (p: PortfolioSnapshot) => `${p.equity}|${p.slotsUsed}|${p.maxPositions}|${p.heatCommitted}|${p.heatLimit}`;
-  return { pf: pfs[0], consistent: pfs.every((p) => key(p) === key(pfs[0])) };
+/** Portfolio summary card values. Every total is read from the COMPLETE portfolio snapshot (never recomputed here). */
+export interface PortfolioSummaryView {
+  pf: PortfolioSnapshot;
+  /** Display arithmetic only: maxPositions − slotsUsed, never below 0. */
+  slotsRemaining: number;
+  atSlotLimit: boolean;
+  atHeatLimit: boolean;
+  /** Whether the broker side of these totals is confirmed (from the existing portfolio verification state). */
+  capacity: 'VERIFIED' | 'UNVERIFIED' | 'BROKER_SYNC_OFF' | 'UNKNOWN';
+  /** Shown whenever the totals are not broker-verified: available capacity may be overstated. */
+  capacityNote: string | null;
+}
+
+/**
+ * Portfolio summary from the complete reconciled portfolio of the evaluation (`QueueOutput.portfolio`) — independent of
+ * which alert row is listed first, of sorting and of filters. Rows' own `ranked.portfolio` snapshots exclude that row's
+ * candidate (fit evaluation) and must never be used here.
+ */
+export function portfolioSummary(
+  pf: PortfolioSnapshot | null | undefined,
+  verification?: Pick<PortfolioVerification, 'state' | 'verified' | 'keptFromSnapshot'> | null,
+): PortfolioSummaryView | null {
+  if (!pf) return null;
+  const capacity: PortfolioSummaryView['capacity'] = !verification ? 'UNKNOWN' : verification.verified ? 'VERIFIED' : verification.state === 'OFF' ? 'BROKER_SYNC_OFF' : 'UNVERIFIED';
+  const capacityNote = capacity === 'BROKER_SYNC_OFF'
+    ? 'Broker sync off — totals from RB records and manual positions only; broker exposure is not independently verified, so available capacity may be overstated.'
+    : capacity === 'UNVERIFIED'
+      ? `Broker exposure unverified (${verification!.state.replace(/_/g, ' ').toLowerCase()}) — ${verification!.keptFromSnapshot ? 'previously verified broker exposure is still counted, but newer changes are not reflected' : 'no verified broker snapshot in this browser, so broker-only positions and orders may be missing'}; available capacity may be overstated.`
+      : null;
+  return {
+    pf,
+    slotsRemaining: Math.max(0, pf.maxPositions - pf.slotsUsed),
+    atSlotLimit: pf.slotsUsed >= pf.maxPositions,
+    atHeatLimit: pf.heatCommitted >= pf.heatLimit,
+    capacity,
+    capacityNote,
+  };
 }
 
 /** Values for the four expanded panels (all read from the row). */

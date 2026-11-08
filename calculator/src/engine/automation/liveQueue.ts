@@ -13,6 +13,7 @@ import { prepareRvolPolicy, RVOL_EXCEPTION_MIN_SCORE, type PreparedRvolPolicy, t
 import { rankCandidates, snapshotOf, type PeerEfficiency, type RankedCandidate, type RankOptions, type ReplacementSuggestion, type StrategyRules } from '../ranker/candidateRanker';
 import type { Candidate, FrozenCapitalEfficiency, ManualPosition, QualityTier } from '../ranker/opportunityTypes';
 import type { RankerSettings } from '../ranker/rankerSettings';
+import type { PortfolioSnapshot } from '../ranker/portfolioAllocator';
 import type { RbSettings } from '../settings';
 import type { TradeResult } from '../tradeCalculator';
 import { blockingCandidate, priceMismatch, releasedIds, type AlertDecision, type AutomationConfig, type AutoAlertRecord, type CandidateBlock, type LiveQuote } from './alertDecision';
@@ -105,6 +106,12 @@ export interface QueueOutput {
   changed: boolean;
   /** Broker-verified exposure adjustments used by the allocator (records are unchanged). */
   exposure: Pick<ExposureAdjustment, 'verified' | 'released' | 'voided' | 'added' | 'entries' | 'brokerPositions' | 'entriesSource'>;
+  /**
+   * The COMPLETE reconciled portfolio of this evaluation (every open position and pending order the allocator counts),
+   * exactly as the existing ranker built it — the authoritative source for portfolio summaries. Each row's
+   * `ranked.portfolio` is different on purpose: it leaves out that row's own candidate so its fit is not counted twice.
+   */
+  portfolio: PortfolioSnapshot;
 }
 
 const LIVE_STATUSES = ['NEW', 'WATCHLIST'];
@@ -302,7 +309,7 @@ function buildQueueCore(q: QueueInput, rvol: PreparedRvolPolicy | null): QueueOu
   });
 
   // D4 — at most one actionable alert per ticker: the incumbent authorized alert keeps it; others are HELD (lifecycle only).
-  return { candidates, rows: sortRows(applyTickerReservations(rows, q.terminal, q.now)), suggestions: ranking.suggestions, changed, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added, entries: exp.entries, brokerPositions: exp.brokerPositions, entriesSource: exp.entriesSource } };
+  return { candidates, rows: sortRows(applyTickerReservations(rows, q.terminal, q.now)), suggestions: ranking.suggestions, changed, portfolio: ranking.portfolio, exposure: { verified: exp.verified, released: exp.released, voided: exp.voided, added: exp.added, entries: exp.entries, brokerPositions: exp.brokerPositions, entriesSource: exp.entriesSource } };
 }
 
 /** D3 — the capital-efficiency component of this first valid scoring evaluation, with its provenance (null = not scored). */

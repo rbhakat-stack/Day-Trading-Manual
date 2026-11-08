@@ -735,6 +735,7 @@ export default function App() {
                 broker={brokerFeed}
                 exposure={queue?.exposure}
                 verification={verification}
+                portfolio={queue?.portfolio ?? null}
                 brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
                 pollMs={autoCfg.pollMs}
