@@ -3,13 +3,15 @@
  * recommendations) is unchanged; only a TRADE NOW status is shown as withheld while the portfolio is unverified.
  */
 import type { RankingResult } from '../engine/ranker/candidateRanker';
-import { PORTFOLIO_UNVERIFIED, type PortfolioVerification } from '../engine/automation/lifecycle/portfolioExposure';
+import { PORTFOLIO_UNVERIFIED, UNPROTECTED_BROKER_POSITION, UNPROTECTED_GATE_PREFIX, type PortfolioVerification } from '../engine/automation/lifecycle/portfolioExposure';
 import { executionShortLabel, type ExecutionStatus } from '../engine/automation/lifecycle/executionStatus';
 import { authorizationRefusal, type ExecutionAuthorization } from '../engine/automation/lifecycle/executionState';
 
 export function gateRankingDisplay(result: RankingResult, v: PortfolioVerification): RankingResult {
   if (!v.gated || !result.ranked.some((r) => r.displayStatus.startsWith('TRADE NOW'))) return result;
-  return { ...result, ranked: result.ranked.map((r) => (r.displayStatus.startsWith('TRADE NOW') ? { ...r, displayStatus: PORTFOLIO_UNVERIFIED } : r)) };
+  // Same label as the Live Queue: an UNPROTECTED BROKER POSITION gate is not called "portfolio unverified".
+  const label = v.reason.startsWith(UNPROTECTED_GATE_PREFIX) ? UNPROTECTED_BROKER_POSITION : PORTFOLIO_UNVERIFIED;
+  return { ...result, ranked: result.ranked.map((r) => (r.displayStatus.startsWith('TRADE NOW') ? { ...r, displayStatus: label } : r)) };
 }
 
 /** Submitted / filled candidates: the table status names the execution (e.g. EXECUTED — NO NEW ENTRY), not a trade signal. */

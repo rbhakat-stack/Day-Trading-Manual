@@ -120,3 +120,24 @@ describe('B. one documented parsing path for real and synthetic fixtures', () =>
     }
   });
 });
+
+describe('C. consistent gate reasons on both screens (banner + Ranker status)', () => {
+  it('a verified portfolio that is gated by an unprotected position shows the banner with the exact reason; the Ranker relabels TRADE NOW with the same label', async () => {
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { createElement } = await import('react');
+    const { PortfolioVerificationBanner } = await import('../../../components/PortfolioVerificationBanner');
+    const { gateRankingDisplay } = await import('../../../components/portfolioGate');
+    const { unprotectedGate, reconcileExposure, portfolioVerification } = await import('../lifecycle/portfolioExposure');
+    const out = reconcileExposure([], [], UNKNOWN(), { classify: () => null, conservativeRisk: 250 });
+    const gate = unprotectedGate(out.brokerPositions)!;
+    const verified = { state: 'VERIFIED' as const, verified: true, gated: false, reason: 'Verified', lastVerifiedMs: 1, keptFromSnapshot: false, message: 'Portfolio verified.' };
+    const gateView = { ...verified, gated: true, reason: gate, message: `${UNPROTECTED_BROKER_POSITION} — ${gate.slice('UNPROTECTED BROKER POSITION'.length + 2)}.` };
+    const html = renderToStaticMarkup(createElement(PortfolioVerificationBanner, { v: gateView }));
+    expect(html).toContain('NO TICKET — UNPROTECTED BROKER POSITION — FIS LONG 499 sh: UNKNOWN RISK');
+    expect(renderToStaticMarkup(createElement(PortfolioVerificationBanner, { v: verified }))).toBe(''); // nothing when verified and not gated
+    const ranking = { ranked: [{ displayStatus: 'TRADE NOW — #1' }, { displayStatus: 'WATCH' }] } as never;
+    expect((gateRankingDisplay(ranking, gateView) as { ranked: { displayStatus: string }[] }).ranked.map((r) => r.displayStatus)).toEqual([UNPROTECTED_BROKER_POSITION, 'WATCH']);
+    const unverified = portfolioVerification(null, '2026-11-09', 0);
+    expect((gateRankingDisplay(ranking, unverified) as { ranked: { displayStatus: string }[] }).ranked[0].displayStatus).toBe('NO TICKET — PORTFOLIO UNVERIFIED'); // unchanged
+  });
+});
