@@ -137,11 +137,12 @@ describe('entry vs protective exit classification', () => {
       expect(pf(x)).toMatchObject({ slotsUsed: 1, heatCommitted: 183, pendingOrders: 0 });
     }
   });
-  it('MCD with no RB candidate: the position is added once ($250 conservative), its exit legs are not', () => {
+  it('MCD with no RB candidate: the position is added once at its verified bracket-stop risk (Defect 2), its exit legs are not entries', () => {
     const x = ex([], live([MCD_TP, MCD_SL]));
     expect(x.entries).toEqual([]);
-    expect(x.added).toEqual([{ ticker: 'MCD', qty: 75, plannedRisk: 250 }]);
-    expect(pf(x)).toMatchObject({ slotsUsed: 1, heatCommitted: 250 });
+    expect(x.added).toEqual([{ ticker: 'MCD', qty: 75, plannedRisk: 190.5 }]); // 75 × (263.55 − 261.01); was the flat $250
+    expect(x.brokerPositions.map((p) => [p.riskBasis, p.coveredQty, p.uncoveredQty])).toEqual([['CONFIRMED_STOP', 75, 0]]);
+    expect(pf(x)).toMatchObject({ slotsUsed: 1, heatCommitted: 190.5 });
   });
   it('an exit order larger than the position: only the excess counts as a (reversing) entry', () => {
     const big = { ...MCD_TP, id: 'big', qty: '200' };

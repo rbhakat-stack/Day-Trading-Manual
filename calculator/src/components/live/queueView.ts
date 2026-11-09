@@ -8,7 +8,7 @@
  * show "RB v1.1 ACTIVE + RB v1.2 SHADOW" today, "RB v1.2 ACTIVE + RB v1.1 COMPARISON" after an approved promotion, and
  * "RB v1.2 ACTIVE" alone once v1.1 is retired. The layout follows ACTIVE_LOGIC_VERSION; it never changes it.
  */
-import { PORTFOLIO_UNVERIFIED, type PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
+import { PORTFOLIO_UNVERIFIED, UNPROTECTED_BROKER_POSITION, type PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
 import type { QueueRow } from '../../engine/automation/liveQueue';
 import type { AutoAlertRecordV12 } from '../../engine/automation/v12/audit';
 import type { PortfolioSnapshot } from '../../engine/ranker/portfolioAllocator';
@@ -259,7 +259,7 @@ export function finalBadge(r: QueueRow): Status {
   if (d.ticket && lc?.heldBy) return { label: 'NO TICKET — HELD', tone: 'warn', detail: lc.reason }; // D4 ticker reserved by another alert
   if (d.ticket && lc?.observationWithheld) return { label: 'NO TICKET', tone: 'warn', detail: lc.reason }; // S2a.2 continuity / clock
   if (lc?.entryWindowClosed) return { label: 'NO TICKET — ENTRY WINDOW CLOSED', tone: 'bad', detail: lc.reason };
-  if (lc?.portfolioUnverified) return { label: PORTFOLIO_UNVERIFIED, tone: 'bad', detail: lc.reason };
+  if (lc?.portfolioUnverified) return { label: lc.reason.startsWith(UNPROTECTED_BROKER_POSITION) ? UNPROTECTED_BROKER_POSITION : PORTFOLIO_UNVERIFIED, tone: 'bad', detail: lc.reason };
   if (d.ticket && lc && lc.finalActionability !== 'READY') return { label: lc.finalActionability, tone: 'warn', detail: lc.reason };
   if (d.ticket) return { label: 'READY', tone: 'ok', detail: d.detail };
   if (lc?.terminal && !['CLOSED'].includes(lc.executionState)) return { label: 'NO TRADE', tone: 'bad', detail: lc.reason };

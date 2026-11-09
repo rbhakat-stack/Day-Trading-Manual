@@ -1,6 +1,6 @@
 # RB Defect 2 — Risk of unmatched broker positions from verified protective stops (PLAN)
 
-Branch `rb-defect2-broker-position-risk`, based on `3e61dbf` (Defect 1). Planning, fixtures and characterization tests only. No behaviour change yet. Not merged, pushed or deployed.
+Branch `rb-defect2-broker-position-risk`, based on `3e61dbf` (Defect 1). **Implemented with Option C** (owner decision 2026-11-09). Validated offline; not merged, pushed or deployed. §8 records the final implementation; §3 and §6 were the plan.
 
 ## 1. Defect
 
@@ -80,3 +80,35 @@ To verify on the live API before release: whether `GET /v2/orders?status=open&ne
 - Represented positions whose stop was later moved at the broker (the candidate keeps its planned risk).
 - Automated stop placement or any broker write.
 - Supabase.
+
+## 8. Implementation (final)
+
+### Files
+- `engine/automation/lifecycle/portfolioExposure.ts`: `positionProtection` (pure), `unprotectedReason`, `unprotectedGate`, types; unrepresented positions use the corrected risk; `BrokerOnlyPosition` gains additive fields.
+- `engine/automation/liveQueue.ts`: the UNPROTECTED gate joins the existing portfolio gate (the verification gate wins).
+- `engine/automation/lifecycle/executionState.ts`: the gate's own label, `NO TICKET — UNPROTECTED BROKER POSITION — <exact reason>`.
+- `components/live/queueView.ts`: row status label.
+- `components/live/LiveQueuePage.tsx`: `brokerPositionNote` (verified stops listed; unresolved reason; legacy wording kept).
+- `App.tsx`: `gateView` (verification plus the UNPROTECTED gate) for the Live Queue banner and the Ranker's TRADE NOW gate.
+- Tests: `defect2BrokerPositionRisk.test.ts` (35), `defect2Acceptance.test.ts` (8), fixtures (24 states). Three existing tests updated to the corrected values (MCD $190.50; additive snapshot fields; `gateView` source guard).
+- `tools/defect2/buildFixtures.mjs`.
+
+### Rules changed from the plan after reading Alpaca's documentation
+- **Complete fill required.** A bracket leg protects only when its parent entry is **completely** filled. Alpaca: exit legs "won't be active until the first order is completely filled". A partial fill therefore has no active bracket stop, so it is UNKNOWN unless a standalone stop covers it.
+- **Trailing stops.** They are standalone only (Alpaca does not support them as bracket legs yet) and use the broker's live `stop_price`; one without a stop price is not verifiable.
+- **Ambiguous stops** (more stop quantity than shares, at different prices) do not establish protection: `AMBIGUOUS_STOPS` is gated. Over-coverage at one price is unambiguous: CONFIRMED, flag `OVERLAPPING_STOPS_SAME_PRICE`.
+
+### API-shape evidence and its limits
+- **Documented** (docs.alpaca.markets, "Orders at Alpaca"): `nested=true` nests child orders under the parent in `legs`; each order of a group is also an independent order; exit legs are inactive until the entry is completely filled; trailing stops report `hwm` and a continuously updated `stop_price`.
+- **Not documented:** the leg status values after the parent fills, and whether `status=open&nested=true` returns a filled parent with its open legs.
+- **Empirical:** the archived PAPER orders show stop legs created with the parent but submitted only when triggered (FIS, GM, CTVA, AAPL, TRMB), i.e. a waiting `held` OCO leg.
+- **The code accepts both shapes.** A nested or verifiable parent counts; a held leg without a verifiable parent fails closed (UNKNOWN, gated).
+- **Live check still needed:** confirm the open-order shape read-only the next time a bracket position is open. Until then a mismatch can only gate (fail closed), never understate risk.
+
+### Replay results (identical inputs; baseline `3e61dbf`)
+- **Five standard modes:** 6,147 evaluations and 382,825 rows, 0 differences. No real broker-only position exists in them; the synthetic SYNB1 is now `UNKNOWN_NO_STOP` at the same $250.
+- **HIST_BROKER_NORB** (real broker states with RB records absent): 1,228 evaluations and 76,565 rows.
+  - Risk: CTVA 250 → 134.64, FIS 250 → 104.79, GM 250 → 60.21, MCD 250 → 190.50, NVDA 250 → 80.86, all CONFIRMED via bracket legs and never gated.
+  - Heat lower in 329 evaluations.
+  - Portfolio-risk score component changed in 9,543 row-evaluations.
+  - Hard rules, tickets and lifecycle unchanged. 0 unexpected differences.

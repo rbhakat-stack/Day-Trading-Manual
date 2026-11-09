@@ -36,7 +36,7 @@ import { freezeShadowScores, shadowLogCsv, type V12ShadowLog } from './engine/au
 import { v12MaxScore } from './engine/automation/v12/v12Thresholds';
 import { alertSnapshotsCsv, freezeAlertSnapshots, pruneAlertSnapshots, type AlertSnapshotMap } from './engine/automation/lifecycle/alertTimeSnapshot';
 import { executionStatus } from './engine/automation/lifecycle/executionStatus';
-import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
+import { brokerExposureSnapshot, brokerSyncOff, executionRevPatch, historyDatesFor, latchReleases, portfolioVerification, reconcileExposure, unprotectedGate, UNPROTECTED_BROKER_POSITION, UNPROTECTED_GATE_PREFIX, verifiedHistory, type BrokerExposureInput, type BrokerExposureSnapshot, type PortfolioVerification, type ReleasedExposureMap } from './engine/automation/lifecycle/portfolioExposure';
 import { latchTerminalEvents, pruneTerminalEvents, type TerminalEventMap } from './engine/automation/lifecycle/terminalEvents';
 import { executionAuthorizations, queueOffersOrder } from './engine/automation/lifecycle/executionState'; // S2a
 import { calculatorHandoff, gateRankingByAuthorization } from './components/portfolioGate'; // S2a
@@ -399,6 +399,12 @@ export default function App() {
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
   const authorizations = useMemo(() => (queue ? executionAuthorizations(queue.rows, clock) : null), [queue, clock]);
+  // Defect 2 (Option C): unresolved broker-position risk gates the Ranker's TRADE NOW and shows the Live Queue banner.
+  const unprotected = useMemo(() => unprotectedGate(rankerExposure.brokerPositions), [rankerExposure]);
+  const gateView: PortfolioVerification = useMemo(
+    () => (verification.gated || !unprotected ? verification : { ...verification, gated: true, reason: unprotected, message: `${UNPROTECTED_BROKER_POSITION} — ${unprotected.slice(UNPROTECTED_GATE_PREFIX.length + 2)}.` }),
+    [verification, unprotected],
+  );
   const rankerView = useMemo(() => gateRankingByAuthorization(ranking, authorizations, clock, autoCfg.maxDataAgeSec * 1000), [ranking, authorizations, clock, autoCfg.maxDataAgeSec]);
   useEffect(() => {
     const found = [...rankerExposure.released, ...(queue?.exposure.released ?? [])];
@@ -754,7 +760,7 @@ export default function App() {
                 shadow={{ maxScore: v12MaxScore(rankerSettings), optionAGrades: rankerSettings.grades, logCount: Object.keys(shadowLog).length, onExportLog: exportShadowLog }}
                 broker={brokerFeed}
                 exposure={queue?.exposure}
-                verification={verification}
+                verification={gateView}
                 portfolio={queue?.portfolio ?? null}
                 brokerTrades={brokerTrades}
                 history={{ count: Object.keys(alertSnaps).length, onExport: () => download(`rb-alert-history-${autoDate}.csv`, alertSnapshotsCsv(alertSnaps), 'text/csv') }}
@@ -802,7 +808,7 @@ export default function App() {
             selectedId={selectedId ?? rankerView.ranked[0]?.candidate.id ?? null}
             today={today}
             actions={rankerActions}
-            verification={verification}
+            verification={gateView}
             executions={executions}
           />
         )}

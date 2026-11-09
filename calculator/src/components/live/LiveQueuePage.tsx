@@ -17,7 +17,7 @@ import { retentionState } from '../../engine/automation/lifecycle/alertTimeSnaps
 import { BrokerSyncPanel } from './BrokerSync';
 import { eodStatus, withBrokerFacts } from '../../engine/automation/lifecycle/executionState';
 import { brokerEodFacts, type TradeSync } from '../../engine/automation/lifecycle/brokerSync';
-import type { PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
+import { unprotectedReason, type BrokerOnlyPosition, type PortfolioVerification } from '../../engine/automation/lifecycle/portfolioExposure';
 import { PortfolioVerificationBanner } from '../PortfolioVerificationBanner';
 import type { BrokerFeed } from '../../lib/automationClient';
 import { Panel } from '../ui';
@@ -98,6 +98,19 @@ export function entryNote(e: NonNullable<Props['exposure']>['entries'][number], 
     + (source === 'LAST_KNOWN' ? ' · kept from the last verified broker response (broker data unavailable)' : '');
 }
 
+/**
+ * Defect 2 — one broker-only position in the reconciliation note: verified stop risk, or the exact unresolved reason
+ * (UNKNOWN / PARTIAL STOP / AMBIGUOUS), with the provisional amount never presented as verified. Legacy (no basis)
+ * keeps the previous wording.
+ */
+export function brokerPositionNote(x: BrokerOnlyPosition): string {
+  if (!x.riskBasis) return `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`;
+  if (x.riskBasis !== 'CONFIRMED_STOP') return `${unprotectedReason(x)} — not in RB`;
+  const stops = (x.stops ?? []).map((st) => `${st.type.replace(/_/g, ' ')} ${st.qty} @ ${st.stopPrice}${st.limitPrice !== null && /limit/.test(st.type) ? ` (limit ${st.limitPrice})` : ''} [${st.linkage === 'BRACKET_LEG' ? 'bracket leg' : 'standalone'}]`).join(', ');
+  const sl = (x.flags ?? []).includes('STOP_LIMIT_NOT_GUARANTEED') ? '; stop-limit: risk modelled to the limit, a fill is not guaranteed' : '';
+  return `${x.ticker} broker position (${x.qty}) not in RB — risk $${x.plannedRisk.toFixed(2)} from verified protective stop(s): ${stops}${sl}`;
+}
+
 export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, quoteError, parityStatus, versionLabel, actions, onOpenSettings, shadow, presentation, pollMs, history, broker, brokerTrades, exposure, verification, portfolio, alertSnapshots, rvolObservation, referenceScores, rvolPolicyWarning, rvolPolicyState }: Props) {
   const rvolObsById = new Map((rvolObservation?.observations ?? []).map((o) => [o.recordId, o]));
   // CR-11 — archived alerts (previous session / ≥ 12 h) leave the queue; they stay in history and exports.
@@ -143,7 +156,7 @@ export function LiveQueuePage({ rows: allRows, suggestions, now, enabled, feed, 
           <b>Portfolio reconciled with Alpaca PAPER (read-only):</b>{' '}
           {[
             ...exposure.released.map((x) => `${x.ticker} ${x.status} not reserving — ${x.reason}`),
-            ...exposure.added.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — counted conservatively ($${x.plannedRisk} risk)`),
+            ...(exposure.entriesSource === 'VERIFIED' ? exposure.brokerPositions.map(brokerPositionNote) : []),
             ...(exposure.entriesSource === 'LAST_KNOWN' ? exposure.brokerPositions.map((x) => `${x.ticker} broker position (${x.qty}) not in RB — kept from the last verified broker response ($${x.plannedRisk} risk)`) : []),
             ...exposure.entries.map((e) => entryNote(e, exposure.entriesSource)),
           ].join('; ')}

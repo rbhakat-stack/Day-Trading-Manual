@@ -64,14 +64,57 @@ export interface BrokerExposureInput {
 export interface ReleasedExposure { id: string; ticker: string; status: string; reason: string; atMs: number; fp: string; orderId?: string | null }
 export type ReleasedExposureMap = Record<string, ReleasedExposure>;
 
-/** An open broker position no active RB record represents (counted conservatively at the per-trade risk limit). */
+/**
+ * An open broker position no active RB record represents. Defect 2: its risk comes from VERIFIED protective stops
+ * (`positionProtection`). Only CONFIRMED_STOP is verified risk; any other basis is counted provisionally (never below
+ * the per-trade risk limit) and withholds new tickets (UNPROTECTED BROKER POSITION). The extra fields are additive:
+ * a snapshot written by an older build has none of them (legacy flat basis).
+ */
 export interface BrokerOnlyPosition {
   ticker: string;
   direction: 'LONG' | 'SHORT';
   qty: number;
   positionValue: number;
+  /** Risk counted in portfolio heat: the verified risk (CONFIRMED_STOP) or the provisional amount (any other basis). */
   plannedRisk: number;
   entry: number;
+  riskBasis?: PositionRiskBasis;
+  /** Risk to the verified stops of the covered quantity (the known part). */
+  confirmedRisk?: number;
+  coveredQty?: number;
+  uncoveredQty?: number;
+  stops?: ProtectiveStop[];
+  flags?: string[];
+}
+
+/** CONFIRMED_STOP = every share covered by verified protective stops; PARTIAL_STOP = some shares uncovered;
+ *  UNKNOWN_NO_STOP = no verified protective stop; AMBIGUOUS_STOPS = stops at different prices cover more shares
+ *  than the position holds (which stop protects which share cannot be established). */
+export type PositionRiskBasis = 'CONFIRMED_STOP' | 'PARTIAL_STOP' | 'UNKNOWN_NO_STOP' | 'AMBIGUOUS_STOPS';
+export interface ProtectiveStop {
+  orderId: string;
+  type: string;
+  status: string;
+  /** Unfilled quantity of the stop order (shares it still protects). */
+  qty: number;
+  stopPrice: number;
+  limitPrice: number | null;
+  /** BRACKET_LEG = leg of a verified, filled entry order of this symbol; STANDALONE = an independent exit stop. */
+  linkage: 'BRACKET_LEG' | 'STANDALONE';
+  /** Worst modelled exit price: the stop (stop / trailing stop) or the farther of stop and limit (stop-limit). */
+  worstPrice: number;
+}
+export interface PositionProtection {
+  basis: PositionRiskBasis;
+  qty: number;
+  coveredQty: number;
+  uncoveredQty: number;
+  confirmedRisk: number;
+  countedRisk: number;
+  resolved: boolean;
+  stops: ProtectiveStop[];
+  rejected: { orderId: string; reason: string }[];
+  flags: string[];
 }
 
 /** The broker-only exposure of the last VERIFIED broker response (persisted; replaced only by a verified response). */
@@ -243,6 +286,121 @@ function entryExposure(e: BrokerWorkingEntry, classify: (s: string) => Classific
 
 const T = (t: string) => t.toUpperCase();
 
+/** Order statuses that can still execute (Alpaca). `held` = a contingent leg waiting on its group (OCO / OTO). */
+const LIVE_ORDER = new Set(['new', 'accepted', 'pending_new', 'accepted_for_bidding', 'held', 'partially_filled', 'pending_replace', 'calculated']);
+const STOP_TYPE = /^(stop|stop_limit|trailing_stop)$/;
+const cents2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Defect 2: the verified protective stops of one open broker position and the risk they confirm. Pure, fail closed.
+ *
+ * A stop counts as protection only when ALL hold:
+ *   - same symbol; exit side (sell for a LONG, buy for a SHORT); type stop / stop_limit / trailing_stop;
+ *   - it can still execute (status new / accepted / pending_new / held / partially_filled / pending_replace ...);
+ *     canceled, replaced, filled, expired, rejected or done orders never protect;
+ *   - a numeric stop price (a trailing stop: the broker's current stop) and a known unfilled quantity > 0;
+ *   - linkage: a bracket / OTO leg counts only if its parent order is present in the broker data, is for the same
+ *     symbol, opened the position's side and is (partly) filled. A `held` order without such a verifiable parent never
+ *     counts (it may belong to an entry that has not filled). A non-held standalone exit stop counts as STANDALONE.
+ * Orders are de-duplicated by id (the same order nested and top-level is one stop).
+ * Risk per share = max(0, entry - worst) for a LONG, max(0, worst - entry) for a SHORT (a stop past the entry locks
+ * profit: 0, never negative). A stop-limit's worst price is the farther of stop and limit; it is never assumed to fill
+ * at the stop (flag STOP_LIMIT_NOT_GUARANTEED: a gap through the limit can leave it unfilled).
+ * Coverage = sum of unfilled stop quantities: = position -> CONFIRMED_STOP; < position -> PARTIAL_STOP; none ->
+ * UNKNOWN_NO_STOP; > position -> CONFIRMED_STOP only when every stop has the same worst price (risk unambiguous), else
+ * AMBIGUOUS_STOPS (known risk shown as the conservative farthest-stops-first figure).
+ * Counted risk: CONFIRMED_STOP -> the confirmed risk; otherwise max(conservativeRisk, confirmed risk), provisional,
+ * never presented as verified; the position is unresolved and new tickets are withheld.
+ */
+export function positionProtection(symbol: string, signedQty: number, avgEntry: number, openOrders: BrokerOrder[], lists: BrokerOrder[], conservativeRisk: number): PositionProtection {
+  const sym = T(symbol);
+  const long = signedQty > 0;
+  const qty = Math.abs(signedQty);
+  const exitSide = long ? 'sell' : 'buy';
+  // Parent lookup across every list (open orders and the fetched day / history lists), nested legs included.
+  const parentOf = new Map<string, BrokerOrder>();
+  for (const o of [...openOrders, ...lists]) for (const l of o.legs) if (!parentOf.has(l.id)) parentOf.set(l.id, o);
+  // Candidate stops: what is open NOW (top-level open orders and their nested legs), one per id.
+  const seen = new Set<string>();
+  const stops: ProtectiveStop[] = [];
+  const rejected: PositionProtection['rejected'] = [];
+  const flags = new Set<string>();
+  for (const o of openOrders.flatMap((x) => [x, ...x.legs])) {
+    if (seen.has(o.id)) continue;
+    seen.add(o.id);
+    if (T(o.symbol) !== sym || o.side !== exitSide || !STOP_TYPE.test(o.type.trim().toLowerCase())) continue;
+    const status = o.status.trim().toLowerCase();
+    const no = (reason: string) => void rejected.push({ orderId: o.id, reason });
+    if (!LIVE_ORDER.has(status)) { no(`status ${status}: not active`); continue; }
+    if (o.stopPrice === null || !(o.stopPrice > 0)) { no('no stop price reported'); continue; }
+    if (o.qty === null) { no('quantity unknown'); continue; }
+    const remaining = o.qty - o.filledQty;
+    if (!(remaining > 0)) { no('nothing left to protect'); continue; }
+    const parent = parentOf.get(o.id);
+    let linkage: ProtectiveStop['linkage'];
+    if (parent) {
+      if (T(parent.symbol) !== sym || parent.side === o.side) { no('leg of an order group for another symbol or side'); continue; }
+      // Alpaca: bracket exit legs are not active until the entry is COMPLETELY filled (a partial fill has no active stop).
+      if (parent.status.trim().toLowerCase() !== 'filled' || parent.qty === null || parent.filledQty < parent.qty) { no('bracket legs are inactive until the entry order is completely filled'); continue; }
+      linkage = 'BRACKET_LEG';
+    } else if (status === 'held') {
+      no('held order without a verifiable parent order');
+      continue;
+    } else linkage = 'STANDALONE';
+    const isStopLimit = o.type.trim().toLowerCase() === 'stop_limit';
+    if (isStopLimit) flags.add('STOP_LIMIT_NOT_GUARANTEED');
+    const worst = isStopLimit && o.limitPrice !== null ? (long ? Math.min(o.stopPrice, o.limitPrice) : Math.max(o.stopPrice, o.limitPrice)) : o.stopPrice;
+    stops.push({ orderId: o.id, type: o.type, status, qty: remaining, stopPrice: o.stopPrice, limitPrice: o.limitPrice, linkage, worstPrice: worst });
+  }
+  const rps = (x: ProtectiveStop) => Math.max(0, long ? avgEntry - x.worstPrice : x.worstPrice - avgEntry);
+  const covered = stops.reduce((a, x) => a + x.qty, 0);
+  // Farthest stops first: the conservative assignment of stop quantity to the held shares.
+  let left = qty;
+  let confirmed = 0;
+  for (const x of [...stops].sort((a, b) => rps(b) - rps(a))) {
+    const q = Math.min(x.qty, left);
+    confirmed += q * rps(x);
+    left -= q;
+    if (left <= 0) break;
+  }
+  const samePrice = new Set(stops.map((x) => x.worstPrice)).size <= 1;
+  let basis: PositionRiskBasis;
+  if (!stops.length) basis = 'UNKNOWN_NO_STOP';
+  else if (covered < qty) basis = 'PARTIAL_STOP';
+  else if (covered > qty && !samePrice) basis = 'AMBIGUOUS_STOPS';
+  else basis = 'CONFIRMED_STOP';
+  if (covered > qty) flags.add(samePrice ? 'OVERLAPPING_STOPS_SAME_PRICE' : 'AMBIGUOUS_STOPS');
+  const confirmedRisk = cents2(confirmed);
+  const resolved = basis === 'CONFIRMED_STOP';
+  return {
+    basis, qty, coveredQty: Math.min(covered, qty), uncoveredQty: Math.max(0, qty - covered), confirmedRisk,
+    countedRisk: resolved ? confirmedRisk : cents2(Math.max(conservativeRisk, confirmedRisk)),
+    resolved, stops, rejected, flags: [...flags],
+  };
+}
+
+export const UNPROTECTED_GATE_PREFIX = 'UNPROTECTED BROKER POSITION';
+export const UNPROTECTED_BROKER_POSITION = 'NO TICKET — UNPROTECTED BROKER POSITION';
+
+/** Why one unresolved broker position withholds tickets (exact, for the Live Queue). */
+export function unprotectedReason(p: BrokerOnlyPosition): string {
+  const usd = (n: number) => `$${n.toFixed(2)}`;
+  const what = `${p.ticker} ${p.direction} ${Math.abs(p.qty)} sh`;
+  const prov = `counted provisionally at ${usd(p.plannedRisk)}, not verified risk`;
+  switch (p.riskBasis) {
+    case 'UNKNOWN_NO_STOP': return `${what}: UNKNOWN RISK, no verified protective stop at the broker (${prov})`;
+    case 'PARTIAL_STOP': return `${what}: PARTIAL STOP, ${p.coveredQty} sh covered (known risk ${usd(p.confirmedRisk ?? 0)}), ${p.uncoveredQty} sh unprotected (${prov})`;
+    case 'AMBIGUOUS_STOPS': return `${what}: AMBIGUOUS STOPS, stops at different prices cover more shares than held, so which stop protects which share is unknown (known risk at most ${usd(p.confirmedRisk ?? 0)}; ${prov})`;
+    default: return `${what}: risk not verified`;
+  }
+}
+
+/** UNPROTECTED BROKER POSITION gate text (null = none). Only positions evaluated by Defect 2 (riskBasis present). */
+export function unprotectedGate(brokerPositions: readonly BrokerOnlyPosition[]): string | null {
+  const open = brokerPositions.filter((p) => p.riskBasis !== undefined && p.riskBasis !== 'CONFIRMED_STOP');
+  return open.length ? `${UNPROTECTED_GATE_PREFIX}: ${open.map(unprotectedReason).join('; ')}. New tickets are withheld until every broker position has a verified protective stop or is recorded in RB` : null;
+}
+
 function positionExposure(p: BrokerOnlyPosition, classify: (s: string) => Classification | null): ManualPosition {
   const cls = classify(p.ticker);
   return { id: `broker-position-${p.ticker}`, ticker: p.ticker, direction: p.direction, sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: p.positionValue, plannedRisk: p.plannedRisk, entry: p.entry, stop: 0, target: 0, status: 'OPEN' };
@@ -340,9 +498,12 @@ export function reconcileExposure(candidates: Candidate[], positions: ManualPosi
     const p = broker.positions.find((x) => T(x.symbol) === t)!;
     const cls = opts.classify(t);
     const value = Math.abs(num(p.market_value)) || Math.abs(qty) * num(p.avg_entry_price);
-    extra.push({ id: `broker-position-${t}`, ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: Math.round(value * 100) / 100, plannedRisk: opts.conservativeRisk, entry: num(p.avg_entry_price), stop: 0, target: 0, status: 'OPEN' });
-    added.push({ ticker: t, qty, plannedRisk: opts.conservativeRisk });
-    brokerPositions.push({ ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', qty, positionValue: Math.round(value * 100) / 100, plannedRisk: opts.conservativeRisk, entry: num(p.avg_entry_price) });
+    // Defect 2: risk from the position's verified protective stops (provisional + gated when not fully verified).
+    const pr = positionProtection(t, qty, num(p.avg_entry_price), open.orders, orders, opts.conservativeRisk);
+    const riskFields = { riskBasis: pr.basis, confirmedRisk: pr.confirmedRisk, coveredQty: pr.coveredQty, uncoveredQty: pr.uncoveredQty, stops: pr.stops, flags: pr.flags };
+    extra.push({ id: `broker-position-${t}`, ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', sector: cls?.sector ?? '', industry: cls?.industry ?? '', theme: cls?.theme ?? '', positionValue: Math.round(value * 100) / 100, plannedRisk: pr.countedRisk, entry: num(p.avg_entry_price), stop: 0, target: 0, status: 'OPEN' });
+    added.push({ ticker: t, qty, plannedRisk: pr.countedRisk });
+    brokerPositions.push({ ticker: t, direction: qty < 0 || /short/i.test(p.side ?? '') ? 'SHORT' : 'LONG', qty, positionValue: Math.round(value * 100) / 100, plannedRisk: pr.countedRisk, entry: num(p.avg_entry_price), ...riskFields });
   }
   const entries = brokerWorkingEntries(open.orders, orders, held, keep.filter(active), { conservativeRisk: opts.conservativeRisk, maxPositionValue: opts.maxPositionValue });
   for (const e of entries) extra.push(entryExposure(e, opts.classify));

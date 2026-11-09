@@ -27,7 +27,7 @@ import type { AlertSnapshotMap } from './lifecycle/alertTimeSnapshot';
 import { chaseKey, observedSkippedCross, triggerKey, type TerminalEventMap } from './lifecycle/terminalEvents';
 import { applyTickerReservations, heldCandidateIds } from './lifecycle/tickerReservation';
 import { observationRefusal, type ObservationMap } from './lifecycle/observationContinuity';
-import { reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
+import { unprotectedGate, reconcileExposure, type BrokerExposureInput, type BrokerOnlyPosition, type BrokerWorkingEntry, type ExposureAdjustment, type ReleasedExposureMap } from './lifecycle/portfolioExposure';
 import { deriveLifecycle, eodStatus, type Lifecycle } from './lifecycle/executionState';
 
 export interface QueueInput {
@@ -209,6 +209,8 @@ function buildQueueCore(q: QueueInput, rvol: PreparedRvolPolicy | null): QueueOu
   );
   // Portfolio exposure seen by the allocator: broker-verified closes release capacity; uncertain data releases nothing.
   const exp = reconcileExposure(candidates, q.positions, q.broker, { classify: q.classify, conservativeRisk: q.rk.portfolio.accountEquity * q.rk.portfolio.riskPerTradePct, latched: q.releasedExposure, now: q.now, knownEntries: q.knownBrokerEntries, knownPositions: q.knownBrokerPositions, maxPositionValue: q.rk.portfolio.maxPositionValue });
+  // Defect 2 (Option C): an open broker position whose risk is not fully verified withholds every new ticket.
+  const unprotected = unprotectedGate(exp.brokerPositions);
   // D3 — capital efficiency: peers are the contemporaneous competing candidates (inside their own alert window), never
   // untrusted-data or terminally latched ones; a candidate's component is frozen at its first valid scoring and read back.
   const latched = new Set(q.records.map((r) => r.id).filter((id) => !!(q.terminal?.[id] || q.terminal?.[chaseKey(id)] || q.terminal?.[triggerKey(id)])));
@@ -304,7 +306,7 @@ function buildQueueCore(q: QueueInput, rvol: PreparedRvolPolicy | null): QueueOu
     if (rvol?.accepted.has(rec.id)) row.rvolPolicy = rvol.accepted.get(rec.id)!;
     // Step 3 · D — odd-lot evidence at/through the entry ends the alert on THIS pass (the executable price may still be below it).
     const trigger = q.terminal?.[triggerKey(rec.id)] ?? observedSkippedCross(row, q.now, q.cfg);
-    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? null, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), trigger);
+    row.lifecycle = deriveLifecycle(row, q.frozen?.[rec.id] ?? null, q.now, eod, q.terminal?.[rec.id] ?? null, q.portfolioGate ?? unprotected, q.terminal?.[chaseKey(rec.id)] ?? null, observationRefusal(rec, quote, q.observation, q.cfg), trigger);
     return row;
   });
 

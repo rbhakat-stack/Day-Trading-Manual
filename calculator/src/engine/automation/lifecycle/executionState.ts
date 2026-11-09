@@ -17,7 +17,7 @@ import type { AlertTimeSnapshot } from './alertTimeSnapshot';
 import type { AutoAlertRecordV12 } from '../v12/audit';
 import type { TerminalEvent, TriggerEvidenceInfo } from './terminalEvents';
 import { conditionText } from '../signalCompleteness';
-import { PORTFOLIO_UNVERIFIED } from './portfolioExposure';
+import { PORTFOLIO_UNVERIFIED, UNPROTECTED_BROKER_POSITION, UNPROTECTED_GATE_PREFIX } from './portfolioExposure';
 
 export type ExecutionState =
   | 'SCORING'
@@ -355,6 +355,8 @@ function deriveLifecycleBase(row: QueueRow, snap: AlertTimeSnapshot | null, now:
     if (eod.noNewEntries) return { ...L('ACTIVE', 'NO TICKET', ENTRY_WINDOW_CLOSED), entryWindowClosed: true };
     // Broker sync enabled but the portfolio is not verified: the capacity behind this ticket is unconfirmed → withheld.
     // Reached only by a still-valid, unsubmitted setup (terminal, expired, chased, late and user states returned above).
+    // Defect 2 (Option C): a broker position whose risk is not verified withholds the ticket with its exact reason.
+    if (portfolioGate?.startsWith(UNPROTECTED_GATE_PREFIX)) return { ...L('ACTIVE', 'NO TICKET', `${UNPROTECTED_BROKER_POSITION} — ${portfolioGate.slice(UNPROTECTED_GATE_PREFIX.length + 2)}.`), portfolioUnverified: true };
     if (portfolioGate) return { ...L('ACTIVE', 'NO TICKET', `${PORTFOLIO_UNVERIFIED} — ${portfolioGate}. The ticket returns only when fresh broker data verifies the portfolio.`), portfolioUnverified: true };
     return L('ACTIVE', 'READY', d.detail);
   }

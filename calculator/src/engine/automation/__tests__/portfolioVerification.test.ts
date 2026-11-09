@@ -106,7 +106,8 @@ describe('verification states (1–6, 18)', () => {
 describe('last verified broker exposure (7–11)', () => {
   it('the snapshot holds the broker-only position and working entry, with time, date and source', () => {
     expect(SNAP).toMatchObject({ atMs: NOW - 10_000, date: DATE, source: 'rb-broker · Alpaca PAPER · read-only', verification: 'VERIFIED' });
-    expect(SNAP.positions).toEqual([{ ticker: 'MCD', direction: 'LONG', qty: 75, positionValue: 19734, plannedRisk: 250, entry: 263.55 }]);
+    // Defect 2: the snapshot also records the risk basis (here no protective stop is open → UNKNOWN, provisional $250).
+    expect(SNAP.positions).toEqual([{ ticker: 'MCD', direction: 'LONG', qty: 75, positionValue: 19734, plannedRisk: 250, entry: 263.55, riskBasis: 'UNKNOWN_NO_STOP', confirmedRisk: 0, coveredQty: 0, uncoveredQty: 75, stops: [], flags: [] }]);
     expect(SNAP.entries.map((e) => [e.ticker, e.qty, e.notional, e.plannedRisk])).toEqual([['CTVA', 5000, 56650, 250]]);
     expect(brokerExposureSnapshot(reconcileExposure([], [], null, OPTS), NOW, DATE)).toBeNull(); // never from unverified data
   });
@@ -213,6 +214,8 @@ describe('both surfaces (17)', () => {
     expect(src('live/LiveQueuePage.tsx')).toContain('<PortfolioVerificationBanner v={verification} />');
     expect(src('ranker/RankerPage.tsx')).toContain('<PortfolioVerificationBanner v={verification} />');
     const app = readFileSync(join(__dirname, '..', '..', '..', 'App.tsx'), 'utf8');
-    expect((app.match(/verification=\{verification\}/g) ?? []).length).toBe(2);
+    // Defect 2: both pages receive the same gate view (the verification state, plus the UNPROTECTED BROKER POSITION gate).
+    expect((app.match(/verification=\{gateView\}/g) ?? []).length).toBe(2);
+    expect(app).toMatch(/const gateView: PortfolioVerification = useMemo\(\s*\(\) => \(verification\.gated \|\| !unprotected \? verification : \{ \.\.\.verification, gated: true/);
   });
 });
