@@ -71,7 +71,7 @@ export function RankerSettingsPanel({ settings, onChange, locked = false }: { se
 
         <Panel title="Portfolio policy">
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <L t="Account equity $"><Num value={d.portfolio.accountEquity} onChange={(n) => update((x) => void (x.portfolio.accountEquity = n))} /></L>
+            <L t="Account equity $ (same as Settings)"><Num value={d.portfolio.accountEquity} onChange={(n) => update((x) => void (x.portfolio.accountEquity = n))} /></L>
             <L t="Max single position $"><Num disabled={locked} value={d.portfolio.maxPositionValue} onChange={(n) => update((x) => void (x.portfolio.maxPositionValue = n))} /></L>
             <L t="Max positions"><Num disabled={locked} value={d.portfolio.maxPositions} step="1" onChange={(n) => update((x) => void (x.portfolio.maxPositions = n))} /></L>
             <L t="Liquidity reserve %"><Num disabled={locked} value={d.portfolio.liquidityReservePct} scale={100} onChange={(n) => update((x) => void (x.portfolio.liquidityReservePct = n))} /></L>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { evaluateTrade } from './engine/tradeCalculator';
 import { RB_V1_DEFAULTS, type RbSettings } from './engine/settings';
+import { effectiveAccountEquity, equityConflictText, syncAccountEquity, withEffectiveEquity } from './engine/accountEquity';
 import { SCENARIOS } from './engine/scenarios';
 import type { JournalEntry, Outcome } from './engine/journal';
 import { rankCandidates, snapshotOf, type StrategyRules } from './engine/ranker/candidateRanker';
@@ -70,7 +71,8 @@ function loadRankerSettings(): RankerSettings {
 
 export default function App() {
   const [settings, setSettings] = useState<RbSettings>(() => ({ ...RB_V1_DEFAULTS, ...load<Partial<RbSettings>>(KEYS.settings, {}) }));
-  const [form, setForm] = useState<FormState>(() => emptyForm(settings));
+  // Defect 1 — the Calculator form is prefilled from the ONE effective account equity (a per-trade edit stays local).
+  const [form, setForm] = useState<FormState>(() => emptyForm(withEffectiveEquity(settings, loadRankerSettings()).rb));
   // S2a.2 — the automated alert a Calculator session was opened from (kept while ticker and side are unchanged).
   const [calcOrigin, setCalcOrigin] = useState<{ recordId: string; ticker: string; direction: FormState['direction']; label: string } | null>(null);
   const alertOrigin = calcOrigin && form.ticker === calcOrigin.ticker && form.direction === calcOrigin.direction ? calcOrigin : null;
@@ -100,7 +102,9 @@ export default function App() {
    * THE gate for every settings change. Non-core changes apply directly. Restoring the frozen definition
    * returns to RB v1.1. Any other core change needs an unlocked state AND an explicit new version name.
    */
-  const proposeSettings = (rb: RbSettings, rk: RankerSettings): boolean => {
+  const proposeSettings = (rbIn: RbSettings, rkIn: RankerSettings): boolean => {
+    // Defect 1 — an account-equity edit on either screen writes the same value to both stored fields.
+    const [rb, rk] = syncAccountEquity([settings, rankerSettings], [rbIn, rkIn]);
     if (!coreChanged([settings, rankerSettings], [rb, rk])) {
       setSettings(rb);
       setRankerSettings(rk);
@@ -148,6 +152,13 @@ export default function App() {
   useEffect(() => void save(KEYS.candidates, candidates), [candidates]);
   useEffect(() => void save(KEYS.positions, positions), [positions]);
   useEffect(() => void save(KEYS.rankerSettings, rankerSettings), [rankerSettings]);
+  /**
+   * Defect 1 — the ONE effective account equity and the calculation views carrying it. Editors receive the stored
+   * values (settings / rankerSettings); every calculation below receives rbEff / rkEff.
+   */
+  const equity = useMemo(() => effectiveAccountEquity(settings, rankerSettings), [settings, rankerSettings]);
+  const { rb: rbEff, rk: rkEff } = useMemo(() => withEffectiveEquity(settings, rankerSettings, equity), [settings, rankerSettings, equity]);
+  const resolveEquity = (value: number) => void proposeSettings({ ...settings, accountEquity: value }, { ...rankerSettings, portfolio: { ...rankerSettings.portfolio, accountEquity: value } });
 
   const inputs = useMemo(() => toInputs(form, useMarketEntry), [form, useMarketEntry]);
   const result = useMemo(() => (calculated ? evaluateTrade(inputs, settings) : null), [calculated, inputs, settings]);
@@ -172,7 +183,7 @@ export default function App() {
 
   const clear = () => {
     setCalcOrigin(null); // S2a.2
-    setForm(emptyForm(settings, form.direction));
+    setForm(emptyForm(rbEff, form.direction));
     setCalculated(false);
     setUseMarketEntry(false);
     setActualFill('');
@@ -335,16 +346,16 @@ export default function App() {
   );
   const exposureFor = useCallback(
     (cs: Candidate[]) => reconcileExposure(cs, positions, brokerExposure, {
-      classify: (s) => classes[s] ?? null, conservativeRisk: rankerSettings.portfolio.accountEquity * rankerSettings.portfolio.riskPerTradePct, latched: releasedExposure, now: clock,
-      knownEntries: knownBrokerEntries, knownPositions: knownBrokerPositions, maxPositionValue: rankerSettings.portfolio.maxPositionValue,
+      classify: (s) => classes[s] ?? null, conservativeRisk: rkEff.portfolio.accountEquity * rkEff.portfolio.riskPerTradePct, latched: releasedExposure, now: clock,
+      knownEntries: knownBrokerEntries, knownPositions: knownBrokerPositions, maxPositionValue: rkEff.portfolio.maxPositionValue,
     }),
-    [positions, brokerExposure, classes, rankerSettings, releasedExposure, clock, knownBrokerEntries, knownBrokerPositions],
+    [positions, brokerExposure, classes, rkEff, releasedExposure, clock, knownBrokerEntries, knownBrokerPositions],
   );
   const rankerExposure = useMemo(() => exposureFor(candidates), [exposureFor, candidates]);
   const ranking = useMemo(
     // D3 — the frozen capital-efficiency component (Live Queue, first valid scoring) is read, never recomputed.
-    () => rankCandidates(candidates, rankerExposure.positions, rankerSettings, today, strategy, rankerExposure.exclude, { useFrozenCapitalEfficiency: true }),
-    [candidates, rankerExposure, rankerSettings, today, strategy],
+    () => rankCandidates(candidates, rankerExposure.positions, rkEff, today, strategy, rankerExposure.exclude, { useFrozenCapitalEfficiency: true }),
+    [candidates, rankerExposure, rkEff, today, strategy],
   );
   // Terminal SETUP FAILED latch (write-once per alert; read by the execution layer only).
   const [terminalEvents, setTerminalEvents] = usePersistent<TerminalEventMap>(AUTO_KEYS.terminalEvents, () => pruneTerminalEvents(load<TerminalEventMap>(AUTO_KEYS.terminalEvents, {}), Date.now()));
@@ -367,8 +378,8 @@ export default function App() {
       quotes,
       now: clock,
       cfg: autoCfg,
-      rb: settings,
-      rk: rankerSettings,
+      rb: rbEff,
+      rk: rkEff,
       classify: (s) => classes[s] ?? null,
       parity: Object.fromEntries(Object.entries(parityRows).map(([id, rows]) => [id, mismatchMessages(rows)])),
       strategyVersion: version.name,
@@ -383,7 +394,7 @@ export default function App() {
       observation,
       rvolPolicy: rvolPolicyA ? { a: true, b: rvolPolicyB } : null,
     };
-  }, [autoCfg, feed.records, candidates, positions, quotes, clock, settings, rankerSettings, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation, rvolPolicyA, rvolPolicyB]);
+  }, [autoCfg, feed.records, candidates, positions, quotes, clock, rbEff, rkEff, classes, parityRows, version.name, alertSnaps, terminalEvents, brokerExposure, releasedExposure, knownBrokerEntries, knownBrokerPositions, verification, observation, rvolPolicyA, rvolPolicyB]);
   const queue = useMemo(() => (queueInput ? buildQueue(queueInput) : null), [queueInput]);
   // S2a — the Live Queue is the single execution authority. The Ranker shows TRADE NOW for an automated candidate only
   // while the Queue's current evaluation authorizes that exact alert and plan; with no Queue evaluation it fails closed.
@@ -539,8 +550,8 @@ export default function App() {
         if (target && !target.initialScore) {
           // Freeze the score at first scoring. It is never rewritten afterwards.
           const ex = exposureFor(next);
-          const rc = rankCandidates(next, ex.positions, rankerSettings, today, strategy, ex.exclude).ranked.find((r) => r.candidate.id === id);
-          if (rc && rc.total !== null) return next.map((c) => (c.id === id ? { ...c, initialScore: snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name) } : c));
+          const rc = rankCandidates(next, ex.positions, rkEff, today, strategy, ex.exclude).ranked.find((r) => r.candidate.id === id);
+          if (rc && rc.total !== null) return next.map((c) => (c.id === id ? { ...c, initialScore: snapshotOf(rc, Date.now(), rkEff, strategy, version.name) } : c));
         }
         return next;
       }),
@@ -551,9 +562,9 @@ export default function App() {
         if (!confirm(`${rc.candidate.ticker} is "${rc.displayStatus}". Mark it as ${status === 'PENDING' ? 'a pending order' : 'filled'} anyway?`)) return;
       }
       const patch: Partial<Candidate> = { status, ...executionRevPatch(rc.candidate, status, Date.now()) };
-      if (status === 'FILLED' && !rc.candidate.entryScore) patch.entryScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
+      if (status === 'FILLED' && !rc.candidate.entryScore) patch.entryScore = snapshotOf(rc, Date.now(), rkEff, strategy, version.name);
       const terminal: LifecycleStatus[] = ['TARGET_HIT', 'STOPPED_OUT', 'MANUAL_EXIT', 'SKIPPED', 'STALE', 'CANCELED', 'EXPIRED'];
-      if (terminal.includes(status) && !rc.candidate.finalScore) patch.finalScore = snapshotOf(rc, Date.now(), rankerSettings, strategy, version.name);
+      if (terminal.includes(status) && !rc.candidate.finalScore) patch.finalScore = snapshotOf(rc, Date.now(), rkEff, strategy, version.name);
       patchCandidate(id, patch);
     },
     update: patchCandidate,
@@ -586,7 +597,7 @@ export default function App() {
     loadSample: () => {
       const hasToday = candidates.some((c) => c.date === today && !c.archived && !c.id.startsWith('sample-'));
       if (hasToday && !confirm('Add the sample day to your existing queue? (Your own candidates are kept.)')) return;
-      const { candidates: sample } = sampleDay(today, previousDate(today), rankerSettings);
+      const { candidates: sample } = sampleDay(today, previousDate(today), rkEff);
       setCandidates((cs) => [...cs.filter((c) => !c.id.startsWith('sample-')), ...sample]);
       setSelectedId(sample.find((c) => c.ticker === 'NVDA')?.id ?? null);
     },
@@ -605,7 +616,7 @@ export default function App() {
     skip: (id) => rankerActions.setStatus(id, 'SKIPPED'),
     watch: (id) => rankerActions.setStatus(id, 'WATCHLIST'),
     openInCalculator: (row) => {
-      const i = inputsFromRecord(row.record, row.quote?.price ?? row.record.initialQuote?.price ?? 0, Date.now(), settings);
+      const i = inputsFromRecord(row.record, row.quote?.price ?? row.record.initialQuote?.price ?? 0, Date.now(), rbEff);
       if (!i) return;
       const f = formFromInputs(i);
       setCalcOrigin({ recordId: row.record.id, ticker: f.ticker, direction: f.direction, label: `${row.record.alert.symbol} ${row.record.alert.direction} ${etParts(row.record.alert.alertTimeMs).hhmmss} ET` });
@@ -669,6 +680,15 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1500px] px-4 py-4">
+        {equity.conflict && (
+          <div role="alert" data-section="equity-conflict" className="mb-4 rounded-xl border border-warn/60 bg-warn-dim/40 px-4 py-3 text-sm text-[#ffe2a8]">
+            <b>{equityConflictText(equity.conflict)}</b> Choose the correct account equity — it then becomes the single value used everywhere.
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className="rounded-lg border border-warn/60 px-3 py-1.5 font-semibold hover:bg-warn-dim" onClick={() => resolveEquity(equity.conflict!.settings)}>Use ${equity.conflict.settings.toLocaleString('en-US')} (Settings)</button>
+              <button type="button" className="rounded-lg border border-warn/60 px-3 py-1.5 font-semibold hover:bg-warn-dim" onClick={() => resolveEquity(equity.conflict!.ranker)}>Use ${equity.conflict.ranker.toLocaleString('en-US')} (Ranker → Portfolio policy)</button>
+            </div>
+          </div>
+        )}
         {tab === 'calc' && alertOrigin && (() => {
           // S2a.2 — an alert-derived calculation is informational; RB authorization comes only from the Live Queue.
           const row = queue?.rows.find((r) => r.record.id === alertOrigin.recordId);

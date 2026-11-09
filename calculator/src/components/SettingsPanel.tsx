@@ -13,7 +13,7 @@ const FIELDS: { key: keyof RbSettings; label: string; unit: 'usd' | 'pct' | 'x' 
   { key: 'chaseThresholdAtr', label: 'Chase threshold', unit: 'atr', help: 'Beyond the trigger by more than this → SKIP. RB v1: 0.25 ATR (paper-testing assumption)' },
   { key: 'riskPct', label: 'Default risk per trade', unit: 'pct', help: '% of equity. RB v1: 0.25%' },
   { key: 'investmentCap', label: 'Default investment cap', unit: 'usd', help: 'Max notional per ticker. RB v1: $20,000' },
-  { key: 'accountEquity', label: 'Default account equity', unit: 'usd', help: 'Paper account starts at $100,000' },
+  { key: 'accountEquity', label: 'Default account equity', unit: 'usd', help: 'The ONE account equity used everywhere (sizing, Live Queue, Ranker allocation, heat). Same field as Ranker → Portfolio policy — editing either changes both. Paper account starts at $100,000' },
   { key: 'alertWindowMinutes', label: 'Maximum alert age', unit: 'min', help: 'No breakout after this many minutes → STALE. RB v1: 10 min' },
 ];
 
